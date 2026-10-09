@@ -2,6 +2,7 @@
 
 import { useMemo } from "react";
 
+import { useT } from "@/components/lang-provider";
 import { ResponsiveModal } from "@/components/responsive-modal";
 import { isTableSelectable, occupiedTableHint } from "@/lib/pos/online-dinein-labels";
 
@@ -31,6 +32,9 @@ type TableAssignModalProps = {
  * ⚠️ 呼叫者要**剔除目標單自己佔用嘅枱**（改枱時原本張枱要仍然可揀），
  * 做法見 `quick-online-orders-panel` / `online-orders` 兩處 call site。
  */
+/** 冇樓層名時嘅分組標題（同時係字典 key）。 */
+const FLOOR_FALLBACK = "未分區";
+
 export function TableAssignModal({
   title,
   description = "選擇桌台後會將線上單轉到該枱，並補印廚房單。",
@@ -40,10 +44,11 @@ export function TableAssignModal({
   onSelect,
   onClose,
 }: TableAssignModalProps) {
+  const t = useT();
   const grouped = useMemo(() => {
     const map = new Map<string, AssignableTable[]>();
     for (const table of tables) {
-      const key = table.floorName || "未分區";
+      const key = table.floorName || FLOOR_FALLBACK;
       const rows = map.get(key);
       if (rows) rows.push(table);
       else map.set(key, [table]);
@@ -51,20 +56,26 @@ export function TableAssignModal({
     return [...map.entries()];
   }, [tables]);
 
+  // ⚠️ `description` 係顯示文案（字典 key）；call site 可能已經自己 t() 咗 ——
+  //    嗰時 t() 查唔到 key 會原樣返回，冇副作用。
   return (
     <ResponsiveModal
-      description={description}
+      description={t(description)}
       onClose={onClose}
       title={title}
       widthClassName="max-w-2xl"
     >
       {tables.length === 0 ? (
-        <div className="text-sm text-slate-500">尚未設定桌台，請至「設置 → 桌台」新增。</div>
+        <div className="text-sm text-slate-500">{t("尚未設定桌台，請至「設置 → 桌台」新增。")}</div>
       ) : (
         <div className="max-h-[60vh] space-y-4 overflow-auto pr-1">
           {grouped.map(([floorName, rows]) => (
             <div key={floorName}>
-              <div className="mb-2 text-xs font-semibold text-slate-500">{floorName}</div>
+              {/* ⚠️ 唔可以 `t(floorName)` —— 真樓層名係第 2 層資料值，翻譯會壞功能。
+                  只翻「冇樓層名」嗰個 fallback。 */}
+              <div className="mb-2 text-xs font-semibold text-slate-500">
+                {floorName === FLOOR_FALLBACK ? t(FLOOR_FALLBACK) : floorName}
+              </div>
               <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
                 {rows.map((table) => {
                   const selectable = isTableSelectable(table.id, occupiedTableIds);
@@ -81,12 +92,12 @@ export function TableAssignModal({
                         <span className="truncate">{table.name}</span>
                         {!selectable ? (
                           <span className="shrink-0 rounded-full bg-slate-200 px-2 py-0.5 text-[10px] font-semibold text-slate-500">
-                            {occupiedTableHint()}
+                            {t(occupiedTableHint())}
                           </span>
                         ) : null}
                       </div>
                       <div className="mt-1 text-xs font-normal text-slate-500">
-                        {busy ? "處理中…" : table.floorName}
+                        {busy ? t("處理中…") : table.floorName}
                       </div>
                     </button>
                   );

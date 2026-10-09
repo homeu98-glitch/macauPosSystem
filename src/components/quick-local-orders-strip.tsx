@@ -8,6 +8,7 @@ import { compareOrderByLocalNo, getPaymentBadge, isQuickCounterOrder, isQuickOrd
 import { isSelfOrder } from "@/lib/pos/order-source";
 import { canVoidPlatformOrder, isPlatformOrder } from "@/lib/pos/platform-order";
 import { actualPayout } from "@/lib/pos/platform-settlement";
+import { useT } from "@/components/lang-provider";
 import { OrderSourceBadge } from "@/components/order-source-badge";
 import { OrderDiscountRow } from "@/components/order-discount-display";
 import { SelfOrderActionButtons } from "@/components/self-order-action-buttons";
@@ -85,6 +86,7 @@ function OrderCard({
   /** 外賣平台單「作廢（覆寫）」—— 見 `QuickLocalOrdersStripProps` 嘅說明。 */
   onVoidPlatformOrder?: (order: PosOrder) => void;
 }) {
+  const t = useT();
   const completeText = completeLabel(order);
   const orderTime = formatMacauTime(order.createdAt);
   /**
@@ -143,7 +145,7 @@ function OrderCard({
             <span
               className={`inline-flex shrink-0 items-center rounded-full px-2 py-0.5 text-[11px] font-semibold ${paymentBadge.bgClass} ${paymentBadge.textClass}`}
             >
-              {paymentBadge.label}
+              {t(paymentBadge.label)}
             </span>
           </div>
         </div>
@@ -162,12 +164,12 @@ function OrderCard({
                 isDraftSelfOrder ? "bg-slate-400" : mode === "waiting" ? "bg-sky-500" : "bg-amber-500"
               }`}
             />
-            {isDraftSelfOrder ? "點單中" : mode === "waiting" ? completionLabel(order) : "製作中"}
+            {isDraftSelfOrder ? t("點單中") : mode === "waiting" ? t(completionLabel(order)) : t("製作中")}
           </span>
           {/* 時間（HH:MM，下單時間）+ 來源 chip 並排，貼右下（齊平 OrderSourceBadge 高度）。 */}
           <div className="flex items-center gap-1.5">
             <span
-              aria-label="下單時間"
+              aria-label={t("下單時間")}
               className="inline-flex shrink-0 items-center tabular-nums text-[11px] font-semibold text-slate-500"
             >
               {orderTime}
@@ -204,7 +206,7 @@ function OrderCard({
             const payoutLine =
               payout !== null && order.platformSettledAt ? (
                 <div className="text-[10px] tabular-nums text-emerald-700">
-                  實收 {formatMoney(payout, currency)}
+                  {t("實收 {amt}", { amt: formatMoney(payout, currency) })}
                 </div>
               ) : null;
             if (totalSaving <= 0) {
@@ -246,7 +248,7 @@ function OrderCard({
           onClick={() => onViewOrder(order.id)}
           type="button"
         >
-          查看
+          {t("查看")}
         </button>
         {/* 🔴 外賣平台單「取消（覆寫）」（2026-09-24 使用者要求）：
             **刻意唔跟狀態流程** —— 平台單嘅錢係平台收，平台取消咗（可能喺任何階段，
@@ -255,13 +257,13 @@ function OrderCard({
             規則本體：`@/lib/pos/platform-order`（有單測）。 */}
         {canVoidPlatformOrder(order) && onVoidPlatformOrder ? (
           <button
-            aria-label={`取消（覆寫）平台單 ${order.localOrderNo}`}
+            aria-label={t("取消（覆寫）平台單 {no}", { no: order.localOrderNo })}
             className="shrink-0 whitespace-nowrap rounded-xl bg-rose-50 px-2.5 py-1.5 text-[11px] font-semibold text-rose-700 ring-1 ring-rose-200"
             onClick={() => onVoidPlatformOrder(order)}
-            title="平台單作廢（覆寫）：無論任何階段（含已結帳／已完成）都可以用，會將呢張單唔計入報表"
+            title={t("平台單作廢（覆寫）：無論任何階段（含已結帳／已完成）都可以用，會將呢張單唔計入報表")}
             type="button"
           >
-            取消
+            {t("取消")}
           </button>
         ) : null}
         {/* draft 自助單 → 人手「接受 / 拒絕」（2026-09-11 新增）。
@@ -280,12 +282,12 @@ function OrderCard({
                 所以呢個掣一消失就永久唔會再出現。draft 自助單唔顯示，要等撳「接受」。 */}
             {!isPaid && order.status !== "draft" ? (
               <button
-                aria-label={`去結帳 ${order.localOrderNo}`}
+                aria-label={t("去結帳 {no}", { no: order.localOrderNo })}
                 className="shrink-0 rounded-xl bg-slate-700 px-2.5 py-1.5 text-[11px] font-semibold text-white hover:bg-slate-800"
                 onClick={() => onCheckout?.(order.id)}
                 type="button"
               >
-                去結帳
+                {t("去結帳")}
               </button>
             ) : null}
             {/* 可取餐：未 ready 先 active；已 ready → 唔再 render。單向閘：
@@ -293,23 +295,23 @@ function OrderCard({
                 永遠寫 ready、唔覆寫其他值），所以呢個掣一消失就永久唔會再出現。draft 自助單唔顯示。 */}
             {!isReady && order.status !== "draft" ? (
               <button
-                aria-label={`標記可取餐 ${order.localOrderNo}`}
+                aria-label={t("標記可取餐 {no}", { no: order.localOrderNo })}
                 className="shrink-0 rounded-xl bg-orange-500 px-2.5 py-1.5 text-[11px] font-semibold text-white hover:bg-orange-600"
                 onClick={() => onMarkReady(order.id)}
                 type="button"
               >
-                可取餐
+                {t("可取餐")}
               </button>
             ) : null}
             {/* 兩個都做齊 → 出現「已取餐」按下變 settled。settled 後單離開 strip。 */}
             {isBothDone ? (
               <button
-                aria-label={`完成取餐 ${order.localOrderNo}`}
+                aria-label={t("完成取餐 {no}", { no: order.localOrderNo })}
                 className="shrink-0 rounded-xl bg-emerald-600 px-2.5 py-1.5 text-[11px] font-semibold text-white hover:bg-emerald-700"
                 onClick={() => onMarkCompleted(order.id, completeText)}
                 type="button"
               >
-                {completeText}
+                {t(completeText)}
               </button>
             ) : null}
           </>
@@ -327,7 +329,7 @@ function OrderCard({
                 onClick={() => onMarkReady(order.id)}
                 type="button"
               >
-                可取餐
+                {t("可取餐")}
               </button>
             ) : null}
             {isReady ? (
@@ -336,7 +338,7 @@ function OrderCard({
                 onClick={() => onMarkCompleted(order.id, completeText)}
                 type="button"
               >
-                {completeText}
+                {t(completeText)}
               </button>
             ) : null}
           </>
@@ -361,6 +363,8 @@ export function QuickLocalOrdersStrip({
   onRejectSelfOrder,
   onVoidPlatformOrder,
 }: QuickLocalOrdersStripProps) {
+  const t = useT();
+
   // 單一列、全部按單號由小到大：**唔分「製作中 / 待取餐」兩段**。
   // 分段的話，張單一撳「可取餐」就由左面彈去右面一段（即係「按狀態排」——
   // 狀態一改、位置就變，正是用家 2026-09-01 反映嘅問題）。
@@ -375,7 +379,7 @@ export function QuickLocalOrdersStrip({
   if (!hasOrders) {
     return (
       <div className="flex h-[108px] items-center rounded-2xl border border-dashed border-slate-200 bg-slate-50 px-4 text-sm text-slate-500">
-        暫無線下訂單
+        {t("暫無線下訂單")}
       </div>
     );
   }

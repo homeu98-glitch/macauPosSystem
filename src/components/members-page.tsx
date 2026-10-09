@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 
 import { AppSidebar } from "@/components/app-sidebar";
 import { FixedNumberPad } from "@/components/fixed-number-pad";
+import { useT } from "@/components/lang-provider";
 import { MemberTopupPanel } from "@/components/member-topup-panel";
 import { PendingDot } from "@/components/pending-dot";
 import { ensureCustomer } from "@/lib/ledger/ensure-customer";
@@ -43,8 +44,9 @@ function GrantList({
   emptyLabel: string;
   grants: LedgerMemberGrantRecord[];
 }) {
+  const t = useT();
   if (grants.length === 0) {
-    return <div className="text-sm text-slate-500">{emptyLabel}</div>;
+    return <div className="text-sm text-slate-500">{t(emptyLabel)}</div>;
   }
 
   return (
@@ -57,16 +59,16 @@ function GrantList({
           <div className="min-w-0">
             <div className="truncate text-sm font-semibold text-slate-900">{grant.title}</div>
             <div className="mt-1 text-xs text-slate-500">
-              {grantTypeLabel(grant.prizeType)}
+              {t(grantTypeLabel(grant.prizeType))}
               {grant.prizeType === "money_voucher"
                 ? ` · ${formatMoney(avosToMop(grant.rewardAmountAvos))}`
                 : null}
               {" · "}
-              到期 {formatGrantExpiry(grant.expiresAt)}
+              {t("到期 {date}", { date: formatGrantExpiry(grant.expiresAt) })}
             </div>
           </div>
           <span className="shrink-0 rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-600">
-            {grantStatusLabel(grant.status)}
+            {t(grantStatusLabel(grant.status))}
           </span>
         </div>
       ))}
@@ -100,6 +102,8 @@ function MembersTabButton({
 }
 
 export function MembersPage() {
+  // ⚠️ 一定要放喺所有 early return 之前（Rules of Hooks）。
+  const t = useT();
   const router = useRouter();
   const searchParams = useSearchParams();
   const networkOnline = useNetworkOnline();
@@ -301,7 +305,10 @@ export function MembersPage() {
         });
         setTopupMsg({
           tone: "ok",
-          text: `已為 ${member?.displayName ?? "會員"} 充值 ${formatMoney(mop)}`,
+          text: t("已為 {name} 充值 {amount}", {
+            name: member?.displayName ?? t("會員"),
+            amount: formatMoney(mop),
+          }),
         });
       } else {
         await ensureCustomer({
@@ -313,7 +320,10 @@ export function MembersPage() {
         });
         setTopupMsg({
           tone: "ok",
-          text: `已為 ${targetPhone} 建立會員並充值 ${formatMoney(mop)}；請顧客到會員通 /wallet/login 自設 4 位 PIN。`,
+          text: t("已為 {phone} 建立會員並充值 {amount}；請顧客到會員通 /wallet/login 自設 4 位 PIN。", {
+            phone: targetPhone,
+            amount: formatMoney(mop),
+          }),
         });
       }
 
@@ -343,7 +353,7 @@ export function MembersPage() {
     <>
       <div className="mt-3 flex items-end gap-2">
         <div className="flex-1">
-          <div className="text-xs text-slate-500">充值金額（MOP）</div>
+          <div className="text-xs text-slate-500">{t("充值金額（MOP）")}</div>
           <input
             className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
             inputMode="decimal"
@@ -360,12 +370,12 @@ export function MembersPage() {
           onClick={handleTopup}
           type="button"
         >
-          {topupBusy ? "處理中…" : topupLabel}
+          {topupBusy ? t("處理中…") : t(topupLabel)}
         </button>
       </div>
       {topupMsg ? (
         <div className={`mt-2 text-xs ${topupMsg.tone === "ok" ? "text-emerald-600" : "text-rose-600"}`}>
-          {topupMsg.text}
+          {t(topupMsg.text)}
         </div>
       ) : null}
     </>
@@ -379,24 +389,24 @@ export function MembersPage() {
           <div className="border-b border-slate-200 bg-white px-4 py-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
-                <div className="text-lg font-semibold text-slate-900">會員</div>
+                <div className="text-lg font-semibold text-slate-900">{t("會員")}</div>
                 {tab === "manage" ? (
                   <div className="mt-1 text-sm text-slate-500">
-                    輸入 8 位手機號碼查詢 Ledger 會員餘額與獎賞券（須連線；資料不會儲存於本機）。
+                    {t("輸入 8 位手機號碼查詢 Ledger 會員餘額與獎賞券（須連線；資料不會儲存於本機）。")}
                   </div>
                 ) : (
-                  <div className="mt-1 text-sm text-slate-500">審核顧客線上轉帳充值截圖。</div>
+                  <div className="mt-1 text-sm text-slate-500">{t("審核顧客線上轉帳充值截圖。")}</div>
                 )}
               </div>
               <div className="flex flex-wrap gap-2">
                 <MembersTabButton
                   active={tab === "manage"}
-                  label="會員管理"
+                  label={t("會員管理")}
                   onClick={() => switchTab("manage")}
                 />
                 <MembersTabButton
                   active={tab === "topup"}
-                  label="會員充值"
+                  label={t("會員充值")}
                   showDot={topupConfigured && hasPending}
                   onClick={() => switchTab("topup")}
                 />
@@ -411,7 +421,7 @@ export function MembersPage() {
                     inputMode="numeric"
                     maxLength={8}
                     onChange={(event) => handlePhoneChange(event.target.value)}
-                    placeholder="輸入 8 位手機號碼"
+                    placeholder={t("輸入 8 位手機號碼")}
                     value={phone}
                   />
                 </div>
@@ -422,7 +432,7 @@ export function MembersPage() {
                     onKeyDown={(event) => {
                       if (event.key === "Enter") void runListSearch(1);
                     }}
-                    placeholder="姓名 / 電話搜尋會員（至少 2 字）"
+                    placeholder={t("姓名 / 電話搜尋會員（至少 2 字）")}
                     value={listQuery}
                   />
                   <button
@@ -431,18 +441,18 @@ export function MembersPage() {
                     onClick={() => void runListSearch(1)}
                     type="button"
                   >
-                    {listBusy ? "搜尋中…" : "搜尋"}
+                    {listBusy ? t("搜尋中…") : t("搜尋")}
                   </button>
                 </div>
-                {!validSearch ? <div className="mt-2 text-xs text-red-600">只可輸入 8 位數字</div> : null}
+                {!validSearch ? <div className="mt-2 text-xs text-red-600">{t("只可輸入 8 位數字")}</div> : null}
                 {offlineMode ? (
-                  <div className="mt-2 text-xs text-amber-700">目前離線，無法查詢會員。</div>
+                  <div className="mt-2 text-xs text-amber-700">{t("目前離線，無法查詢會員。")}</div>
                 ) : null}
-                {searching ? <div className="mt-2 text-xs text-slate-500">查詢中…</div> : null}
-                {searchHint ? <div className="mt-2 text-xs text-red-600">{searchHint}</div> : null}
+                {searching ? <div className="mt-2 text-xs text-slate-500">{t("查詢中…")}</div> : null}
+                {searchHint ? <div className="mt-2 text-xs text-red-600">{t(searchHint)}</div> : null}
                 {listMsg ? (
                   <div className={`mt-2 text-xs ${listMsg.tone === "ok" ? "text-emerald-600" : "text-rose-600"}`}>
-                    {listMsg.text}
+                    {t(listMsg.text)}
                   </div>
                 ) : null}
               </>
@@ -455,9 +465,9 @@ export function MembersPage() {
                 <section className="mb-4 rounded-2xl border border-slate-200 bg-white p-4">
                   <div className="flex items-center justify-between">
                     <div className="text-sm font-semibold text-slate-900">
-                      搜尋結果（今次共 {listTotal} 筆）
+                      {t("搜尋結果（今次共 {n} 筆）", { n: listTotal })}
                       <span className="ml-2 text-xs font-normal text-slate-400">
-                        只係今次搜尋筆數，唔係全店總數
+                        {t("只係今次搜尋筆數，唔係全店總數")}
                       </span>
                     </div>
                     <button
@@ -468,7 +478,7 @@ export function MembersPage() {
                       }}
                       type="button"
                     >
-                      清除
+                      {t("清除")}
                     </button>
                   </div>
 
@@ -482,7 +492,7 @@ export function MembersPage() {
                       >
                         <div className="min-w-0">
                           <div className="truncate text-sm font-semibold text-slate-900">
-                            {item.displayName ?? item.nickName ?? "會員"}
+                            {item.displayName ?? item.nickName ?? t("會員")}
                           </div>
                           <div className="mt-0.5 text-xs text-slate-500">***{item.phone.slice(-4)}</div>
                         </div>
@@ -491,7 +501,7 @@ export function MembersPage() {
                             {formatMoney(avosToMop(item.balanceAvos))}
                           </div>
                           <div className="text-[11px] text-slate-400">
-                            贈送 {formatMoney(avosToMop(item.giftBalanceAvos))}
+                            {t("贈送 {amt}", { amt: formatMoney(avosToMop(item.giftBalanceAvos)) })}
                           </div>
                         </div>
                       </button>
@@ -505,7 +515,7 @@ export function MembersPage() {
                       onClick={() => void runListSearch(listPage + 1)}
                       type="button"
                     >
-                      {listBusy ? "載入中…" : "載入更多"}
+                      {listBusy ? t("載入中…") : t("載入更多")}
                     </button>
                   ) : null}
                 </section>
@@ -513,7 +523,7 @@ export function MembersPage() {
 
               {!member && phone.length < 8 ? (
                 <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-8 text-center text-sm text-slate-500">
-                  輸入完整 8 位手機號碼（查單一會員），或用上方搜尋框以姓名／電話搜尋。
+                  {t("輸入完整 8 位手機號碼（查單一會員），或用上方搜尋框以姓名／電話搜尋。")}
                 </div>
               ) : null}
 
@@ -522,61 +532,65 @@ export function MembersPage() {
                   <article className="rounded-2xl border border-slate-200 bg-white p-4">
                     <div>
                       <div className="text-base font-semibold text-slate-900">
-                        {member.displayName ?? "會員"}
+                        {member.displayName ?? t("會員")}
                       </div>
                       <div className="mt-1 text-sm text-slate-500">{member.customerPhone}</div>
                     </div>
 
                     <div className="mt-4 grid gap-3">
                       <div className="rounded-2xl bg-slate-50 p-3">
-                        <div className="text-xs text-slate-500">錢包合計</div>
+                        <div className="text-xs text-slate-500">{t("錢包合計")}</div>
                         <div className="mt-1 text-lg font-semibold text-slate-900">
                           {formatMoney(avosToMop(member.balanceAvos))}
                         </div>
                       </div>
                       <div className="grid grid-cols-2 gap-3 text-sm">
                         <div className="rounded-2xl bg-slate-50 p-3">
-                          <div className="text-xs text-slate-500">充值餘額</div>
+                          <div className="text-xs text-slate-500">{t("充值餘額")}</div>
                           <div className="mt-1 font-semibold text-slate-900">
                             {formatMoney(avosToMop(paidBalanceAvos))}
                           </div>
                         </div>
                         <div className="rounded-2xl bg-slate-50 p-3">
-                          <div className="text-xs text-slate-500">贈送餘額</div>
+                          <div className="text-xs text-slate-500">{t("贈送餘額")}</div>
                           <div className="mt-1 font-semibold text-slate-900">
                             {formatMoney(avosToMop(member.giftBalanceAvos))}
                           </div>
                         </div>
                       </div>
                       <div className="rounded-2xl bg-orange-50 p-3 text-sm text-orange-900">
-                        可核銷 {grantGroups.active.length} 張 · 共 {member.allGrants.length} 張獎賞券
+                        {t("可核銷 {a} 張 · 共 {b} 張獎賞券", {
+                          a: grantGroups.active.length,
+                          b: member.allGrants.length,
+                        })}
                       </div>
                     </div>
                   </article>
 
                   <div className="grid gap-4">
                     <section className="rounded-2xl border border-slate-200 bg-white p-4">
-                      <div className="text-sm font-semibold text-slate-900">可核銷獎賞券</div>
+                      <div className="text-sm font-semibold text-slate-900">{t("可核銷獎賞券")}</div>
                       <div className="mt-3">
                         <GrantList emptyLabel="目前沒有可核銷獎賞券" grants={grantGroups.active} />
                       </div>
                     </section>
 
                     <section className="rounded-2xl border border-slate-200 bg-white p-4">
-                      <div className="text-sm font-semibold text-slate-900">已失效獎賞券</div>
+                      <div className="text-sm font-semibold text-slate-900">{t("已失效獎賞券")}</div>
                       <div className="mt-3">
                         <GrantList emptyLabel="沒有已兌換或過期的獎賞券" grants={grantGroups.inactive} />
                       </div>
                     </section>
 
                     <section className="rounded-2xl border border-orange-200 bg-orange-50/60 p-4">
-                      <div className="text-sm font-semibold text-slate-900">現場充值（已註冊會員）</div>
+                      <div className="text-sm font-semibold text-slate-900">{t("現場充值（已註冊會員）")}</div>
                       {topupControls}
                       <div className="mt-2 text-[11px] text-slate-400">
-                        走 Ledger{" "}
+                        {t("走 Ledger")}{" "}
                         <span className="font-mono">{`merchant_apply_pos_txn(p_type:"topup")`}</span>
-                        ，冪等鍵防重複；契約明禁{" "}
-                        <span className="font-mono">{`p_type="add"`}</span>。
+                        {t("，冪等鍵防重複；契約明禁")}{" "}
+                        <span className="font-mono">{`p_type="add"`}</span>
+                        {t("。")}
                       </div>
                     </section>
                   </div>
@@ -585,23 +599,25 @@ export function MembersPage() {
 
               {!member && phone.length === 8 ? (
                 <section className="rounded-2xl border border-orange-200 bg-orange-50/60 p-4">
-                  <div className="text-sm font-semibold text-slate-900">{phone} 尚未註冊會員通</div>
+                  <div className="text-sm font-semibold text-slate-900">
+                    {t("{phone} 尚未註冊會員通", { phone })}
+                  </div>
                   <div className="mt-1 text-xs text-slate-600">
-                    輸入充值金額後撳「建檔並充值」，即會建立會員並完成首充（Ledger v3.2 §5.9
-                    <span className="font-mono"> ensure-customer</span>，POS 伺服器代打）。
-                    建檔後顧客須自行到會員通
+                    {t("輸入充值金額後撳「建檔並充值」，即會建立會員並完成首充（Ledger v3.2 §5.9")}
+                    <span className="font-mono"> ensure-customer</span>
+                    {t("，POS 伺服器代打）。建檔後顧客須自行到會員通")}
                     <span className="font-mono"> /wallet/login </span>
-                    自設 4 位 PIN；POS 唔幫設 PIN。
+                    {t("自設 4 位 PIN；POS 唔幫設 PIN。")}
                   </div>
                   <div className="mt-3">
                     <div className="text-xs text-slate-500">
-                      會員名稱（可選，最多 50 字；留空由顧客日後於會員通自行填寫）
+                      {t("會員名稱（可選，最多 50 字；留空由顧客日後於會員通自行填寫）")}
                     </div>
                     <input
                       className="mt-1 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
                       maxLength={50}
                       onChange={(e) => setTopupName(e.target.value)}
-                      placeholder="例如：陳小姐"
+                      placeholder={t("例如：陳小姐")}
                       type="text"
                       value={topupName}
                     />
@@ -620,8 +636,8 @@ export function MembersPage() {
             <FixedNumberPad
               confirmLabel="搜尋"
               showDisplay={false}
-              subtitle="輸入會員手機號碼"
-              title="數字鍵盤"
+              subtitle={t("輸入會員手機號碼")}
+              title={t("數字鍵盤")}
               value={phone}
               onChange={handlePhoneChange}
               onConfirm={() => scheduleLookup(phone)}

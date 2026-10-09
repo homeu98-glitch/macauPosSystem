@@ -24,18 +24,44 @@ import {
 
 const CODE = "取餐碼 005";
 
+/**
+ * 把 `{ph}` 佔位符用 `vars` 填返（同 `interpolate()` 同一語義，但零 import）。
+ * 用嚟證明「key + vars」真係砌得返原本嗰句 —— 即係翻譯唔會漏咗個單號。
+ */
+function fill(template: string, vars?: Record<string, string | number>): string {
+  return template.replace(/\{([a-zA-Z0-9_]+)\}/g, (whole, name: string) =>
+    vars && name in vars ? String(vars[name]) : whole,
+  );
+}
+
+/** 🔴 鐵律：`message` 一定要係**字典 key**，動態值只可以行 `vars`。 */
+function assertKeyIsTranslatable(payload: { message: string; vars?: Record<string, string | number> }) {
+  const names = [...payload.message.matchAll(/\{([a-zA-Z0-9_]+)\}/g)].map((m) => m[1]);
+  for (const name of names) {
+    assert.ok(
+      payload.vars && name in payload.vars,
+      `message 有 {${name}} 但 vars 冇提供 → 顯示位會出字面 "{${name}}"`,
+    );
+  }
+  // 動態值唔可以砌入 key（砌入去字典永遠命中唔到 → 英文版彈中文）。
+  assert.doesNotMatch(payload.message, /取餐碼 005/, "單號唔可以砌入 key，要放 vars");
+}
+
 test("🔴 核心：自動接單 0 張廚房 job 唔准靜默（要 warning，唔可以 null）", () => {
   const payload = autoAcceptToast(CODE, acceptOk(0));
   assert.ok(payload, "0 job 一定要有提示");
   assert.equal(payload!.tone, "warning");
   assert.match(payload!.message, /未出廚房單/);
-  assert.match(payload!.message, /取餐碼 005/);
+  assertKeyIsTranslatable(payload!);
+  assert.match(fill(payload!.message, payload!.vars), /取餐碼 005/);
 });
 
 test("自動接單成功送廚 → success", () => {
   const payload = autoAcceptToast(CODE, acceptOk(2));
   assert.equal(payload?.tone, "success");
   assert.match(payload!.message, /已送廚/);
+  assertKeyIsTranslatable(payload!);
+  assert.match(fill(payload!.message, payload!.vars), /取餐碼 005/);
 });
 
 test("自動接單「已出過紙」→ info（唔可以講成「未出廚房單」）", () => {
@@ -43,19 +69,23 @@ test("自動接單「已出過紙」→ info（唔可以講成「未出廚房單
   assert.equal(payload?.tone, "info");
   assert.match(payload!.message, /已出過廚房單/);
   assert.doesNotMatch(payload!.message, /請檢查打印開關/);
+  assertKeyIsTranslatable(payload!);
 });
 
 test("自動接單：出紙步驟失敗 → error，並帶出底層原因", () => {
   const payload = autoAcceptToast(CODE, acceptFailed("kitchen", "未配任何已啟用嘅廚房打印機"));
   assert.equal(payload?.tone, "error");
   assert.match(payload!.message, /廚房單建立失敗/);
-  assert.match(payload!.message, /未配任何已啟用嘅廚房打印機/);
+  assertKeyIsTranslatable(payload!);
+  // 底層原因係動態字串 → 只可以經 `vars.suffix` 出現。
+  assert.match(fill(payload!.message, payload!.vars), /未配任何已啟用嘅廚房打印機/);
 });
 
 test("自動接單：接單本身失敗 → error", () => {
   const payload = autoAcceptToast(CODE, acceptFailed("accept", "network error"));
   assert.equal(payload?.tone, "error");
   assert.match(payload!.message, /自動接單失敗/);
+  assertKeyIsTranslatable(payload!);
 });
 
 test("唯一唔彈提示嘅情況：餘額不足（fallback 彈窗會處理）", () => {

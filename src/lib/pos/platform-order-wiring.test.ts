@@ -133,7 +133,17 @@ describe("local-orders-panel.tsx（/orders 頁）", () => {
   });
 
   it("取消原因彈窗喺平台單時改標題（同本地單分辨）", () => {
-    assert.match(panel, /isPlatformOrder\(cancelTarget\) \? "取消平台單（覆寫）" : "取消結帳"/);
+    /**
+     * ⚠️ 唔好斷言整句代碼字串 —— 加 `t()` 包裝（i18n）就會爆，但行為完全冇變。
+     * 守**行為不變量**：同一條 ternary 用 `isPlatformOrder(cancelTarget)` 揀
+     * 兩個**唔同**嘅標題。（`t(` 可選，兼容未包／已包兩種寫法。）
+     */
+    const m = /isPlatformOrder\(cancelTarget\)\s*\?\s*(?:t\()?"([^"]+)"\)?\s*:\s*(?:t\()?"([^"]+)"\)?/.exec(
+      panel,
+    );
+    assert.ok(m, "搵唔到取消原因彈窗嘅標題 ternary（結構改咗就要更新呢條守衛）");
+    assert.notEqual(m[1], m[2], "平台單同本地單用咗同一個標題，收銀分唔清係邊種單");
+    assert.ok(m[1].length > 0 && m[2].length > 0, "標題唔可以係空字串");
   });
 });
 

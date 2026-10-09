@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
 import { AppSidebar } from "@/components/app-sidebar";
-import { useLang, useT } from "@/components/lang-provider";
+import { useLang, useT, useTShort } from "@/components/lang-provider";
 import { LANG_DISPLAY_NAME, UI_LANGS } from "@/lib/i18n";
 import { KioskModePanel } from "@/components/kiosk-mode-panel";
 import { ScanModePanel } from "@/components/scan-mode-panel";
@@ -69,11 +69,13 @@ function cloneSpecGroups(specGroups?: MenuSpecGroup[]) {
 
 export function DeviceSettings() {
   const t = useT();
+  const tShort = useTShort();
   const cachedConfig = loadDeviceConfig();
   const cachedLocalSettings = loadPosLocalSettings();
   const cachedBootstrap = loadBootstrapCache() ?? mockBootstrap;
   const [config, setConfig] = useState<DeviceConfig>(cachedConfig ?? defaultDeviceConfig);
   const [localSettings, setLocalSettings] = useState<PosLocalSettings>(cachedLocalSettings ?? defaultPosLocalSettings);
+  // ⚠️ `status` 係**顯示狀態行**，唔係持久化值 ⇒ 翻譯
   const [status, setStatus] = useState(cachedConfig ? "已載入本機設定。" : "尚未同步設定。");
 
   const [activeTab, setActiveTab] = useState<
@@ -1124,7 +1126,13 @@ export function DeviceSettings() {
       <AppSidebar />
       <div className="h-[100dvh] overflow-auto pb-[calc(env(safe-area-inset-bottom)+16px)]">
         <div className="sticky top-0 z-20 border-b border-slate-200 bg-white">
-          <div className="mx-auto flex max-w-[1600px] items-center justify-between gap-4 px-4 py-3 md:pl-[88px]">
+          {/* 🔴 2026-10-08：窄屏（<md）要**直排**。
+              原本 `flex items-center justify-between` ＋ 右側 `shrink-0` ⇒ 390px 時
+              英文「EXP Workstations ＋ Back to register」兩粒掣用盡闊度，
+              `min-w-0` 嘅標題欄被榨到 ~110px ⇒ 副標題變成「一個字一行」嘅長條
+              （zh-Hant 同尺寸冇事，係英文翻譯變長所致）。
+              ⇒ 手機直排（標題在上、控件另起一行可換行），≥md 維持原判。 */}
+          <div className="mx-auto flex max-w-[1600px] flex-col items-start gap-3 px-4 py-3 md:flex-row md:items-center md:justify-between md:gap-4 md:pl-[88px]">
             <div className="min-w-0">
               <div className="text-lg font-semibold text-slate-900">{t("設置")}</div>
               <div className="mt-1 text-sm text-slate-500">
@@ -1137,7 +1145,7 @@ export function DeviceSettings() {
                 行為同側欄原本嗰粒一模一樣：`href="/select-workbench"` 直接跳，冇二次確認。
                 ⚠️ 2026-09-15：狀態 pill（「店內營業」→側欄商店名卡、「線上接單」→營運畫面）
                 全部搬走，header 唔再放開關。 */}
-            <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+            <div className="flex flex-wrap items-center gap-2 md:shrink-0 md:justify-end">
               {/* ⚠️ 2026-09-17：指向 `/`（統一入口）而唔係 `/select-workbench`。
                   兩者 render 同一個元件，但 `/` 係對外唯一入口 ——
                   側欄／文件／PWA 全部用 `/`，只留一條路徑畀商家記。
@@ -1147,7 +1155,11 @@ export function DeviceSettings() {
                 href="/"
                 title={t("切換工作台（重新揀呢部機嘅崗位）")}
               >
-                <span className="grid h-5 w-5 place-items-center rounded-full bg-white/20 text-[11px]">台</span>
+                {/* 🔴 `w-5`（固定 20px）＋ `SHORT_EN_DICT` 嘅 `台: "EXP"`（3 字母 ≈22px）
+                    會令英文版徽章**被裁 2px**（zh「台」11px 冇事）。
+                    ⇒ 改 `min-w-5` ＋ `px-1`：中文仍然 20px 圓形（唔變），
+                       英文自動長到 30px 顯示齊全。 */}
+                <span className="grid h-5 min-w-5 place-items-center rounded-full bg-white/20 px-1 text-[11px]">{tShort("台")}</span>
                 {t("工作台")}
               </Link>
               {/* 2026-09-15 J 拍板：**拿走 header 嗰粒「線上接單」**（原 `MerchantOrderHeaderToggle`）。
@@ -1194,7 +1206,7 @@ export function DeviceSettings() {
         </div>
 
   <div className="mb-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">
-    {status}
+    {t(status)}
   </div>
 
   {/* 🔎 版本列（2026-09-22）：顯示「呢部機跑緊嘅版本」＋ 對照線上最新部署。
@@ -1496,14 +1508,14 @@ export function DeviceSettings() {
         {activeTab === "notes" ? (
           <div className="grid gap-3 lg:grid-cols-2">
             <section className="rounded-2xl border border-slate-200 bg-white p-4 max-h-[calc(100dvh-150px)] flex flex-col overflow-hidden">
-              <div className="text-base font-semibold text-slate-900">常用備註</div>
-              <div className="mt-1 text-sm text-slate-500">用於點餐時快速選擇（多選）。</div>
+              <div className="text-base font-semibold text-slate-900">{t("常用備註")}</div>
+              <div className="mt-1 text-sm text-slate-500">{t("用於點餐時快速選擇（多選）。")}</div>
 
               <div className="mt-4 flex-1 overflow-auto pr-1">
                 <div className="grid gap-2">
                   {localSettings.notePresets.length === 0 ? (
                     <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
-                      暫時沒有常用備註
+                      {t("暫時沒有常用備註")}
                     </div>
                   ) : (
                     localSettings.notePresets.map((note) => (
@@ -1524,7 +1536,7 @@ export function DeviceSettings() {
                           }}
                           type="button"
                         >
-                          刪除
+                          {t("刪除")}
                         </button>
                       </div>
                     ))
@@ -1535,7 +1547,7 @@ export function DeviceSettings() {
                   <input
                     className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm lg:w-[320px]"
                     onChange={(event) => setNewNotePreset(event.target.value)}
-                    placeholder="新增常用備註..."
+                    placeholder={t("新增常用備註...")}
                     value={newNotePreset}
                   />
                   <button
@@ -1553,21 +1565,21 @@ export function DeviceSettings() {
                     }}
                     type="button"
                   >
-                    加入
+                    {t("加入")}
                   </button>
                 </div>
               </div>
             </section>
 
             <section className="rounded-2xl border border-slate-200 bg-white p-4 max-h-[calc(100dvh-150px)] flex flex-col overflow-hidden">
-              <div className="text-base font-semibold text-slate-900">免單備註</div>
-              <div className="mt-1 text-sm text-slate-500">結帳頁按「免單」時要選擇的原因（必填）。</div>
+              <div className="text-base font-semibold text-slate-900">{t("免單備註")}</div>
+              <div className="mt-1 text-sm text-slate-500">{t("結帳頁按「免單」時要選擇的原因（必填）。")}</div>
 
               <div className="mt-4 flex-1 overflow-auto pr-1">
                 <div className="grid gap-2">
                   {localSettings.compNotePresets.length === 0 ? (
                     <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
-                      暫時沒有免單備註
+                      {t("暫時沒有免單備註")}
                     </div>
                   ) : (
                     localSettings.compNotePresets.map((note) => (
@@ -1588,7 +1600,7 @@ export function DeviceSettings() {
                           }}
                           type="button"
                         >
-                          刪除
+                          {t("刪除")}
                         </button>
                       </div>
                     ))
@@ -1599,7 +1611,7 @@ export function DeviceSettings() {
                   <input
                     className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm lg:w-[320px]"
                     onChange={(event) => setNewCompNotePreset(event.target.value)}
-                    placeholder="新增免單備註..."
+                    placeholder={t("新增免單備註...")}
                     value={newCompNotePreset}
                   />
                   <button
@@ -1617,21 +1629,21 @@ export function DeviceSettings() {
                     }}
                     type="button"
                   >
-                    加入
+                    {t("加入")}
                   </button>
                 </div>
               </div>
             </section>
 
             <section className="rounded-2xl border border-slate-200 bg-white p-4 max-h-[calc(100dvh-150px)] flex flex-col overflow-hidden">
-              <div className="text-base font-semibold text-slate-900">取消備註</div>
-              <div className="mt-1 text-sm text-slate-500">用於退菜/取消時快速選擇。</div>
+              <div className="text-base font-semibold text-slate-900">{t("取消備註")}</div>
+              <div className="mt-1 text-sm text-slate-500">{t("用於退菜/取消時快速選擇。")}</div>
 
               <div className="mt-4 flex-1 overflow-auto pr-1">
                 <div className="grid gap-2">
                   {localSettings.cancelNotePresets.length === 0 ? (
                     <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
-                      暫時沒有取消備註
+                      {t("暫時沒有取消備註")}
                     </div>
                   ) : (
                     localSettings.cancelNotePresets.map((note) => (
@@ -1652,7 +1664,7 @@ export function DeviceSettings() {
                           }}
                           type="button"
                         >
-                          刪除
+                          {t("刪除")}
                         </button>
                       </div>
                     ))
@@ -1663,7 +1675,7 @@ export function DeviceSettings() {
                   <input
                     className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm lg:w-[320px]"
                     onChange={(event) => setNewCancelNotePreset(event.target.value)}
-                    placeholder="新增取消備註..."
+                    placeholder={t("新增取消備註...")}
                     value={newCancelNotePreset}
                   />
                   <button
@@ -1681,13 +1693,13 @@ export function DeviceSettings() {
                     }}
                     type="button"
                   >
-                    加入
+                    {t("加入")}
                   </button>
                 </div>
 
                 <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                  <div className="text-sm font-semibold text-slate-900">全部退菜後的整單狀態</div>
-                  <div className="mt-1 text-xs text-slate-500">可設定全部退菜後，未結帳整單是標成已取消還是已退完。</div>
+                  <div className="text-sm font-semibold text-slate-900">{t("全部退菜後的整單狀態")}</div>
+                  <div className="mt-1 text-xs text-slate-500">{t("可設定全部退菜後，未結帳整單是標成已取消還是已退完。")}</div>
                   <div className="mt-3 grid gap-2">
                     <label className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm font-semibold text-slate-900">
                       <input
@@ -1700,7 +1712,7 @@ export function DeviceSettings() {
                         }
                         type="radio"
                       />
-                      <span>已取消</span>
+                      <span>{t("已取消")}</span>
                     </label>
                     <label className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm font-semibold text-slate-900">
                       <input
@@ -1713,7 +1725,7 @@ export function DeviceSettings() {
                         }
                         type="radio"
                       />
-                      <span>已退完</span>
+                      <span>{t("已退完")}</span>
                     </label>
                   </div>
                 </div>
@@ -1724,16 +1736,16 @@ export function DeviceSettings() {
                 同免單備註分開係因為語意唔同：免單 = 全額減免（實收 0），折扣 = 收少啲但照收錢，
                 對帳口徑亦唔同（折扣金額要落報表/交班「優惠金額」欄逐筆追溯）。 */}
             <section className="rounded-2xl border border-slate-200 bg-white p-4 max-h-[calc(100dvh-150px)] flex flex-col overflow-hidden">
-              <div className="text-base font-semibold text-slate-900">折扣備註</div>
+              <div className="text-base font-semibold text-slate-900">{t("折扣備註")}</div>
               <div className="mt-1 text-sm text-slate-500">
-                結帳套用折扣時要選擇的原因（必填）。會顯示在報表、訂單紀錄及交班明細。
+                {t("結帳套用折扣時要選擇的原因（必填）。會顯示在報表、訂單紀錄及交班明細。")}
               </div>
 
               <div className="mt-4 flex-1 overflow-auto pr-1">
                 <div className="grid gap-2">
                   {localSettings.discountNotePresets.length === 0 ? (
                     <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
-                      暫時沒有折扣備註
+                      {t("暫時沒有折扣備註")}
                     </div>
                   ) : (
                     localSettings.discountNotePresets.map((note) => (
@@ -1754,7 +1766,7 @@ export function DeviceSettings() {
                           }}
                           type="button"
                         >
-                          刪除
+                          {t("刪除")}
                         </button>
                       </div>
                     ))
@@ -1765,7 +1777,7 @@ export function DeviceSettings() {
                   <input
                     className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm lg:w-[320px]"
                     onChange={(event) => setNewDiscountNotePreset(event.target.value)}
-                    placeholder="新增折扣備註..."
+                    placeholder={t("新增折扣備註...")}
                     value={newDiscountNotePreset}
                   />
                   <button
@@ -1783,21 +1795,21 @@ export function DeviceSettings() {
                     }}
                     type="button"
                   >
-                    加入
+                    {t("加入")}
                   </button>
                 </div>
               </div>
             </section>
 
             <section className="rounded-2xl border border-slate-200 bg-white p-4 max-h-[calc(100dvh-150px)] flex flex-col overflow-hidden lg:col-span-2">
-              <div className="text-base font-semibold text-slate-900">返結原因</div>
-              <div className="mt-1 text-sm text-slate-500">用於返結（反結賬）時選擇退回可編輯狀態的原因，強制填寫以便對帳。</div>
+              <div className="text-base font-semibold text-slate-900">{t("返結原因")}</div>
+              <div className="mt-1 text-sm text-slate-500">{t("用於返結（反結賬）時選擇退回可編輯狀態的原因，強制填寫以便對帳。")}</div>
 
               <div className="mt-4 flex-1 overflow-auto pr-1">
                 <div className="grid gap-2">
                   {localSettings.reopenReasons.length === 0 ? (
                     <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
-                      暫時沒有返結原因
+                      {t("暫時沒有返結原因")}
                     </div>
                   ) : (
                     localSettings.reopenReasons.map((note) => (
@@ -1818,7 +1830,7 @@ export function DeviceSettings() {
                           }}
                           type="button"
                         >
-                          刪除
+                          {t("刪除")}
                         </button>
                       </div>
                     ))
@@ -1829,7 +1841,7 @@ export function DeviceSettings() {
                   <input
                     className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm lg:w-[320px]"
                     onChange={(event) => setNewReopenReason(event.target.value)}
-                    placeholder="新增返結原因..."
+                    placeholder={t("新增返結原因...")}
                     value={newReopenReason}
                   />
                   <button
@@ -1847,7 +1859,7 @@ export function DeviceSettings() {
                     }}
                     type="button"
                   >
-                    加入
+                    {t("加入")}
                   </button>
                 </div>
               </div>
@@ -1870,16 +1882,16 @@ export function DeviceSettings() {
         {activeTab === "discounts" ? (
           <div className="grid gap-3 lg:grid-cols-2">
             <section className="rounded-2xl border border-slate-200 bg-white p-4 max-h-[calc(100dvh-150px)] flex flex-col overflow-hidden">
-              <div className="text-base font-semibold text-slate-900">折扣項目</div>
+              <div className="text-base font-semibold text-slate-900">{t("折扣項目")}</div>
               <div className="mt-1 text-sm text-slate-500">
-                用於結帳頁「全單折扣」下拉及單品折扣彈窗。每個折扣填名稱與百分比（例如「8折」+「80」），介面唔顯示「%」號。
+                {t("用於結帳頁「全單折扣」下拉及單品折扣彈窗。每個折扣填名稱與百分比（例如「8折」+「80」），介面唔顯示「%」號。")}
               </div>
 
               <div className="mt-4 flex-1 overflow-auto pr-1">
                 <div className="grid gap-2">
                   {localSettings.discounts.length === 0 ? (
                     <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
-                      暫時沒有折扣項目
+                      {t("暫時沒有折扣項目")}
                     </div>
                   ) : (
                     localSettings.discounts.map((disc) => (
@@ -1903,7 +1915,7 @@ export function DeviceSettings() {
                           }}
                           type="button"
                         >
-                          刪除
+                          {t("刪除")}
                         </button>
                       </div>
                     ))
@@ -1914,7 +1926,7 @@ export function DeviceSettings() {
                   <input
                     className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
                     onChange={(event) => setNewDiscountLabel(event.target.value)}
-                    placeholder="折扣名稱，例如「8折」"
+                    placeholder={t("折扣名稱，例如「8折」")}
                     value={newDiscountLabel}
                   />
                   <div className="flex flex-wrap items-center gap-2">
@@ -1922,7 +1934,7 @@ export function DeviceSettings() {
                       className="w-40 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
                       inputMode="decimal"
                       onChange={(event) => setNewDiscountRate(event.target.value)}
-                      placeholder="百分比，例如 80"
+                      placeholder={t("百分比，例如 80")}
                       value={newDiscountRate}
                     />
                     <button
@@ -1952,7 +1964,7 @@ export function DeviceSettings() {
                       }}
                       type="button"
                     >
-                      加入
+                      {t("加入")}
                     </button>
                   </div>
                 </div>
@@ -1960,12 +1972,12 @@ export function DeviceSettings() {
             </section>
 
             <section className="rounded-2xl border border-slate-200 bg-white p-4 max-h-[calc(100dvh-150px)] flex flex-col overflow-hidden">
-              <div className="text-base font-semibold text-slate-900">說明</div>
+              <div className="text-base font-semibold text-slate-900">{t("說明")}</div>
               <div className="mt-3 grid gap-2 text-sm text-slate-600">
-                <div>· 百分比 = 實收比例。80 = 8 折（收 80 元）；50 = 5 折；100 = 冇折扣。</div>
-                <div>· 單品折扣只影響該菜品，會喺結帳頁該菜品旁顯示原價（刪除線）＋折後價。</div>
-                <div>· 全單折扣套用整張單，折扣金額會喺結帳摘要「折扣」一欄顯示。</div>
-                <div>· 修改後請撳右下方「保存折扣」同步到本機同伺服器。</div>
+                <div>{t("· 百分比 = 實收比例。80 = 8 折（收 80 元）；50 = 5 折；100 = 冇折扣。")}</div>
+                <div>{t("· 單品折扣只影響該菜品，會喺結帳頁該菜品旁顯示原價（刪除線）＋折後價。")}</div>
+                <div>{t("· 全單折扣套用整張單，折扣金額會喺結帳摘要「折扣」一欄顯示。")}</div>
+                <div>{t("· 修改後請撳右下方「保存折扣」同步到本機同伺服器。")}</div>
               </div>
             </section>
 
@@ -1987,8 +1999,8 @@ export function DeviceSettings() {
           <section className="min-h-0 rounded-2xl border border-slate-200 bg-white p-4 max-h-[calc(100dvh-150px)] flex flex-col overflow-hidden">
             <div className="flex items-start justify-between gap-3">
               <div>
-                <div className="text-base font-semibold text-slate-900">菜品打印設置</div>
-                <div className="mt-1 text-sm text-slate-500">菜品先分配到打印分區，再由分區打印機或標籤機接收。</div>
+                <div className="text-base font-semibold text-slate-900">{t("菜品打印設置")}</div>
+                <div className="mt-1 text-sm text-slate-500">{t("菜品先分配到打印分區，再由分區打印機或標籤機接收。")}</div>
               </div>
             </div>
 
@@ -2006,7 +2018,7 @@ export function DeviceSettings() {
                   }}
                   value={menuPrintCategoryId}
                 >
-                  <option value="all">全部分類</option>
+                  <option value="all">{t("全部分類")}</option>
                   {menuDraft.categories.map((category) => (
                     <option key={category.id} value={category.id}>
                       {category.name}
@@ -2040,7 +2052,7 @@ export function DeviceSettings() {
                   }}
                   type="button"
                 >
-                  批量套用
+                  {t("批量套用")}
                 </button>
               </div>
             </div>
@@ -2063,7 +2075,7 @@ export function DeviceSettings() {
                         onClick={() => setMenuPrintPage((current) => Math.max(1, current - 1))}
                         type="button"
                       >
-                        上一頁
+                        {t("上一頁")}
                       </button>
                       <button
                         className="rounded-2xl bg-white px-3 py-2 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 disabled:opacity-50"
@@ -2071,7 +2083,7 @@ export function DeviceSettings() {
                         onClick={() => setMenuPrintPage((current) => Math.min(totalPages, current + 1))}
                         type="button"
                       >
-                        下一頁
+                        {t("下一頁")}
                       </button>
                     </div>
                   </>
@@ -2112,15 +2124,15 @@ export function DeviceSettings() {
                               }}
                               type="checkbox"
                             />
-                            <span>選擇</span>
+                            <span>{t("選擇")}</span>
                           </label>
                         );
                       })()}
                     </th>
-                    <th className="border-b border-slate-200 py-2 pr-3">菜品</th>
-                    <th className="border-b border-slate-200 py-2 pr-3">分類</th>
-                    <th className="border-b border-slate-200 py-2 pr-3">當前分區</th>
-                    <th className="border-b border-slate-200 py-2">會打印到</th>
+                    <th className="border-b border-slate-200 py-2 pr-3">{t("菜品")}</th>
+                    <th className="border-b border-slate-200 py-2 pr-3">{t("分類")}</th>
+                    <th className="border-b border-slate-200 py-2 pr-3">{t("當前分區")}</th>
+                    <th className="border-b border-slate-200 py-2">{t("會打印到")}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -2225,9 +2237,9 @@ export function DeviceSettings() {
           >
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
-                <div className="text-base font-semibold text-slate-900">菜單</div>
+                <div className="text-base font-semibold text-slate-900">{t("菜單")}</div>
                 <div className="mt-1 text-sm text-slate-500">
-                  本店菜單以 POS 為準。可從 Ledger 一鍵參考匯入線上菜品（名稱／價格／售罄），本地自建菜品會保留。
+                  {t("本店菜單以 POS 為準。可從 Ledger 一鍵參考匯入線上菜品（名稱／價格／售罄），本地自建菜品會保留。")}
                 </div>
               </div>
               <div className="flex flex-wrap gap-2">
@@ -2249,13 +2261,13 @@ export function DeviceSettings() {
                   }}
                   type="button"
                 >
-                  {menuSaving ? "保存中…" : "保存菜單"}
+                  {menuSaving ? t("保存中…") : t("保存菜單")}
                 </button>
               </div>
             </div>
 
             <div className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-slate-200 bg-slate-50 p-3">
-              <div className="text-sm font-semibold text-slate-700">內容</div>
+              <div className="text-sm font-semibold text-slate-700">{t("內容")}</div>
               <div className="flex flex-wrap gap-2">
                 {[
                   ["categories", "菜品分類"],
@@ -2270,7 +2282,7 @@ export function DeviceSettings() {
                     onClick={() => setMenuSubTab(key as typeof menuSubTab)}
                     type="button"
                   >
-                    {label}
+                    {t(label)}
                   </button>
                 ))}
               </div>
@@ -2279,7 +2291,7 @@ export function DeviceSettings() {
             {menuSubTab === "categories" ? (
               <div className="mt-4 flex flex-1 min-h-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white p-4">
                 <div className="flex items-center justify-between">
-                  <div className="text-sm font-semibold text-slate-900">分類</div>
+                  <div className="text-sm font-semibold text-slate-900">{t("分類")}</div>
                   <button
                     className="rounded-2xl bg-orange-500 px-3 py-2 text-xs font-semibold text-white"
                     onClick={() =>
@@ -2290,7 +2302,7 @@ export function DeviceSettings() {
                     }
                     type="button"
                   >
-                    新增分類
+                    {t("新增分類")}
                   </button>
                 </div>
                 <div className="mt-3 flex-1 min-h-0 overflow-auto pr-1">
@@ -2339,7 +2351,7 @@ export function DeviceSettings() {
                             title={usedCount > 0 ? `有 ${usedCount} 道菜喺呢個分類` : "冇菜品使用"}
                             type="button"
                           >
-                            刪除
+                            {t("刪除")}
                           </button>
                         </div>
                       );
@@ -2353,15 +2365,15 @@ export function DeviceSettings() {
               <div className="mt-4 flex flex-1 min-h-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white p-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
-                    <div className="text-sm font-semibold text-slate-900">規格模板</div>
-                    <div className="mt-1 text-xs text-slate-500">規格組統一喺呢度定義同管理：模板（成套套用）或獨立規格（單一規格組、菜品自由剔選）；再到「菜品設置 › 編輯規格」組合套用。</div>
+                    <div className="text-sm font-semibold text-slate-900">{t("規格模板")}</div>
+                    <div className="mt-1 text-xs text-slate-500">{t("規格組統一喺呢度定義同管理：模板（成套套用）或獨立規格（單一規格組、菜品自由剔選）；再到「菜品設置 › 編輯規格」組合套用。")}</div>
                   </div>
                   <button
                     className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white"
                     onClick={() => openSpecEditorForTemplate(undefined)}
                     type="button"
                   >
-                    新增模板
+                    {t("新增模板")}
                   </button>
                 </div>
 
@@ -2369,17 +2381,17 @@ export function DeviceSettings() {
                   <table className="w-full border-collapse text-sm">
                     <thead className="bg-white">
                       <tr className="text-left text-xs font-semibold text-slate-500">
-                        <th className="border-b border-slate-200 px-3 py-2">模板</th>
-                        <th className="border-b border-slate-200 px-3 py-2">規格組</th>
-                        <th className="border-b border-slate-200 px-3 py-2">選項數</th>
-                        <th className="border-b border-slate-200 px-3 py-2 text-right">操作</th>
+                        <th className="border-b border-slate-200 px-3 py-2">{t("模板")}</th>
+                        <th className="border-b border-slate-200 px-3 py-2">{t("規格組")}</th>
+                        <th className="border-b border-slate-200 px-3 py-2">{t("選項數")}</th>
+                        <th className="border-b border-slate-200 px-3 py-2 text-right">{t("操作")}</th>
                       </tr>
                     </thead>
                     <tbody>
                       {localSettings.specTemplates.length === 0 ? (
                         <tr>
                           <td className="px-3 py-6 text-slate-500" colSpan={4}>
-                            目前沒有規格模板
+                            {t("目前沒有規格模板")}
                           </td>
                         </tr>
                       ) : (
@@ -2401,7 +2413,7 @@ export function DeviceSettings() {
                                   onClick={() => openSpecEditorForTemplate(template.id)}
                                   type="button"
                                 >
-                                  編輯
+                                  {t("編輯")}
                                 </button>
                                 <button
                                   className="rounded-full bg-red-50 px-3 py-1 text-xs font-semibold text-red-600 ring-1 ring-red-100 transition hover:bg-red-100 active:scale-95"
@@ -2420,7 +2432,7 @@ export function DeviceSettings() {
                                   }}
                                   type="button"
                                 >
-                                  刪除
+                                  {t("刪除")}
                                 </button>
                               </div>
                             </td>
@@ -2435,9 +2447,9 @@ export function DeviceSettings() {
                 <div className="mt-4 shrink-0">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
-                      <div className="text-sm font-semibold text-slate-900">獨立規格</div>
+                      <div className="text-sm font-semibold text-slate-900">{t("獨立規格")}</div>
                       <div className="mt-1 text-xs text-slate-500">
-                        唔使開模板，直接建立單一規格組（例如「辣度」「走蔥」）；菜品「編輯規格」可自由剔選加入／移除。
+                        {t("唔使開模板，直接建立單一規格組（例如「辣度」「走蔥」）；菜品「編輯規格」可自由剔選加入／移除。")}
                       </div>
                     </div>
                     <button
@@ -2445,24 +2457,24 @@ export function DeviceSettings() {
                       onClick={() => openSpecEditorForGroup(undefined)}
                       type="button"
                     >
-                      新增規格
+                      {t("新增規格")}
                     </button>
                   </div>
                   <div className="mt-3 max-h-[240px] overflow-auto rounded-2xl border border-slate-200">
                     <table className="w-full border-collapse text-sm">
                       <thead className="bg-white">
                         <tr className="text-left text-xs font-semibold text-slate-500">
-                          <th className="border-b border-slate-200 px-3 py-2">規格</th>
-                          <th className="border-b border-slate-200 px-3 py-2">模式</th>
-                          <th className="border-b border-slate-200 px-3 py-2">選項數</th>
-                          <th className="border-b border-slate-200 px-3 py-2 text-right">操作</th>
+                          <th className="border-b border-slate-200 px-3 py-2">{t("規格")}</th>
+                          <th className="border-b border-slate-200 px-3 py-2">{t("模式")}</th>
+                          <th className="border-b border-slate-200 px-3 py-2">{t("選項數")}</th>
+                          <th className="border-b border-slate-200 px-3 py-2 text-right">{t("操作")}</th>
                         </tr>
                       </thead>
                       <tbody>
                         {localSettings.standaloneSpecGroups.length === 0 ? (
                           <tr>
                             <td className="px-3 py-6 text-slate-500" colSpan={4}>
-                              尚未有獨立規格
+                              {t("尚未有獨立規格")}
                             </td>
                           </tr>
                         ) : (
@@ -2485,7 +2497,7 @@ export function DeviceSettings() {
                                     onClick={() => openSpecEditorForGroup(group.id)}
                                     type="button"
                                   >
-                                    編輯
+                                    {t("編輯")}
                                   </button>
                                   <button
                                     className="rounded-full bg-red-50 px-3 py-1 text-xs font-semibold text-red-600 ring-1 ring-red-100 transition hover:bg-red-100 active:scale-95"
@@ -2503,7 +2515,7 @@ export function DeviceSettings() {
                                     }}
                                     type="button"
                                   >
-                                    刪除
+                                    {t("刪除")}
                                   </button>
                                 </div>
                               </td>
@@ -2521,8 +2533,8 @@ export function DeviceSettings() {
               <div className="mt-4 flex flex-col rounded-2xl border border-slate-200 bg-white p-4">
                 <div className="flex items-start justify-between gap-3">
                   <div>
-                    <div className="text-sm font-semibold text-slate-900">菜品</div>
-                    <div className="mt-1 text-xs text-slate-500">規格統一由模板套用：按「編輯規格」揀模板後「保存」即時寫入 server；想自訂規格組請去「規格管理」建立模板。</div>
+                    <div className="text-sm font-semibold text-slate-900">{t("菜品")}</div>
+                    <div className="mt-1 text-xs text-slate-500">{t("規格統一由模板套用：按「編輯規格」揀模板後「保存」即時寫入 server；想自訂規格組請去「規格管理」建立模板。")}</div>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
                     <select
@@ -2533,7 +2545,7 @@ export function DeviceSettings() {
                       }}
                       value={menuCategoryId}
                     >
-                      <option value="all">全部分類</option>
+                      <option value="all">{t("全部分類")}</option>
                       {menuDraft.categories.map((category) => (
                         <option key={category.id} value={category.id}>
                           {category.name}
@@ -2545,7 +2557,7 @@ export function DeviceSettings() {
                       onClick={openMenuItemModal}
                       type="button"
                     >
-                      新增菜品
+                      {t("新增菜品")}
                     </button>
                   </div>
                 </div>
@@ -2559,12 +2571,12 @@ export function DeviceSettings() {
                         setMenuSearch(event.target.value);
                         setMenuPage(1);
                       }}
-                      placeholder="搜尋菜品名稱，例如「雞」…"
+                      placeholder={t("搜尋菜品名稱，例如「雞」…")}
                       value={menuSearch}
                     />
                     {menuSearch ? (
                       <button
-                        aria-label="清除搜尋"
+                        aria-label={t("清除搜尋")}
                         className="absolute inset-y-0 right-0 flex w-9 items-center justify-center text-slate-400 transition hover:text-slate-700"
                         onClick={() => {
                           setMenuSearch("");
@@ -2603,7 +2615,7 @@ export function DeviceSettings() {
                             onClick={() => setMenuPage((current) => Math.max(1, current - 1))}
                             type="button"
                           >
-                            上一頁
+                            {t("上一頁")}
                           </button>
                           <button
                             className="rounded-2xl bg-white px-3 py-2 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 disabled:opacity-50"
@@ -2611,7 +2623,7 @@ export function DeviceSettings() {
                             onClick={() => setMenuPage((current) => Math.min(totalPages, current + 1))}
                             type="button"
                           >
-                            下一頁
+                            {t("下一頁")}
                           </button>
                         </div>
                       </>
@@ -2630,7 +2642,7 @@ export function DeviceSettings() {
                           {menuCategoryId !== "all" ? "（喺目前分類內）" : ""}，請試其他關鍵字。
                         </>
                       ) : (
-                        <>呢個分類暫時冇菜品，可以撳「新增菜品」加入。</>
+                        <>{t("呢個分類暫時冇菜品，可以撳「新增菜品」加入。")}</>
                       )}
                     </div>
                   </div>
@@ -2646,7 +2658,7 @@ export function DeviceSettings() {
                             右側欄位區兩層 flex-wrap，任何闊度都唔會溢出右邊界。 */}
                         <div className="flex flex-wrap items-start gap-2 lg:flex-nowrap">
                           <textarea
-                            aria-label="菜品名稱"
+                            aria-label={t("菜品名稱")}
                             className="min-w-[180px] flex-[2] basis-48 resize-none rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-sm font-semibold leading-snug text-slate-900"
                             onChange={(event) =>
                               setMenuDraft((current) => ({
@@ -2662,7 +2674,7 @@ export function DeviceSettings() {
                           <div className="flex min-w-[280px] flex-[3] flex-col gap-1.5">
                             <div className="flex flex-wrap items-center gap-2">
                               <select
-                                aria-label="分類"
+                                aria-label={t("分類")}
                                 className="w-auto max-w-[220px] shrink-0 rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 text-sm"
                                 onChange={(event) =>
                                   setMenuDraft((current) => ({
@@ -2682,7 +2694,7 @@ export function DeviceSettings() {
                                 ))}
                               </select>
                               <select
-                                aria-label="打印分區"
+                                aria-label={t("打印分區")}
                                 className="w-auto max-w-[220px] shrink-0 rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 text-sm"
                                 onChange={(event) =>
                                   setMenuDraft((current) => ({
@@ -2692,7 +2704,7 @@ export function DeviceSettings() {
                                     ),
                                   }))
                                 }
-                                title="打印分區"
+                                title={t("打印分區")}
                                 value={item.printerGroup}
                               >
                                 {localSettings.printZones.map((zone) => (
@@ -2702,7 +2714,7 @@ export function DeviceSettings() {
                                 ))}
                               </select>
                               <input
-                                aria-label="價格（MOP）"
+                                aria-label={t("價格（MOP）")}
                                 className="w-20 shrink-0 rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 text-sm"
                                 inputMode="decimal"
                                 onChange={(event) =>
@@ -2713,11 +2725,11 @@ export function DeviceSettings() {
                                     ),
                                   }))
                                 }
-                                title="價格（MOP）"
+                                title={t("價格（MOP）")}
                                 value={String(item.price)}
                               />
                               <div className="flex shrink-0 flex-col gap-0.5 text-xs leading-tight text-slate-500">
-                                <label className="flex items-center gap-1.5" title="時價菜（落單時改價）">
+                                <label className="flex items-center gap-1.5" title={t("時價菜（落單時改價）")}>
                                   <input
                                     checked={Boolean(item.isMarketPrice)}
                                     className="h-3.5 w-3.5 rounded border-slate-300"
@@ -2735,7 +2747,7 @@ export function DeviceSettings() {
                                   />
                                   時價菜
                                 </label>
-                                <label className="flex items-center gap-1.5" title="客人可點（掃碼點餐可見）">
+                                <label className="flex items-center gap-1.5" title={t("客人可點（掃碼點餐可見）")}>
                                   <input
                                     checked={item.customerOrderable !== false}
                                     className="h-3.5 w-3.5 rounded border-slate-300"
@@ -2759,7 +2771,7 @@ export function DeviceSettings() {
                               className="flex flex-wrap items-center gap-1.5"
                               title={formatSpecGroupsSummary(item.specGroups)}
                             >
-                              <span className="shrink-0 text-[11px] font-medium text-slate-400">規格</span>
+                              <span className="shrink-0 text-[11px] font-medium text-slate-400">{t("規格")}</span>
                               {(item.specGroups?.length ?? 0) > 0 ? (
                                 <>
                                   {item.specGroups!.map((group) => (
@@ -2783,11 +2795,11 @@ export function DeviceSettings() {
                                     }}
                                     type="button"
                                   >
-                                    清空
+                                    {t("清空")}
                                   </button>
                                 </>
                               ) : (
-                                <span className="text-[11px] text-slate-400">無規格</span>
+                                <span className="text-[11px] text-slate-400">{t("無規格")}</span>
                               )}
                               <span className="min-w-2 flex-1" />
                               <button
@@ -2795,10 +2807,10 @@ export function DeviceSettings() {
                                 onClick={() => openSpecEditorForItem(item.id, item.specGroups)}
                                 type="button"
                               >
-                                編輯規格
+                                {t("編輯規格")}
                               </button>
                               <select
-                                aria-label="套用模板（可選）"
+                                aria-label={t("套用模板（可選）")}
                                 className="w-auto max-w-[180px] shrink-0 rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 text-xs"
                                 onChange={(event) => {
                                   const templateId = event.target.value;
@@ -2815,10 +2827,10 @@ export function DeviceSettings() {
                                   }));
                                   setStatus(`已套用模板「${template.name}」，請保存菜單。`);
                                 }}
-                                title="可選：由模板快速套用；模板喺「規格管理」維護"
+                                title={t("可選：由模板快速套用；模板喺「規格管理」維護")}
                                 value=""
                               >
-                                <option value="">套用模板…</option>
+                                <option value="">{t("套用模板…")}</option>
                                 {localSettings.specTemplates.map((template) => (
                                   <option key={template.id} value={template.id}>
                                     {template.name}
@@ -2837,7 +2849,7 @@ export function DeviceSettings() {
                                 }}
                                 type="button"
                               >
-                                刪除
+                                {t("刪除")}
                               </button>
                             </div>
                           </div>
@@ -2856,8 +2868,8 @@ export function DeviceSettings() {
           <section className="rounded-2xl border border-slate-200 bg-white p-4 max-h-[calc(100dvh-150px)] flex flex-col overflow-hidden">
             <div className="flex items-start justify-between gap-3">
               <div>
-                <div className="text-base font-semibold text-slate-900">樓層與桌台</div>
-                <div className="mt-1 text-sm text-slate-500">兩層結構：先樓層，再桌號。</div>
+                <div className="text-base font-semibold text-slate-900">{t("樓層與桌台")}</div>
+                <div className="mt-1 text-sm text-slate-500">{t("兩層結構：先樓層，再桌號。")}</div>
               </div>
               <div className="flex flex-wrap gap-2">
                 <button
@@ -2870,14 +2882,14 @@ export function DeviceSettings() {
                   }
                   type="button"
                 >
-                  新增樓層
+                  {t("新增樓層")}
                 </button>
                 <button
                   className="rounded-2xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white"
                   onClick={saveTablesLocal}
                   type="button"
                 >
-                  保存
+                  {t("保存")}
                 </button>
               </div>
             </div>
@@ -2925,7 +2937,7 @@ export function DeviceSettings() {
                       }
                       type="button"
                     >
-                      新增桌子
+                      {t("新增桌子")}
                     </button>
                   </div>
                   <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-4 xl:grid-cols-6">
@@ -2977,7 +2989,7 @@ export function DeviceSettings() {
                               ),
                             }))
                           }
-                          placeholder="座位數"
+                          placeholder={t("座位數")}
                           value={table.capacity ?? ""}
                         />
                         <button
@@ -2985,7 +2997,7 @@ export function DeviceSettings() {
                           onClick={() => removeTable(floor.id, table.id)}
                           type="button"
                         >
-                          刪除
+                          {t("刪除")}
                         </button>
                       </div>
                     ))}
@@ -3005,8 +3017,8 @@ export function DeviceSettings() {
           <section className="rounded-2xl border border-slate-200 bg-white p-4 max-h-[calc(100dvh-150px)] flex flex-col overflow-hidden">
             <div className="flex items-start justify-between gap-3">
               <div>
-                <div className="text-base font-semibold text-slate-900">支付方式</div>
-                <div className="mt-1 text-sm text-slate-500">自由文字方式，會記錄到交易裡。預設：現金、Mpay、中銀。</div>
+                <div className="text-base font-semibold text-slate-900">{t("支付方式")}</div>
+                <div className="mt-1 text-sm text-slate-500">{t("自由文字方式，會記錄到交易裡。預設：現金、Mpay、中銀。")}</div>
               </div>
               <button
                 className="rounded-2xl bg-orange-500 px-4 py-2 text-sm font-semibold text-white"
@@ -3018,7 +3030,7 @@ export function DeviceSettings() {
                 }
                 type="button"
               >
-                新增支付方式
+                {t("新增支付方式")}
               </button>
             </div>
             <div className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-3 overflow-auto pr-1 flex-1">
@@ -3047,7 +3059,7 @@ export function DeviceSettings() {
                     }}
                     type="button"
                   >
-                    刪除
+                    {t("刪除")}
                   </button>
                 </div>
               ))}
@@ -3061,7 +3073,7 @@ export function DeviceSettings() {
                 onClick={() => void saveAll("保存支付方式")}
                 type="button"
               >
-                {syncingConfig ? "同步中…" : "保存"}
+                {syncingConfig ? t("同步中…") : t("保存")}
               </button>
             </div>
           </section>
@@ -3083,7 +3095,7 @@ export function DeviceSettings() {
                   }}
                   type="button"
                 >
-                  取消
+                  {t("取消")}
                 </button>
                 <button
                   className="rounded-2xl bg-orange-500 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
@@ -3109,7 +3121,7 @@ export function DeviceSettings() {
               setLedgerImportRemoveLocal(false);
               setLedgerImportError(null);
             }}
-            title="從 Ledger 參考匯入菜單"
+            title={t("從 Ledger 參考匯入菜單")}
             widthClassName="max-w-lg"
           >
             <div className="grid gap-3 text-sm text-slate-700">
@@ -3132,25 +3144,25 @@ export function DeviceSettings() {
                   <div className="mt-1 text-xs">範例：{ledgerImportPreview.specPriceSample}</div>
                 ) : (
                   <div className="mt-1 text-xs">
-                    解析結果為 0 個加價選項；若 Ledger 後台有加價，請確認已部署最新版 POS 後再匯入。
+                    {t("解析結果為 0 個加價選項；若 Ledger 後台有加價，請確認已部署最新版 POS 後再匯入。")}
                   </div>
                 )}
               </div>
               <div className="grid gap-2 sm:grid-cols-2">
                 <div className="rounded-xl border border-emerald-100 bg-emerald-50/60 px-3 py-2">
-                  <div className="text-xs text-slate-500">新增菜品</div>
+                  <div className="text-xs text-slate-500">{t("新增菜品")}</div>
                   <div className="text-xl font-semibold text-slate-900">{ledgerImportPreview.itemsAdded}</div>
                 </div>
                 <div className="rounded-xl border border-blue-100 bg-blue-50/60 px-3 py-2">
-                  <div className="text-xs text-slate-500">更新菜品</div>
+                  <div className="text-xs text-slate-500">{t("更新菜品")}</div>
                   <div className="text-xl font-semibold text-slate-900">{ledgerImportPreview.itemsUpdated}</div>
                 </div>
                 <div className="rounded-xl border border-amber-100 bg-amber-50/60 px-3 py-2">
-                  <div className="text-xs text-slate-500">Ledger 售罄</div>
+                  <div className="text-xs text-slate-500">{t("Ledger 售罄")}</div>
                   <div className="text-xl font-semibold text-slate-900">{ledgerImportPreview.soldOutCount}</div>
                 </div>
                 <div className="rounded-xl border border-slate-200 bg-white px-3 py-2">
-                  <div className="text-xs text-slate-500">分類新增／更新</div>
+                  <div className="text-xs text-slate-500">{t("分類新增／更新")}</div>
                   <div className="text-xl font-semibold text-slate-900">
                     {ledgerImportPreview.categoriesAdded} / {ledgerImportPreview.categoriesUpdated}
                   </div>
@@ -3173,7 +3185,7 @@ export function DeviceSettings() {
                   type="checkbox"
                 />
                 <span className="min-w-0">
-                  <span className="block font-semibold text-slate-900">刪除本地自建菜單</span>
+                  <span className="block font-semibold text-slate-900">{t("刪除本地自建菜單")}</span>
                   <span className="mt-1 block text-xs text-slate-500">
                     勾選後會移除目前 {ledgerImportPreview.localCategoryCount} 個本地分類、
                     {ledgerImportPreview.localItemCount} 個本地菜品（不含先前已匯入的{" "}
@@ -3222,7 +3234,7 @@ export function DeviceSettings() {
                       }}
                       type="button"
                     >
-                      刪除模板
+                      {t("刪除模板")}
                     </button>
                   ) : null}
                   <button
@@ -3244,14 +3256,14 @@ export function DeviceSettings() {
                     }
                     type="button"
                   >
-                    新增規格組
+                    {t("新增規格組")}
                   </button>
                   <button
                     className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
                     onClick={closeSpecEditor}
                     type="button"
                   >
-                    取消
+                    {t("取消")}
                   </button>
                   <button
                     className="rounded-2xl bg-slate-900 px-5 py-2 text-sm font-semibold text-white"
@@ -3277,7 +3289,7 @@ export function DeviceSettings() {
                     }}
                     type="button"
                   >
-                    保存模板
+                    {t("保存模板")}
                   </button>
                 </div>
               ) : specEditor.mode === "group" ? (
@@ -3301,7 +3313,7 @@ export function DeviceSettings() {
                       }}
                       type="button"
                     >
-                      刪除規格
+                      {t("刪除規格")}
                     </button>
                   ) : null}
                   <button
@@ -3309,7 +3321,7 @@ export function DeviceSettings() {
                     onClick={closeSpecEditor}
                     type="button"
                   >
-                    取消
+                    {t("取消")}
                   </button>
                   <button
                     className="rounded-2xl bg-slate-900 px-5 py-2 text-sm font-semibold text-white disabled:opacity-50"
@@ -3333,7 +3345,7 @@ export function DeviceSettings() {
                     }}
                     type="button"
                   >
-                    保存規格
+                    {t("保存規格")}
                   </button>
                 </div>
               ) : (
@@ -3343,7 +3355,7 @@ export function DeviceSettings() {
                     onClick={closeSpecEditor}
                     type="button"
                   >
-                    取消
+                    {t("取消")}
                   </button>
                   <button
                     className="rounded-2xl bg-indigo-600 px-5 py-2 text-sm font-semibold text-white disabled:opacity-50"
@@ -3370,7 +3382,7 @@ export function DeviceSettings() {
                     }}
                     type="button"
                   >
-                    {menuSaving ? "保存中…" : "保存"}
+                    {menuSaving ? t("保存中…") : t("保存")}
                   </button>
                 </div>
               )
@@ -3403,7 +3415,7 @@ export function DeviceSettings() {
                   {specEditor.mode === "template" ? (
                   <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
                   <label className="grid gap-1 text-sm font-semibold text-slate-700">
-                    <span className="text-xs text-slate-500">模板名稱</span>
+                    <span className="text-xs text-slate-500">{t("模板名稱")}</span>
                     <input
                       className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
                       onChange={(event) =>
@@ -3412,7 +3424,7 @@ export function DeviceSettings() {
                           templateName: event.target.value,
                         }))
                       }
-                      placeholder="例如：飲品通用規格"
+                      placeholder={t("例如：飲品通用規格")}
                       value={specEditor.templateName}
                     />
                   </label>
@@ -3421,7 +3433,7 @@ export function DeviceSettings() {
                   <div className="grid gap-3">
                   {specEditor.draft.length === 0 ? (
                     <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
-                      尚未有規格組。你可以按下方「新增規格組」開始。
+                      {t("尚未有規格組。你可以按下方「新增規格組」開始。")}
                     </div>
                   ) : (
                     specEditor.draft.map((group) => (
@@ -3438,7 +3450,7 @@ export function DeviceSettings() {
                                   ),
                                 }))
                               }
-                              placeholder="規格名（例如：甜度）"
+                              placeholder={t("規格名（例如：甜度）")}
                               value={group.name}
                             />
                             <select
@@ -3455,8 +3467,8 @@ export function DeviceSettings() {
                               }
                               value={group.selectionMode}
                             >
-                              <option value="single">單選</option>
-                              <option value="multi">多選</option>
+                              <option value="single">{t("單選")}</option>
+                              <option value="multi">{t("多選")}</option>
                             </select>
                             <label className="flex items-center gap-2 text-sm text-slate-700">
                               <input
@@ -3484,7 +3496,7 @@ export function DeviceSettings() {
                             }
                             type="button"
                           >
-                            刪除規格組
+                            {t("刪除規格組")}
                           </button>
                         </div>
 
@@ -3508,7 +3520,7 @@ export function DeviceSettings() {
                                     ),
                                   }))
                                 }
-                                placeholder="選項（例如：少冰）"
+                                placeholder={t("選項（例如：少冰）")}
                                 value={opt.label}
                               />
                               <input
@@ -3528,7 +3540,7 @@ export function DeviceSettings() {
                                     ),
                                   }))
                                 }
-                                placeholder="加價"
+                                placeholder={t("加價")}
                                 type="number"
                                 value={String(opt.priceDelta)}
                               />
@@ -3546,7 +3558,7 @@ export function DeviceSettings() {
                                 }
                                 type="button"
                               >
-                                刪除
+                                {t("刪除")}
                               </button>
                             </div>
                           ))}
@@ -3569,7 +3581,7 @@ export function DeviceSettings() {
                           }
                           type="button"
                         >
-                          新增選項
+                          {t("新增選項")}
                         </button>
                       </div>
                     ))
@@ -3580,10 +3592,10 @@ export function DeviceSettings() {
                 /* 菜品模式：揀模板做基底 + 剔選獨立規格 → 預覽 → 保存；唔喺呢度建立／修改規格組 */
                 <>
                   <div className="grid gap-2">
-                    <div className="text-xs font-medium text-slate-400">選擇規格模板（可選；揀選會作為基底取代目前組合）</div>
+                    <div className="text-xs font-medium text-slate-400">{t("選擇規格模板（可選；揀選會作為基底取代目前組合）")}</div>
                     {localSettings.specTemplates.length === 0 ? (
                       <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
-                        尚未有規格模板。請先去「規格管理 › 新增模板」定義規格，再返嚟套用。
+                        {t("尚未有規格模板。請先去「規格管理 › 新增模板」定義規格，再返嚟套用。")}
                       </div>
                     ) : (
                       localSettings.specTemplates.map((template) => {
@@ -3623,10 +3635,10 @@ export function DeviceSettings() {
                   </div>
 
                   <div className="grid gap-2">
-                    <div className="text-xs font-medium text-slate-400">加入獨立規格（喺「規格管理 › 獨立規格」新增／維護；剔選即加入／移除）</div>
+                    <div className="text-xs font-medium text-slate-400">{t("加入獨立規格（喺「規格管理 › 獨立規格」新增／維護；剔選即加入／移除）")}</div>
                     {localSettings.standaloneSpecGroups.length === 0 ? (
                       <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-3 text-xs text-slate-500">
-                        尚未有獨立規格。唔想開模板嘅話，可以直接去「規格管理 › 獨立規格 › 新增規格」建立（例如「辣度」「走蔥」），再返嚟剔選加入。
+                        {t("尚未有獨立規格。唔想開模板嘅話，可以直接去「規格管理 › 獨立規格 › 新增規格」建立（例如「辣度」「走蔥」），再返嚟剔選加入。")}
                       </div>
                     ) : (
                       <div className="flex flex-wrap gap-2">
@@ -3668,13 +3680,13 @@ export function DeviceSettings() {
                         : "將套用嘅規格預覽"}
                     </div>
                     {specEditor.draft.length === 0 ? (
-                      <div className="text-sm text-slate-400">揀選上方模板後，喺呢度預覽將會套用嘅規格內容。</div>
+                      <div className="text-sm text-slate-400">{t("揀選上方模板後，喺呢度預覽將會套用嘅規格內容。")}</div>
                     ) : (
                       <div className="grid gap-2">
                         {specEditor.draft.map((group) => (
                           <div className="text-sm text-slate-700" key={group.id}>
                             <span className="font-semibold text-slate-900">{group.name}</span>
-                            {group.required ? <span className="ml-1 text-xs text-red-400">必選</span> : null}
+                            {group.required ? <span className="ml-1 text-xs text-red-400">{t("必選")}</span> : null}
                             <span className="ml-2 text-slate-500">
                               {group.options
                                 .map((opt) => (opt.priceDelta > 0 ? `${opt.label}(+${opt.priceDelta})` : opt.label))
@@ -3708,7 +3720,7 @@ export function DeviceSettings() {
                   }}
                   type="button"
                 >
-                  取消
+                  {t("取消")}
                 </button>
                 <button
                   className="min-h-12 rounded-2xl bg-orange-500 px-8 py-3 text-base font-semibold text-white transition active:scale-95 disabled:opacity-60"
@@ -3720,7 +3732,7 @@ export function DeviceSettings() {
                 </button>
               </div>
             }
-            description="填寫菜品資料；保存後即時寫入後台並更新菜單列表。"
+            description={t("填寫菜品資料；保存後即時寫入後台並更新菜單列表。")}
             onClose={() => {
               if (!menuItemSaving) {
                 setMenuItemModal(null);
@@ -3728,7 +3740,7 @@ export function DeviceSettings() {
                 closeQuickSpecDraft();
               }
             }}
-            title="新增菜品"
+            title={t("新增菜品")}
             widthClassName="max-w-2xl"
           >
             <div className="grid content-start gap-4">
@@ -3743,7 +3755,7 @@ export function DeviceSettings() {
                   onChange={(event) =>
                     setMenuItemModal((current) => (current ? { ...current, name: event.target.value } : current))
                   }
-                  placeholder="例如：表嫂雞飯"
+                  placeholder={t("例如：表嫂雞飯")}
                   value={menuItemModal.name}
                 />
               </label>
@@ -3761,7 +3773,7 @@ export function DeviceSettings() {
                     }
                     value={menuItemModal.categoryId}
                   >
-                    {menuDraft.categories.length === 0 ? <option value="">（未有分類）</option> : null}
+                    {menuDraft.categories.length === 0 ? <option value="">{t("（未有分類）")}</option> : null}
                     {menuDraft.categories.map((category) => (
                       <option key={category.id} value={category.id}>
                         {category.name}
@@ -3770,7 +3782,7 @@ export function DeviceSettings() {
                   </select>
                 </label>
                 <label className="grid gap-1.5">
-                  <span className="text-sm font-semibold text-slate-700">打印位置（分區）</span>
+                  <span className="text-sm font-semibold text-slate-700">{t("打印位置（分區）")}</span>
                   <select
                     className="min-h-12 w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-base"
                     onChange={(event) =>
@@ -3784,7 +3796,7 @@ export function DeviceSettings() {
                       </option>
                     ))}
                   </select>
-                  <span className="text-xs text-slate-400">廚房單會按分區派印；分區喺「打印設置」維護。</span>
+                  <span className="text-xs text-slate-400">{t("廚房單會按分區派印；分區喺「打印設置」維護。")}</span>
                 </label>
               </div>
 
@@ -3793,7 +3805,7 @@ export function DeviceSettings() {
                 <label className="grid gap-1.5">
                   <span className="text-sm font-semibold text-slate-700">
                     價格（MOP）
-                    {menuItemModal.isMarketPrice ? <span className="ml-1 text-xs text-slate-400">（時價菜可留空）</span> : <span className="text-red-500">*</span>}
+                    {menuItemModal.isMarketPrice ? <span className="ml-1 text-xs text-slate-400">{t("（時價菜可留空）")}</span> : <span className="text-red-500">*</span>}
                   </span>
                   <input
                     className="min-h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-base outline-none transition focus:border-orange-400 focus:ring-2 focus:ring-orange-100"
@@ -3807,7 +3819,7 @@ export function DeviceSettings() {
                 </label>
                 <label className="grid gap-1.5">
                   <span className="text-sm font-semibold text-slate-700">
-                    原價（MOP）<span className="ml-1 text-xs font-normal text-slate-400">選填，配合折扣用</span>
+                    原價（MOP）<span className="ml-1 text-xs font-normal text-slate-400">{t("選填，配合折扣用")}</span>
                   </span>
                   <input
                     className="min-h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-base outline-none transition focus:border-orange-400 focus:ring-2 focus:ring-orange-100"
@@ -3815,7 +3827,7 @@ export function DeviceSettings() {
                     onChange={(event) =>
                       setMenuItemModal((current) => (current ? { ...current, originalPrice: event.target.value } : current))
                     }
-                    placeholder="留空 = 價格即原價"
+                    placeholder={t("留空 = 價格即原價")}
                     value={menuItemModal.originalPrice}
                   />
                 </label>
@@ -3825,7 +3837,7 @@ export function DeviceSettings() {
               <div className="grid gap-4 sm:grid-cols-2">
                 <label className="grid gap-1.5">
                   <span className="text-sm font-semibold text-slate-700">
-                    折扣（%）<span className="ml-1 text-xs font-normal text-slate-400">選填</span>
+                    折扣（%）<span className="ml-1 text-xs font-normal text-slate-400">{t("選填")}</span>
                   </span>
                   <input
                     className="min-h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-base outline-none transition focus:border-orange-400 focus:ring-2 focus:ring-orange-100"
@@ -3833,13 +3845,13 @@ export function DeviceSettings() {
                     onChange={(event) =>
                       setMenuItemModal((current) => (current ? { ...current, discountRate: event.target.value } : current))
                     }
-                    placeholder="80 = 8折"
+                    placeholder={t("80 = 8折")}
                     value={menuItemModal.discountRate}
                   />
                 </label>
                 <label className="grid gap-1.5">
                   <span className="text-sm font-semibold text-slate-700">
-                    圖片 URL<span className="ml-1 text-xs font-normal text-slate-400">選填</span>
+                    圖片 URL<span className="ml-1 text-xs font-normal text-slate-400">{t("選填")}</span>
                   </span>
                   <input
                     className="min-h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-base outline-none transition focus:border-orange-400 focus:ring-2 focus:ring-orange-100"
@@ -3854,7 +3866,7 @@ export function DeviceSettings() {
 
               {/* 開關 */}
               <div className="flex flex-wrap gap-x-8 gap-y-3 rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                <label className="flex min-h-11 items-center gap-2.5 text-base text-slate-700" title="時價菜：落單時改價">
+                <label className="flex min-h-11 items-center gap-2.5 text-base text-slate-700" title={t("時價菜：落單時改價")}>
                   <input
                     checked={menuItemModal.isMarketPrice}
                     className="h-5 w-5 rounded border-slate-300"
@@ -3865,7 +3877,7 @@ export function DeviceSettings() {
                   />
                   時價菜（落單時輸入當次價錢）
                 </label>
-                <label className="flex min-h-11 items-center gap-2.5 text-base text-slate-700" title="掃碼點餐 / Kiosk 可見">
+                <label className="flex min-h-11 items-center gap-2.5 text-base text-slate-700" title={t("掃碼點餐 / Kiosk 可見")}>
                   <input
                     checked={menuItemModal.customerOrderable}
                     className="h-5 w-5 rounded border-slate-300"
@@ -3884,7 +3896,7 @@ export function DeviceSettings() {
               <div className="rounded-2xl border border-slate-200 p-4">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <span className="text-sm font-semibold text-slate-700">
-                    規格<span className="ml-1 text-xs font-normal text-slate-400">選填；可套用模板、剔選獨立規格，或快捷新增</span>
+                    規格<span className="ml-1 text-xs font-normal text-slate-400">{t("選填；可套用模板、剔選獨立規格，或快捷新增")}</span>
                   </span>
                   <div className="flex flex-wrap items-center gap-2">
                     {menuItemModal.specGroups.length > 0 ? (
@@ -3893,7 +3905,7 @@ export function DeviceSettings() {
                         onClick={() => setMenuItemModal((current) => (current ? { ...current, specGroups: [] } : current))}
                         type="button"
                       >
-                        清空規格
+                        {t("清空規格")}
                       </button>
                     ) : null}
                     {!quickSpecDraft ? (
@@ -3901,9 +3913,9 @@ export function DeviceSettings() {
                         className="rounded-xl bg-orange-50 px-3 py-1.5 text-xs font-semibold text-orange-600 ring-1 ring-orange-100 transition hover:bg-orange-100 active:scale-95"
                         onClick={openQuickSpecDraft}
                         type="button"
-                        title="喺呢度直接建立新規格；會自動存入「規格管理 › 獨立規格」供日後復用"
+                        title={t("喺呢度直接建立新規格；會自動存入「規格管理 › 獨立規格」供日後復用")}
                       >
-                        ＋ 新增規格
+                        {t("＋ 新增規格")}
                       </button>
                     ) : null}
                   </div>
@@ -3921,7 +3933,7 @@ export function DeviceSettings() {
                       ))}
                     </div>
                   ) : (
-                    <span className="text-xs text-slate-400">尚未加入規格。</span>
+                    <span className="text-xs text-slate-400">{t("尚未加入規格。")}</span>
                   )}
                   {/* 快捷新增規格（2026-09-09）：喺彈窗內直接建立，唔使跳去「規格管理」；
                       保存後自動存入獨立規格（規格管理可見、其他菜品可復用）並推 server 同步 */}
@@ -3932,7 +3944,7 @@ export function DeviceSettings() {
                           autoFocus
                           className="w-[180px] rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900"
                           onChange={(event) => updateQuickSpecDraft((group) => ({ ...group, name: event.target.value }))}
-                          placeholder="規格名（例如：甜度）"
+                          placeholder={t("規格名（例如：甜度）")}
                           value={quickSpecDraft.name}
                         />
                         <select
@@ -3945,8 +3957,8 @@ export function DeviceSettings() {
                           }
                           value={quickSpecDraft.selectionMode}
                         >
-                          <option value="single">單選</option>
-                          <option value="multi">多選</option>
+                          <option value="single">{t("單選")}</option>
+                          <option value="multi">{t("多選")}</option>
                         </select>
                         <label className="flex items-center gap-2 text-sm text-slate-700">
                           <input
@@ -3971,7 +3983,7 @@ export function DeviceSettings() {
                                   ),
                                 }))
                               }
-                              placeholder="選項（例如：少冰）"
+                              placeholder={t("選項（例如：少冰）")}
                               value={opt.label}
                             />
                             <input
@@ -3985,7 +3997,7 @@ export function DeviceSettings() {
                                   ),
                                 }))
                               }
-                              placeholder="加價"
+                              placeholder={t("加價")}
                               type="number"
                               value={String(opt.priceDelta)}
                             />
@@ -3999,7 +4011,7 @@ export function DeviceSettings() {
                               }
                               type="button"
                             >
-                              刪除
+                              {t("刪除")}
                             </button>
                           </div>
                         ))}
@@ -4013,7 +4025,7 @@ export function DeviceSettings() {
                           }
                           type="button"
                         >
-                          ＋ 新增選項
+                          {t("＋ 新增選項")}
                         </button>
                       </div>
                       {quickSpecError ? (
@@ -4023,7 +4035,7 @@ export function DeviceSettings() {
                       ) : null}
                       <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
                         <span className="text-xs text-slate-500">
-                          保存後自動存入「規格管理 › 獨立規格」，其他菜品可剔選復用。
+                          {t("保存後自動存入「規格管理 › 獨立規格」，其他菜品可剔選復用。")}
                         </span>
                         <div className="flex items-center gap-2">
                           <button
@@ -4031,14 +4043,14 @@ export function DeviceSettings() {
                             onClick={closeQuickSpecDraft}
                             type="button"
                           >
-                            取消
+                            {t("取消")}
                           </button>
                           <button
                             className="rounded-2xl bg-orange-500 px-4 py-2 text-xs font-semibold text-white"
                             onClick={() => void saveQuickSpecDraft()}
                             type="button"
                           >
-                            保存並加入
+                            {t("保存並加入")}
                           </button>
                         </div>
                       </div>
@@ -4059,7 +4071,7 @@ export function DeviceSettings() {
                       }}
                       value=""
                     >
-                      <option value="">套用規格模板…（模板喺「規格管理」維護）</option>
+                      <option value="">{t("套用規格模板…（模板喺「規格管理」維護）")}</option>
                       {localSettings.specTemplates.map((template) => (
                         <option key={template.id} value={template.id}>
                           {template.name}（{template.specGroups.length} 個規格組）
@@ -4069,7 +4081,7 @@ export function DeviceSettings() {
                   ) : null}
                   {localSettings.standaloneSpecGroups.length > 0 ? (
                     <div className="grid gap-1">
-                      <span className="text-xs font-medium text-slate-500">獨立規格組（剔選加入）</span>
+                      <span className="text-xs font-medium text-slate-500">{t("獨立規格組（剔選加入）")}</span>
                       {localSettings.standaloneSpecGroups.map((group) => {
                         const checked = menuItemModal.specGroups.some((row) => row.id === group.id);
                         return (
@@ -4097,7 +4109,7 @@ export function DeviceSettings() {
                   ) : null}
                   {localSettings.specTemplates.length === 0 && localSettings.standaloneSpecGroups.length === 0 ? (
                     <span className="text-xs text-slate-400">
-                      未有規格模板／獨立規格組；可直接按上方「＋ 新增規格」快捷新增（自動存入規格管理），或套用模板／到「規格管理」建立。
+                      {t("未有規格模板／獨立規格組；可直接按上方「＋ 新增規格」快捷新增（自動存入規格管理），或套用模板／到「規格管理」建立。")}
                     </span>
                   ) : null}
                 </div>

@@ -1,0 +1,17 @@
+{
+  "已交付": "Delivered",
+  "已取餐": "Collected",
+  "實收 {amt}": "Net {amt}",
+  "取消（覆寫）平台單 {no}": "Cancel (override) platform order {no}",
+  "去結帳 {no}": "Go to checkout {no}",
+  "標記可取餐 {no}": "Mark ready {no}",
+  "完成取餐 {no}": "Complete pickup {no}",
+  "接受自助單 {no}": "Accept self-order {no}",
+  "拒絕自助單 {no}": "Reject self-order {no}",
+  "接受": "Accept",
+  "優惠 {amt}": "Saved {amt}",
+  "合計優惠": "Total savings",
+  "{no} {status}。": "{no} {status}.",
+  "下單時間": "Order time",
+  "暫無線下訂單": "No in-store orders"
+}

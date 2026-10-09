@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties }
 import { tryAutoPairCompanion } from "@/lib/print-bridge/auto-pair-companion";
 
 import { AppSidebar } from "@/components/app-sidebar";
+import { useT } from "@/components/lang-provider";
 import { ItemSpecModal } from "@/components/item-spec-modal";
 import { FixedNumberPad } from "@/components/fixed-number-pad";
 import { NumericKeypad } from "@/components/numeric-keypad";
@@ -307,6 +308,21 @@ const OPEN_TABLE_FALLBACK_MAX_SEATS = 12;
 const RESUBSCRIBE_BACKFILL_MIN_GAP_MS = 30_000;
 
 export function PosApp() {
+  const t = useT();
+  /**
+   * 🔴 `t` 係 `useCallback([lang])` —— 切語言就會換一個新函式。
+   *
+   * 下面有幾個 effect 係「**只喺 mount 跑一次**」嘅（訂閱 event / interval /
+   * 還原隔離訂單）。佢哋**唔應該**為咗切語言而整個拆掉再掛一次
+   * （會重複 `syncOnce()`、重掛 180 秒 timer），但又唔可以捕捉 mount 時嘅 `t`
+   * —— 否則切咗英文之後，由呢啲 listener 彈出嘅 toast 仍然係中文。
+   *
+   * ⇒ 用 ref 讀「最新嘅 `t`」：effect 依賴不變，文案仍然跟語言走。
+   */
+  const tRef = useRef(t);
+  useEffect(() => {
+    tRef.current = t;
+  }, [t]);
   const router = useRouter();
   const cachedBootstrapRaw = loadBootstrapCache();
   const cachedBootstrap = cachedBootstrapRaw
@@ -723,7 +739,15 @@ export function PosApp() {
   const canVoidItem = authSession?.permissions.voidItem ?? true;
 
   function showPermissionDenied(actionLabel: string) {
-    setToast({ tone: "info", message: `目前帳號沒有${actionLabel}權限，請使用店長帳號操作。` });
+    /**
+     * 🔴 引數係**未翻譯**嘅中文動作名（例如 `"退菜"`）——
+     *    喺呢度先 `t()`，令「動作名」同「句子」都可以各自翻譯
+     *    （英文語序唔同，唔可以照中文位拼）。
+     */
+    setToast({
+      tone: "info",
+      message: t("目前帳號沒有「{action}」權限，請使用店長帳號操作。", { action: t(actionLabel) }),
+    });
   }
 
   function resetMemberCheckoutState() {
@@ -740,7 +764,7 @@ export function PosApp() {
   function exportRefundDetails(order: PosOrder) {
     if (!order.refundRecords?.length || typeof window === "undefined") return;
     const rows = [
-      ["訂單號", "退款時間", "退款金額", "退款原因", "菜品", "數量", "項目金額"].join(","),
+      [t("訂單號"), t("退款時間"), t("退款金額"), t("退款原因"), t("菜品"), t("數量"), t("項目金額")].join(","),
       ...order.refundRecords.flatMap((record) => {
         if (!record.items?.length) {
           return [[order.localOrderNo, record.createdAt, String(record.amount), record.reason, "", "", ""].map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(",")];
@@ -756,10 +780,10 @@ export function PosApp() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `${order.localOrderNo}-退款明細.csv`;
+    link.download = `${order.localOrderNo}-${t("退款明細")}.csv`;
     link.click();
     URL.revokeObjectURL(url);
-    setToast({ tone: "success", message: `${order.localOrderNo} 退款明細已導出。` });
+    setToast({ tone: "success", message: t("{no} 退款明細已導出。", { no: order.localOrderNo }) });
   }
 
   function exportRefundSummary() {
@@ -768,7 +792,7 @@ export function PosApp() {
         orderNo: order.localOrderNo,
         createdAt: record.createdAt,
         date: record.createdAt.slice(0, 10),
-        employee: record.employeeName ?? record.employeeAccount ?? "未記錄",
+        employee: record.employeeName ?? record.employeeAccount ?? t("未記錄"),
         amount: record.amount,
       })),
     );
@@ -778,7 +802,7 @@ export function PosApp() {
       return true;
     });
     if (filtered.length === 0 || typeof window === "undefined") {
-      setToast({ tone: "info", message: "目前沒有符合條件的退款資料可導出。" });
+      setToast({ tone: "info", message: t("目前沒有符合條件的退款資料可導出。") });
       return;
     }
     const grouped = Array.from(
@@ -796,7 +820,13 @@ export function PosApp() {
       ).values(),
     );
     const rows = [
-      [refundSummaryMode === "date" ? "日期" : "員工", "退款次數", "退款總額", "涉及訂單數", "訂單"].join(","),
+      [
+        refundSummaryMode === "date" ? t("日期") : t("員工"),
+        t("退款次數"),
+        t("退款總額"),
+        t("涉及訂單數"),
+        t("訂單"),
+      ].join(","),
       ...grouped.map((row) =>
         [
           row.key,
@@ -813,11 +843,11 @@ export function PosApp() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `退款匯總-${refundSummaryMode === "date" ? "按日期" : "按員工"}.csv`;
+    link.download = `${t("退款匯總")}-${refundSummaryMode === "date" ? t("按日期") : t("按員工")}.csv`;
     link.click();
     URL.revokeObjectURL(url);
     setRefundSummaryExportOpen(false);
-    setToast({ tone: "success", message: "退款匯總已導出。" });
+    setToast({ tone: "success", message: t("退款匯總已導出。") });
   }
 
   useEffect(() => {
@@ -946,15 +976,15 @@ export function PosApp() {
         markPosSessionRevoked();
         setToast({
           tone: "error",
-          message: `此工作階段已被管理員關閉：${detail?.count ?? 0} 筆操作被拒收，請重新登入或開新視窗。`,
+          message: tRef.current("此工作階段已被管理員關閉：{n} 筆操作被拒收，請重新登入或開新視窗。", { n: detail?.count ?? 0 }),
         });
         return;
       }
 
-      const label = reason === "store-closed" ? "店內已暫停營業" : "本店未開工／已收工";
+      const label = reason === "store-closed" ? tRef.current("店內已暫停營業") : tRef.current("本店未開工／已收工");
       setToast({
         tone: "error",
-        message: `${label}：${detail?.count ?? 0} 筆操作被 server 拒收，正在由雲端更正本機狀態。`,
+        message: tRef.current("{label}：{n} 筆操作被 server 拒收，正在由雲端更正本機狀態。", { label, n: detail?.count ?? 0 }),
       });
       void syncOnce();
     }
@@ -1052,7 +1082,7 @@ export function PosApp() {
    */
   function ensureShiftOpened(): boolean {
     if (shift.openedAt) return true;
-    setToast({ tone: "info", message: "今日未開工，請先按頁首「開工」，然後才可以開枱落單。" });
+    setToast({ tone: "info", message: t("今日未開工，請先按頁首「開工」，然後才可以開枱落單。") });
     return false;
   }
 
@@ -1080,7 +1110,7 @@ export function PosApp() {
     if (getStoreStatusSnapshot().isOpen !== false) return true;
     setToast({
       tone: "error",
-      message: "店內已暫停營業：暫時唔可以開新單或加菜。請到側欄商店名卡恢復營業。",
+      message: t("店內已暫停營業：暫時唔可以開新單或加菜。請到側欄商店名卡恢復營業。"),
     });
     return false;
   }
@@ -1166,7 +1196,7 @@ export function PosApp() {
     setShift(next);
     saveShiftState(next);
     window.dispatchEvent(new CustomEvent("pos-shift-changed", { detail: { shift: next } }));
-    setToast({ tone: "success", message: "已開工，開始今日營業。" });
+    setToast({ tone: "success", message: t("已開工，開始今日營業。") });
     setShiftOvertimeDue(false);
 
     // 上雲（fire-and-forget）：撞到已有 active 班次 → 以 server 為準 merge，避免雙重班次。
@@ -1187,7 +1217,7 @@ export function PosApp() {
             setShift(merged);
             saveShiftState(merged);
             window.dispatchEvent(new CustomEvent("pos-shift-changed", { detail: { shift: merged } }));
-            setToast({ tone: "info", message: "本店已有班次進行中，已同步該開工狀態。" });
+            setToast({ tone: "info", message: t("本店已有班次進行中，已同步該開工狀態。") });
             return;
           }
           // 開工成功 → 標記已上雲。
@@ -1202,7 +1232,7 @@ export function PosApp() {
     if (shiftAcking) return;
     const storeId = resolveStoreId();
     if (!storeId || !readNetworkOnline()) {
-      setToast({ tone: "info", message: "目前離線，暫時無法處理。恢復網絡後會再次提醒。" });
+      setToast({ tone: "info", message: t("目前離線，暫時無法處理。恢復網絡後會再次提醒。") });
       return;
     }
     setShiftAcking(true);
@@ -1216,9 +1246,9 @@ export function PosApp() {
         window.dispatchEvent(new CustomEvent("pos-shift-changed", { detail: { shift: merged } }));
       }
       setShiftOvertimeDue(false);
-      setToast({ tone: "success", message: "已記錄。連續營業再滿 10 小時會再次提醒。" });
+      setToast({ tone: "success", message: t("已記錄。連續營業再滿 10 小時會再次提醒。") });
     } catch {
-      setToast({ tone: "info", message: "未能連線伺服器，請稍後再試。" });
+      setToast({ tone: "info", message: t("未能連線伺服器，請稍後再試。") });
     } finally {
       setShiftAcking(false);
     }
@@ -1241,10 +1271,10 @@ export function PosApp() {
       // server 獨有枱（其他 terminal / kiosk 新加）保留；本地獨有枱亦保留。
       // 咁 server bootstrap 每次啟動載到最新之餘，唔會清走本地嘅枱樓層編輯。
       const localCache = loadBootstrapCache();
-      const localTableMap = new Map((localCache?.tables ?? []).map((t) => [t.id, t]));
+      const localTableMap = new Map((localCache?.tables ?? []).map((tbl) => [tbl.id, tbl]));
       const mergedTables: StoreTable[] = data.tables.map((st) => localTableMap.get(st.id) ?? st);
       for (const lt of localCache?.tables ?? []) {
-        if (!mergedTables.some((t) => t.id === lt.id)) mergedTables.push(lt);
+        if (!mergedTables.some((tbl) => tbl.id === lt.id)) mergedTables.push(lt);
       }
       const merged: PosBootstrap = { ...data, tables: mergedTables };
       saveBootstrapCache(merged);
@@ -1253,7 +1283,7 @@ export function PosApp() {
       return { ok: true as const };
     } catch {
       if (!options?.quiet && !initialHasBootstrapRef.current) {
-        setToast({ tone: "info", message: "未能連到設定來源，請稍後再試。" });
+        setToast({ tone: "info", message: tRef.current("未能連到設定來源，請稍後再試。") });
       }
       return { ok: false as const };
     } finally {
@@ -1340,10 +1370,10 @@ export function PosApp() {
     if (restored > 0 || discarded > 0) {
       setToast({
         tone: "info",
-        message:
-          `已還原 ${restored} 張本機訂單` +
-          (discarded > 0 ? `、清走 ${discarded} 筆非訂單資料` : "") +
-          `。本機訂單以後唔會再被自動移走。`,
+        message: tRef.current("已還原 {restored} 張本機訂單{extra}。本機訂單以後唔會再被自動移走。", {
+          restored,
+          extra: discarded > 0 ? tRef.current("、清走 {n} 筆非訂單資料", { n: discarded }) : "",
+        }),
       });
     }
     // 只喺 mount 跑一次（`setToast` 係穩定 setter，唔使入 deps）。
@@ -1823,7 +1853,7 @@ export function PosApp() {
   async function handleManualUpdate() {
     if (manualSyncing) return;
     if (!readNetworkOnline()) {
-      setToast({ tone: "info", message: "目前離線，無法從伺服器更新。恢復網絡後再試。" });
+      setToast({ tone: "info", message: t("目前離線，無法從伺服器更新。恢復網絡後再試。") });
       return;
     }
     setManualSyncing(true);
@@ -1832,7 +1862,7 @@ export function PosApp() {
       // ① 菜單／分類／枱／rules：以 server 最新全量覆蓋本機 cache。
       //    （tables merge 保留本地 per-terminal 枱編輯；menu/categories 直接採用 server 版。）
       const bootstrapResult = await refreshBootstrapFromServer({ quiet: true });
-      notes.push(bootstrapResult.ok ? "菜單已更新" : "菜單拉取失敗");
+      notes.push(bootstrapResult.ok ? t("菜單已更新") : t("菜單拉取失敗"));
 
       // ② Ledger 線上菜單：全量 RPC 併合 —— 淨係當本機曾匯入過 Ledger 餐牌
       //    （有 ledger- 前綴菜品）先行，避免意外塞入未用嘅線上菜單。realtime 漏咗嘅
@@ -1854,14 +1884,14 @@ export function PosApp() {
             saveSoldOutState(soldOut);
             window.dispatchEvent(new CustomEvent("pos-bootstrap-changed"));
             window.dispatchEvent(new CustomEvent("pos-soldout-changed", { detail: { soldOutMap: soldOut } }));
-            notes.push("線上菜單已併合");
+            notes.push(t("線上菜單已併合"));
           } else if (ledgerMenu.enabled) {
             // 守衛：server 返回空菜單（後台未設定）時唔好攞空併合冚走本機已匯入嘅線上菜單。
-            notes.push("線上菜單略過（server 空）");
+            notes.push(t("線上菜單略過（server 空）"));
           }
         }
       } catch {
-        notes.push("線上菜單略過");
+        notes.push(t("線上菜單略過"));
       }
 
       // ③ 設備／打印／其他設置：沿用現行 loadRuntimeState() 嘅 merge 語義 ——
@@ -1872,9 +1902,9 @@ export function PosApp() {
       //       而孤兒單對賬亦**只可以喺全量**之下跑（判準係「雲端冇呢張單」）。
       //       呢條路係人手觸發 ⇒ 唔會形成流量迴圈。
       const quarantined = await loadRuntimeState("manual", { forceFull: true });
-      notes.push("設定已同步");
+      notes.push(t("設定已同步"));
       if (quarantined > 0) {
-        notes.push(`已隔離 ${quarantined} 張孤兒單，詳情喺「同步健康」`);
+        notes.push(t("已隔離 {n} 張孤兒單，詳情喺「同步健康」", { n: quarantined }));
       }
 
       // ④ 套用完成 → 強制 refresh 成個 web page：再 mount 一次以新 localStorage
@@ -1882,11 +1912,11 @@ export function PosApp() {
       setManualSyncing(false);
       setToast({
         tone: bootstrapResult.ok ? "success" : "warning",
-        message: "手動更新完成，重新載入頁面…",
+        message: t("手動更新完成，重新載入頁面…"),
       });
       window.setTimeout(() => window.location.reload(), 1000);
     } catch {
-      setToast({ tone: "error", message: "同步失敗，請檢查網絡後再試。" });
+      setToast({ tone: "error", message: t("同步失敗，請檢查網絡後再試。") });
       setManualSyncing(false);
     }
   }
@@ -1948,12 +1978,12 @@ export function PosApp() {
   function openSelfOrderNotice(orderId: string) {
     const notice = selfOrderNotices.find((n) => n.orderId === orderId);
     const order = orders.find((o) => o.id === orderId) ?? null;
-    const label = order?.tableName || notice?.tableName || "本枱";
+    const label = order?.tableName || notice?.tableName || t("本枱");
 
     if (!order || isTerminalOrderStatus(order.status)) {
       console.info(`[pos-app] 撳自助單提示但訂單已結帳／已失效（${orderId}）→ 只顯示訊息`);
       handleSelfOrderNoticeSettled(orderId);
-      setToast({ tone: "info", message: `${label} 嘅訂單已經結帳，呢個提示可以向右滑走。` });
+      setToast({ tone: "info", message: t("{label} 嘅訂單已經結帳，呢個提示可以向右滑走。", { label }) });
       return;
     }
 
@@ -1969,7 +1999,10 @@ export function PosApp() {
       if (!quickListOrderIdSet.has(order.id)) {
         setToast({
           tone: "info",
-          message: `${label} 已下單，請喺「${isQuickMode ? "線下訂單" : "自取 / 掃碼訂單"}」查看。`,
+          message: t("{label} 已下單，請喺「{where}」查看。", {
+            label,
+            where: isQuickMode ? t("線下訂單") : t("自取 / 掃碼訂單"),
+          }),
         });
       }
       return;
@@ -1992,7 +2025,7 @@ export function PosApp() {
       selectTable(order.tableId);
     } else {
       setActiveTableId(order.tableId);
-      setToast({ tone: "info", message: `${label} 已下單，請喺枱面查看。` });
+      setToast({ tone: "info", message: t("{label} 已下單，請喺枱面查看。", { label }) });
     }
     handleSelfOrderNoticeDismiss(orderId);
   }
@@ -2032,7 +2065,7 @@ export function PosApp() {
       const zoneName = freshSettings.printZones.find((item) => item.id === zone)?.name ?? zone;
       setToast({
         tone: "error",
-        message: `平台單未出紙：打印分區「${zoneName}」冇啟用嘅分區打印機，請去「設置 → 打印機」綁一台。`,
+        message: t("平台單未出紙：打印分區「{zone}」冇啟用嘅分區打印機，請去「設置 → 打印機」綁一台。", { zone: zoneName }),
       });
       return;
     }
@@ -2205,7 +2238,7 @@ export function PosApp() {
               appendPrintJobsWithSync(jobs);
               setToast({
                 tone: "info",
-                message: `${order.tableName || order.localOrderNo} 加單 ${addedItems.length} 項，已補出廚房單。`,
+                message: t("{label} 加單 {n} 項，已補出廚房單。", { label: order.tableName || order.localOrderNo, n: addedItems.length }),
               });
             }
           }
@@ -2214,11 +2247,11 @@ export function PosApp() {
 
       // 自助單 draft → 彈 toast 提示待確認（規格 6：開關熄咗時）
       if (order.status === "draft" && isSelfOrder(order)) {
-        setToast({ tone: "info", message: `自助單 ${order.localOrderNo} 待確認` });
+        setToast({ tone: "info", message: t("自助單 {no} 待確認", { no: order.localOrderNo }) });
       }
       // 堂食 dine_in_confirm 單落 draft：彈「X 枱已落單請確認」，等員工確認才落廚房
       if (order.status === "draft" && order.tableId && order.tableId !== "counter" && !isSelfOrder(order)) {
-        setToast({ tone: "info", message: `${order.tableName} 已落單，請確認` });
+        setToast({ tone: "info", message: t("{table} 已落單，請確認", { table: order.tableName }) });
       }
     },
     onPrintJobUpsert: (job) => {
@@ -2413,7 +2446,7 @@ export function PosApp() {
   // 開桌彈窗：入座人數按鈕數 = 該枱座位數（capacity）；冇填座位數（缺失/≤0）→ fallback 12。
   // 2026-09-09：由手動輸入改為數字按鈕（見開桌彈窗 render），商家只可以揀 1..座位數。
   const openTableModalTable =
-    openTableModalTableId ? visibleTables.find((t) => t.id === openTableModalTableId) ?? null : null;
+    openTableModalTableId ? visibleTables.find((tbl) => tbl.id === openTableModalTableId) ?? null : null;
   const openTableMaxSeats = (() => {
     const capacity = openTableModalTable?.capacity;
     return capacity && capacity > 0 ? Math.min(Math.floor(capacity), 99) : OPEN_TABLE_FALLBACK_MAX_SEATS;
@@ -2639,13 +2672,13 @@ export function PosApp() {
       void (async () => {
         if (offlineMode) {
           setLedgerMember(null);
-          setMemberSearchHint("會員查詢須連線，請恢復網絡後再試。");
+          setMemberSearchHint(t("會員查詢須連線，請恢復網絡後再試。"));
           return;
         }
         const merchantId = getLedgerMerchantId();
         if (!merchantId) {
           setLedgerMember(null);
-          setMemberSearchHint("無法取得商家 ID，請重新登入。");
+          setMemberSearchHint(t("無法取得商家 ID，請重新登入。"));
           return;
         }
         setMemberSearching(true);
@@ -2653,7 +2686,7 @@ export function PosApp() {
           const wallet = await lookupCustomerWallet(merchantId, phone);
           if (!wallet.registered || !wallet.customerId) {
             setLedgerMember(null);
-            setMemberSearchHint("此電話尚未註冊會員通。");
+            setMemberSearchHint(t("此電話尚未註冊會員通。"));
             return;
           }
           const redeemableGrants = await listRedeemableGrantsForCustomer(merchantId, wallet.customerId);
@@ -2776,13 +2809,13 @@ export function PosApp() {
    */
   function describeTableOrderStates(): string {
     const rows = activeTableId ? orders.filter((order) => order.tableId === activeTableId) : [];
-    if (rows.length === 0) return "冇單";
+    if (rows.length === 0) return t("冇單");
     return rows.map((order) => order.status).join("／");
   }
 
   /** 揀唔到結帳目標時嘅提示（帶本枱狀態，方便即場判斷係「真係冇單」定「判準唔認」）。 */
   function noSettleTargetMessage(): string {
-    return `目前沒有待結帳訂單（${activeTable?.name ?? "本枱"}：${describeTableOrderStates()}）。`;
+    return t("目前沒有待結帳訂單（{table}：{states}）。", { table: activeTable?.name ?? t("本枱"), states: describeTableOrderStates() });
   }
 
   function persistOrders(nextOrders: PosOrder[]) {
@@ -2857,7 +2890,7 @@ export function PosApp() {
     // 🔴 G2（2026-09-21）：店已暫停營業一樣要擋。
     if (!ensureStoreOpenForNewBusiness() || !ensureShiftOpened()) return;
     // 按鈕本身已限制 1..座位數；呢度再 clamp 一次（座位數中途被改細 / fallback 枱）防超座。
-    const capacity = visibleTables.find((t) => t.id === tableId)?.capacity;
+    const capacity = visibleTables.find((tbl) => tbl.id === tableId)?.capacity;
     const maxSeats = capacity && capacity > 0 ? capacity : OPEN_TABLE_FALLBACK_MAX_SEATS;
     const size = Math.min(resolvedSize ?? (openTablePartySize > 0 ? openTablePartySize : 1), maxSeats);
     setSeatedPartySizes((current) => ({ ...current, [tableId]: size }));
@@ -3169,7 +3202,7 @@ export function PosApp() {
       if (typeof remaining === "number" && remaining >= 0) {
         const totalInCart = current.filter((row) => row.menuItemId === item.id).reduce((sum, row) => sum + row.quantity, 0);
         if (totalInCart + 1 > remaining) {
-          setToast({ tone: "info", message: `只剩 ${remaining} 份，不能再加。` });
+          setToast({ tone: "info", message: t("只剩 {n} 份，不能再加。", { n: remaining }) });
           return current;
         }
       }
@@ -3399,7 +3432,7 @@ export function PosApp() {
     // 🔴 G2（2026-09-21）：店已暫停營業一樣要擋（加菜＝新生意）。
     if (!ensureStoreOpenForNewBusiness() || !ensureShiftOpened()) return;
     if (isItemSoldOut(item.id)) {
-      setToast({ tone: "info", message: `${item.name} 已售罄。` });
+      setToast({ tone: "info", message: t("{name} 已售罄。", { name: item.name }) });
       return;
     }
     if (item.isMarketPrice) {
@@ -3426,7 +3459,7 @@ export function PosApp() {
     if (!marketPriceItem) return;
     const parsed = Number(marketPriceValue);
     if (!marketPriceValue || Number.isNaN(parsed) || parsed <= 0) {
-      setToast({ tone: "info", message: "請輸入有效的時價金額。" });
+      setToast({ tone: "info", message: t("請輸入有效的時價金額。") });
       return;
     }
     commitMenuItem(marketPriceItem, marketPriceSpecs, parsed);
@@ -3449,7 +3482,7 @@ export function PosApp() {
             .filter((row) => row.menuItemId === target.menuItemId)
             .reduce((sum, row) => sum + row.quantity, 0);
           if (totalInCart + delta > remaining) {
-            setToast({ tone: "info", message: `只剩 ${remaining} 份，不能再加。` });
+            setToast({ tone: "info", message: t("只剩 {n} 份，不能再加。", { n: remaining }) });
             return current;
           }
         }
@@ -3473,7 +3506,7 @@ export function PosApp() {
     const key = itemIdentity(target);
     const orderedQty = orderedItemQtyMap.get(key) ?? 0;
     if (orderedQty <= 0) {
-      setToast({ tone: "info", message: "這個菜品尚未正式下單，不能退菜。" });
+      setToast({ tone: "info", message: t("這個菜品尚未正式下單，不能退菜。") });
       return;
     }
 
@@ -3569,9 +3602,15 @@ export function PosApp() {
       tone: voidPrinted ? "success" : "warning",
       message: voidPrinted
         ? mode === "one"
-          ? `已退 1 份 ${target.name}`
-          : `已退掉 ${target.name}`
-        : `${mode === "one" ? `已退 1 份 ${target.name}` : `已退掉 ${target.name}`}，但廚房退菜單未打印（${voidHasZonePrinter ? "菜品分區對唔中打印機" : "未配置分區打印機"}）`,
+          ? t("已退 1 份 {name}", { name: target.name })
+          : t("已退掉 {name}", { name: target.name })
+        : t("{action}，但廚房退菜單未打印（{reason}）", {
+          action:
+            mode === "one"
+              ? t("已退 1 份 {name}", { name: target.name })
+              : t("已退掉 {name}", { name: target.name }),
+          reason: voidHasZonePrinter ? t("菜品分區對唔中打印機") : t("未配置分區打印機"),
+        }),
     });
   }
 
@@ -3582,7 +3621,7 @@ export function PosApp() {
     // 幂等防呆（2026-09-12）：`ready` 係單向閘，重複撳唔應該再推事件落 outbox；
     // 但**一定要出提示**，唔可以靜默 return —— 靜默就係用戶口中「撳完冇反應」。
     if (isQuickOrderReady(target)) {
-      setToast({ tone: "info", message: `${target.localOrderNo} 已經標記可取餐。` });
+      setToast({ tone: "info", message: t("{no} 已經標記可取餐。", { no: target.localOrderNo }) });
       return;
     }
     // docs/87 §6.3：放寬閘門，容許 sent_to_kitchen（自助單先出餐後付款）標記 ready
@@ -3590,7 +3629,7 @@ export function PosApp() {
     if (!allowed.has(target.status)) {
       setToast({
         tone: "info",
-        message: `${target.localOrderNo}（${localOrderStatusLabel(target)}）唔可以標記可取餐。`,
+        message: t("{no}（{status}）唔可以標記可取餐。", { no: target.localOrderNo, status: localOrderStatusLabel(target) }),
       });
       return;
     }
@@ -3617,12 +3656,12 @@ export function PosApp() {
     ]);
     setToast({
       tone: "success",
-      message: `${updatedOrder.localOrderNo} 已標記可取餐。`,
+      message: t("{no} 已標記可取餐。", { no: updatedOrder.localOrderNo }),
     });
     // 快餐模式採納嘅線上單（帶 onlineOrderId）→ 回寫 Ledger ready，
     // 否則線上訂單列表永遠停留「製作中」（雙狀態機）。
     syncOnlineQuickFulfillmentInBackground(updatedOrder, "ready", (message) =>
-      setToast({ tone: "error", message: `已標記可取餐，但會員通狀態未同步：${message}` }),
+      setToast({ tone: "error", message: t("已標記可取餐，但會員通狀態未同步：{message}", { message }) }),
     );
   }
 
@@ -3634,7 +3673,7 @@ export function PosApp() {
     if (!bootstrap || !activeOrder || activeOrder.status !== "sent_to_kitchen") return;
     const uniqueOrderedItems = cartItems.filter((item) => (orderedItemQtyMap.get(itemIdentity(item)) ?? 0) > 0);
     if (uniqueOrderedItems.length === 0) {
-      setToast({ tone: "info", message: "目前沒有已下單菜品可退。" });
+      setToast({ tone: "info", message: t("目前沒有已下單菜品可退。") });
       return;
     }
     const nextCartItems = cartItems.filter((item) => (orderedItemQtyMap.get(itemIdentity(item)) ?? 0) <= 0);
@@ -3718,7 +3757,7 @@ export function PosApp() {
         createdAt: updatedAt,
       })),
     ]);
-    setToast({ tone: "success", message: isRefundedRule ? "已全部退菜，整單已退完。" : "已全部退菜，整單已取消。" });
+    setToast({ tone: "success", message: isRefundedRule ? t("已全部退菜，整單已退完。") : t("已全部退菜，整單已取消。") });
   }
 
   // 退桌：堂食枱客人離場，枱上所有菜作廢並釋放枱位。只接 draft / sent_to_kitchen 且非線上訂單。
@@ -3742,7 +3781,7 @@ export function PosApp() {
     if (!bootstrap) return;
     const order = findVoidableTableOrder(tableId);
     if (!order) {
-      setToast({ tone: "info", message: "呢張枱冇可退桌嘅單。" });
+      setToast({ tone: "info", message: t("呢張枱冇可退桌嘅單。") });
       return;
     }
     const updatedAt = new Date().toISOString();
@@ -3814,7 +3853,7 @@ export function PosApp() {
     // 本地移除這張單（退桌：直接刪除記錄），枱位因 cancelled 不再計入 openOrders 而變空閒
     persistOrders(orders.filter((o) => o.id !== order.id));
     backToTables();
-    setToast({ tone: "success", message: `${order.tableName ?? tableId} 已退桌，枱位已釋放。` });
+    setToast({ tone: "success", message: t("{table} 已退桌，枱位已釋放。", { table: order.tableName ?? tableId }) });
   }
 
   /**
@@ -3915,7 +3954,7 @@ export function PosApp() {
     }
 
     enqueuePrintJobs(nextPrintJobs);
-    setToast({ tone: "success", message: "已加入重打單打印隊列。" });
+    setToast({ tone: "success", message: t("已加入重打單打印隊列。") });
   }
 
   /** 呢啲狀態先有收據可補打（未收款 / 已取消單冇原始單據）。 */
@@ -3932,7 +3971,7 @@ export function PosApp() {
   function reprintBillForOrder(order: PosOrder) {
     const count = reprintReceiptForOrder(order);
     if (count > 0) {
-      setToast({ tone: "success", message: "已加入補打帳單打印隊列。" });
+      setToast({ tone: "success", message: t("已加入補打帳單打印隊列。") });
       return;
     }
     const hasReceiptPrinter = (loadDeviceConfig() ?? defaultDeviceConfig).printers.some(
@@ -3941,8 +3980,8 @@ export function PosApp() {
     setToast({
       tone: "error",
       message: hasReceiptPrinter
-        ? "找不到可用的收據打印機，請檢查設備設置。"
-        : "未配置收據打印機，請到設備設置添加。",
+        ? t("找不到可用的收據打印機，請檢查設備設置。")
+        : t("未配置收據打印機，請到設備設置添加。"),
     });
   }
 
@@ -3960,8 +3999,8 @@ export function PosApp() {
     );
     const hasZonePrinter = configuredPrinters.some((p) => p.role === "zone" || p.role === "label");
     return hasZonePrinter
-      ? "菜品分區對唔中打印機，廚房單不會打印，請檢查設備設置嘅打印機分區。"
-      : "未配置廚房（分區/標籤）打印機，請到設備設置添加。";
+      ? t("菜品分區對唔中打印機，廚房單不會打印，請檢查設備設置嘅打印機分區。")
+      : t("未配置廚房（分區/標籤）打印機，請到設備設置添加。");
   }
 
   /** 把 print jobs 落本機隊列 + 推上雲（PRINT_JOB_CREATED）。回傳入隊張數。
@@ -4012,7 +4051,7 @@ export function PosApp() {
   function printKitchenTicketNow() {
     if (kitchenPrintSubmitting) return;
     if (!bootstrap) {
-      setToast({ tone: "error", message: "尚未載入店鋪資料，無法打印。" });
+      setToast({ tone: "error", message: t("尚未載入店鋪資料，無法打印。") });
       return;
     }
     // 只補打「工作台入面已提交嘅嗰張單」，語意同打印中心「重打整單」完全一致。
@@ -4022,17 +4061,17 @@ export function PosApp() {
     if (!target) {
       setToast({
         tone: "info",
-        message: "目前沒有待處理訂單。請先落單；已結帳嘅單請喺訂單列撳「查看」→「重打整單」。",
+        message: t("目前沒有待處理訂單。請先落單；已結帳嘅單請喺訂單列撳「查看」→「重打整單」。"),
       });
       return;
     }
     if (target.status === "draft") {
       // 未提交（枱面「未下單」）：廚房根本未收到過單，補打冇意義，要先落單。
-      setToast({ tone: "info", message: "此單尚未落單，請先撳「下單」再補打廚房單。" });
+      setToast({ tone: "info", message: t("此單尚未落單，請先撳「下單」再補打廚房單。") });
       return;
     }
     if (target.items.length === 0) {
-      setToast({ tone: "info", message: "訂單沒有菜品，無需打印廚房單。" });
+      setToast({ tone: "info", message: t("訂單沒有菜品，無需打印廚房單。") });
       return;
     }
 
@@ -4049,10 +4088,10 @@ export function PosApp() {
         return;
       }
       enqueuePrintJobs(jobs);
-      setToast({ tone: "success", message: `已補打廚房單（${authoritativeOrder.localOrderNo}）。` });
+      setToast({ tone: "success", message: t("已補打廚房單（{no}）。", { no: authoritativeOrder.localOrderNo }) });
     } catch {
       // 寫唔到 localStorage（quota / 私隱模式）→ 一定要出聲，唔可以靜默吞掉。
-      setToast({ tone: "error", message: "加入打印隊列失敗，請檢查瀏覽器儲存空間後再試。" });
+      setToast({ tone: "error", message: t("加入打印隊列失敗，請檢查瀏覽器儲存空間後再試。") });
     } finally {
       setKitchenPrintSubmitting(false);
     }
@@ -4070,11 +4109,11 @@ export function PosApp() {
   function printReceiptNow() {
     if (receiptPrintSubmitting) return;
     if (!bootstrap) {
-      setToast({ tone: "error", message: "尚未載入店鋪資料，無法打印。" });
+      setToast({ tone: "error", message: t("尚未載入店鋪資料，無法打印。") });
       return;
     }
     if (cartItems.length === 0) {
-      setToast({ tone: "info", message: "購物車沒有菜品，無法打印收據。" });
+      setToast({ tone: "info", message: t("購物車沒有菜品，無法打印收據。") });
       return;
     }
 
@@ -4115,15 +4154,15 @@ export function PosApp() {
         setToast({
           tone: "error",
           message: hasReceiptPrinter
-            ? "找不到可用的收據打印機，請檢查設備設置。"
-            : "未配置收據打印機，請到設備設置添加。",
+            ? t("找不到可用的收據打印機，請檢查設備設置。")
+            : t("未配置收據打印機，請到設備設置添加。"),
         });
         return;
       }
       enqueuePrintJobs(jobs);
-      setToast({ tone: "success", message: "已打印收據。" });
+      setToast({ tone: "success", message: t("已打印收據。") });
     } catch {
-      setToast({ tone: "error", message: "加入打印隊列失敗，請檢查瀏覽器儲存空間後再試。" });
+      setToast({ tone: "error", message: t("加入打印隊列失敗，請檢查瀏覽器儲存空間後再試。") });
     } finally {
       setReceiptPrintSubmitting(false);
     }
@@ -4150,8 +4189,8 @@ export function PosApp() {
     setToast({
       tone: next ? "success" : "info",
       message: next
-        ? "自動打印已開啟：落單會自動出廚房單，結帳會自動出收據。"
-        : "自動打印已關閉：落單／結帳不會自動打印任何單據（手動掣仍可使用）。",
+        ? t("自動打印已開啟：落單會自動出廚房單，結帳會自動出收據。")
+        : t("自動打印已關閉：落單／結帳不會自動打印任何單據（手動掣仍可使用）。"),
     });
   }
 
@@ -4223,7 +4262,7 @@ export function PosApp() {
       if (sequenceFetchFailed && !nextOrderNo && !options?.silent) {
         setToast({
           tone: "warning",
-          message: "單號使用本地序號（連線取得店內序號失敗），連網後會自動對齊。",
+          message: t("單號使用本地序號（連線取得店內序號失敗），連網後會自動對齊。"),
         });
       }
 
@@ -4244,7 +4283,7 @@ export function PosApp() {
       const treatAsAddOn = !options?.forceNewOrder && isAddOnOrder;
       if (treatAsAddOn && addedItems.length === 0) {
         if (!options?.silent) {
-          setToast({ tone: "info", message: "沒有新增菜品，無需加單。" });
+          setToast({ tone: "info", message: t("沒有新增菜品，無需加單。") });
         }
         return null;
       }
@@ -4297,8 +4336,8 @@ export function PosApp() {
         setToast({
           tone: "warning",
           message: hasZonePrinter
-            ? "菜品分區對唔中打印機，廚房單不會打印，請檢查設備設置嘅打印機分區。"
-            : "未配置廚房（分區/標籤）打印機，落單唔會打印，請到設備設置添加。",
+            ? t("菜品分區對唔中打印機，廚房單不會打印，請檢查設備設置嘅打印機分區。")
+            : t("未配置廚房（分區/標籤）打印機，落單唔會打印，請到設備設置添加。"),
         });
       }
 
@@ -4333,11 +4372,11 @@ export function PosApp() {
           tone: "success",
           message: networkOnline
             ? treatAsAddOn
-              ? `已加單成功，單號 ${order.localOrderNo}。`
-              : `已下單成功，單號 ${order.localOrderNo}。`
+              ? t("已加單成功，單號 {no}。", { no: order.localOrderNo })
+              : t("已下單成功，單號 {no}。", { no: order.localOrderNo })
             : treatAsAddOn
-              ? `已離線加單 ${order.localOrderNo}，待恢復網絡後補傳。`
-              : `已離線下單 ${order.localOrderNo}，待恢復網絡後補傳。`,
+              ? t("已離線加單 {no}，待恢復網絡後補傳。", { no: order.localOrderNo })
+              : t("已離線下單 {no}，待恢復網絡後補傳。", { no: order.localOrderNo }),
         });
       }
       return order;
@@ -4376,11 +4415,11 @@ export function PosApp() {
       },
     ]);
     setViewingOrderId(null);
-    setToast({ tone: "success", message: `${updatedOrder.localOrderNo} ${options?.label ?? "已完成"}。` });
+    setToast({ tone: "success", message: t("{no} {label}。", { no: updatedOrder.localOrderNo, label: options?.label ?? t("已完成") }) });
     // 同上：帶 onlineOrderId 嘅快餐單要回寫 Ledger completed
     //（客人端／線上訂單列表先會見到「已完成」，亦避免本地 settled 同 Ledger 脫節）。
     syncOnlineQuickFulfillmentInBackground(updatedOrder, "completed", (message) =>
-      setToast({ tone: "error", message: `已標記完成，但會員通狀態未同步：${message}` }),
+      setToast({ tone: "error", message: t("已標記完成，但會員通狀態未同步：{message}", { message }) }),
     );
   }
 
@@ -4434,7 +4473,7 @@ export function PosApp() {
     setViewingOrderId(null);
     setOrderActionRequest(null);
     setOrderActionReason("");
-    setToast({ tone: "success", message: `${updatedOrder.localOrderNo} 已取消結帳。` });
+    setToast({ tone: "success", message: t("{no} 已取消結帳。", { no: updatedOrder.localOrderNo }) });
   }
 
   /**
@@ -4477,7 +4516,7 @@ export function PosApp() {
       setRoundingInput("");
     }
     setViewingOrderId(null);
-    setToast({ tone: "success", message: `${targetOrder.localOrderNo} 已刪除。` });
+    setToast({ tone: "success", message: t("{no} 已刪除。", { no: targetOrder.localOrderNo }) });
   }
 
   function buildRefundReceiptJobs(
@@ -4493,7 +4532,7 @@ export function PosApp() {
       .map<PrintJob>((printer) => ({
         id: uid("print"),
         orderId: order.id,
-        orderNo: `${order.localOrderNo} 退款`,
+        orderNo: t("{no} 退款", { no: order.localOrderNo }),
         tableName: order.tableName,
         ticketType: "void",
         printerGroup: "receipt",
@@ -4577,7 +4616,7 @@ export function PosApp() {
     setViewingOrderId(null);
     setOrderActionRequest(null);
     setOrderActionReason("");
-    setToast({ tone: "success", message: `${updatedOrder.localOrderNo} 已退款。` });
+    setToast({ tone: "success", message: t("{no} 已退款。", { no: updatedOrder.localOrderNo }) });
   }
 
   function partialRefundOrder(orderId: string, reason: string, quantities: Record<string, number>) {
@@ -4607,7 +4646,7 @@ export function PosApp() {
       .filter((item): item is RefundLine => Boolean(item));
 
     if (refundItems.length === 0) {
-      setToast({ tone: "info", message: "請先選擇要退款的菜品數量。" });
+      setToast({ tone: "info", message: t("請先選擇要退款的菜品數量。") });
       return;
     }
 
@@ -4684,7 +4723,7 @@ export function PosApp() {
     setViewingOrderId(null);
     setToast({
       tone: "success",
-      message: fullyRefunded ? `${updatedOrder.localOrderNo} 已全部退款。` : `${updatedOrder.localOrderNo} 已完成部分退款。`,
+      message: fullyRefunded ? t("{no} 已全部退款。", { no: updatedOrder.localOrderNo }) : t("{no} 已完成部分退款。", { no: updatedOrder.localOrderNo }),
     });
   }
 
@@ -4700,7 +4739,7 @@ export function PosApp() {
       setToast({
         tone: "info",
         message:
-          "已結帳，但「結帳收據」自動打印已關閉（設備設置 → 打印開關）。要印可按「打印收據」或補打帳單。",
+          t("已結帳，但「結帳收據」自動打印已關閉（設備設置 → 打印開關）。要印可按「打印收據」或補打帳單。"),
       });
       return;
     }
@@ -4712,7 +4751,7 @@ export function PosApp() {
     if (nextPrintJobs.length === 0) {
       // 冇啟用嘅 `role === "receipt"` 打印機 ⇒ builder 回空。以前只喺 dev log，
       // 生產環境完全靜默（客人白等、店員以為印咗）。補上診斷文案。
-      setToast({ tone: "error", message: `已結帳，但收據印唔出：${describeNoReceiptPrinterError()}` });
+      setToast({ tone: "error", message: t("已結帳，但收據印唔出：{error}", { error: describeNoReceiptPrinterError() }) });
       return;
     }
 
@@ -4726,19 +4765,19 @@ export function PosApp() {
     if (!ensureShiftOpened()) return;
 
     if (memberLedgerOpsNeeded && offlineMode) {
-      setToast({ tone: "info", message: "會員扣款／核銷券須連線，請恢復網絡後再試。" });
+      setToast({ tone: "info", message: t("會員扣款／核銷券須連線，請恢復網絡後再試。") });
       return;
     }
 
     const merchantId = getLedgerMerchantId();
     if (memberLedgerOpsNeeded && !merchantId) {
-      setToast({ tone: "info", message: "無法取得商家 ID，請重新登入後再試。" });
+      setToast({ tone: "info", message: t("無法取得商家 ID，請重新登入後再試。") });
       return;
     }
 
     const deductAvos = useMemberBalance && ledgerMember ? mopToAvos(memberDeduction) : 0;
     if (memberLedgerOpsNeeded && deductAvos > memberAvailableAvos) {
-      setToast({ tone: "info", message: "會員餘額不足（含所選現金券）。" });
+      setToast({ tone: "info", message: t("會員餘額不足（含所選現金券）。") });
       return;
     }
 
@@ -4748,7 +4787,7 @@ export function PosApp() {
     // 收銀直接撳結帳就會漏咗原因。缺原因時唔結帳，改為彈原因彈窗（原因填好再撳一次即可）。
     if (discountAmount > 0 && !discountNote.trim()) {
       requestDiscountNote({ kind: "whole", presetId: discountValue }, "");
-      setToast({ tone: "info", message: "此單有折扣，請先選擇折扣原因。" });
+      setToast({ tone: "info", message: t("此單有折扣，請先選擇折扣原因。") });
       return;
     }
 
@@ -4914,7 +4953,7 @@ export function PosApp() {
       // （實案 2026-09-14 表嫂美食：本地「訂單 002」已完成但 Ledger 未 completed ⇒ 少 38）。
       // 呢個呼叫係冪等（已完成會回 invalid transition → 讀返狀態確認），快餐 counter 單自動 no-op。
       syncOnlineDineInCompletionInBackground(updatedOrder, (message) =>
-        setToast({ tone: "error", message: `已結帳，但會員通狀態未同步：${message}` }),
+        setToast({ tone: "error", message: t("已結帳，但會員通狀態未同步：{message}", { message }) }),
       );
       setPayingOrderId(null);
       setActiveOrderId(null);
@@ -4931,11 +4970,11 @@ export function PosApp() {
         tone: "success",
         message: networkOnline
           ? quickPaidFlow
-            ? `已收款 ${updatedOrder.localOrderNo}，等待製作完成。`
-            : `已完成 ${updatedOrder.localOrderNo} 結帳。`
+            ? t("已收款 {no}，等待製作完成。", { no: updatedOrder.localOrderNo })
+            : t("已完成 {no} 結帳。", { no: updatedOrder.localOrderNo })
           : quickPaidFlow
-            ? `已離線記錄 ${updatedOrder.localOrderNo} 付款，待恢復網絡後補傳。`
-            : `已離線記錄 ${updatedOrder.localOrderNo} 付款，待補傳。`,
+            ? t("已離線記錄 {no} 付款，待恢復網絡後補傳。", { no: updatedOrder.localOrderNo })
+            : t("已離線記錄 {no} 付款，待補傳。", { no: updatedOrder.localOrderNo }),
       });
       setSettlementFlash(true);
       printReceipt(updatedOrder);
@@ -4982,7 +5021,7 @@ export function PosApp() {
         } catch (error) {
           if (error instanceof LedgerMemberCheckoutError && error.redeemCompleted) {
             setMemberCheckoutRedeemDone(true);
-            setMemberSearchHint("券已核銷，扣款失敗。請重試扣款（勿重複核銷券）。");
+            setMemberSearchHint(t("券已核銷，扣款失敗。請重試扣款（勿重複核銷券）。"));
           }
           setToast({
             tone: "info",
@@ -5007,7 +5046,7 @@ export function PosApp() {
         setToast({
           tone: "info",
           message:
-            "未能執行會員扣款（會員資料或商戶登入狀態不完整），已取消結帳。請重新輸入會員號碼查詢後再試。",
+            t("未能執行會員扣款（會員資料或商戶登入狀態不完整），已取消結帳。請重新輸入會員號碼查詢後再試。"),
         });
         return;
       }
@@ -5018,7 +5057,7 @@ export function PosApp() {
     if (isQuickMode && payingOrderId === CART_PAYING_ID) {
       const createdOrder = await sendToKitchen({ silent: true, forceNewOrder: true });
       if (!createdOrder) {
-        setToast({ tone: "info", message: "下單失敗，請確認購物車有菜品後再試。" });
+        setToast({ tone: "info", message: t("下單失敗，請確認購物車有菜品後再試。") });
         return;
       }
       await runCheckout(createdOrder);
@@ -5170,8 +5209,8 @@ export function PosApp() {
     setToast({
       tone: "success",
       message: networkOnline
-        ? `已免單 ${updatedOrder.localOrderNo}（${reason}）。`
-        : `已離線記錄 ${updatedOrder.localOrderNo} 免單，待補傳。`,
+        ? t("已免單 {no}（{reason}）。", { no: updatedOrder.localOrderNo, reason })
+        : t("已離線記錄 {no} 免單，待補傳。", { no: updatedOrder.localOrderNo }),
     });
     setSettlementFlash(true);
     printReceipt(updatedOrder);
@@ -5187,7 +5226,7 @@ export function PosApp() {
     if (!bootstrap) return;
     const reason = note.trim();
     if (!reason) {
-      setToast({ tone: "error", message: "請選擇或輸入免單備註。" });
+      setToast({ tone: "error", message: t("請選擇或輸入免單備註。") });
       return;
     }
     const now = new Date().toISOString();
@@ -5196,7 +5235,7 @@ export function PosApp() {
     if (isQuickMode && payingOrderId === CART_PAYING_ID) {
       const createdOrder = await sendToKitchen({ silent: true, forceNewOrder: true });
       if (!createdOrder) {
-        setToast({ tone: "info", message: "下單失敗，請確認購物車有菜品後再試。" });
+        setToast({ tone: "info", message: t("下單失敗，請確認購物車有菜品後再試。") });
         return;
       }
       settleCompOrder(createdOrder, reason, now);
@@ -5207,7 +5246,7 @@ export function PosApp() {
     // 唔可以喺全店亂揀（免單一樣係「落錯枱」嘅高危操作）。
     const targetOrder = resolveSettleTargetOrder(payingOrderId);
     if (!targetOrder) {
-      setToast({ tone: "error", message: `搵唔到要免單嘅訂單（${activeTable?.name ?? "本枱"}：${describeTableOrderStates()}）。` });
+      setToast({ tone: "error", message: t("搵唔到要免單嘅訂單（{table}：{states}）。", { table: activeTable?.name ?? t("本枱"), states: describeTableOrderStates() }) });
       return;
     }
 
@@ -5285,13 +5324,13 @@ export function PosApp() {
     // （表嫂美食 2026-09-14：訂單 002 = 線上已支付 MOP 38 ⇒ 交班「線上線下合計」少 38。）
     // 冪等 + 自動 no-op（快餐 counter 單唔行堂食梯），失敗會出 error toast 唔會靜默。
     syncOnlineDineInCompletionInBackground(updatedOrder, (message) =>
-      setToast({ tone: "error", message: `客人已支付，但會員通狀態未同步：${message}` }),
+      setToast({ tone: "error", message: t("客人已支付，但會員通狀態未同步：{message}", { message }) }),
     );
     setToast({
       tone: "success",
       message: quickPaidFlow
-        ? `客人已支付 ${updatedOrder.localOrderNo}，等待製作完成。`
-        : `客人已支付，已完成 ${updatedOrder.localOrderNo}。`,
+        ? t("客人已支付 {no}，等待製作完成。", { no: updatedOrder.localOrderNo })
+        : t("客人已支付，已完成 {no}。", { no: updatedOrder.localOrderNo }),
     });
     setSettlementFlash(true);
     printReceipt(updatedOrder);
@@ -5308,7 +5347,7 @@ export function PosApp() {
     if (!ensureShiftOpened()) return;
     if (isQuickMode) {
       if (cartItems.length === 0) {
-        setToast({ tone: "info", message: "請先點餐再結帳。" });
+        setToast({ tone: "info", message: t("請先點餐再結帳。") });
         return;
       }
       setPayingOrderId(CART_PAYING_ID);
@@ -5337,7 +5376,7 @@ export function PosApp() {
   async function handlePosReopen() {
     if (!activeOrderId) return;
     if (!roReason.trim()) {
-      setToast({ tone: "info", message: "請先揀返結原因" });
+      setToast({ tone: "info", message: t("請先揀返結原因") });
       return;
     }
     setRoSubmitting(true);
@@ -5346,7 +5385,7 @@ export function PosApp() {
       const operator = session?.name ?? session?.account ?? "收銀";
       const result = await reopenPosOrder({ orderId: activeOrderId, reason: roReason, operator });
       if (!result.ok) {
-        setToast({ tone: "info", message: result.error ?? "返結失敗" });
+        setToast({ tone: "info", message: result.error ?? t("返結失敗") });
         return;
       }
       setRoReason("");
@@ -5361,10 +5400,10 @@ export function PosApp() {
       setToast({
         tone: "success",
         message: result.memberReversed
-          ? "已返結、會員餘額已退回並印單"
+          ? t("已返結、會員餘額已退回並印單")
           : result.memberReverseError
-            ? "已返結並印單；會員餘額退回待 Ledger 對接"
-            : "已返結並印返結單",
+            ? t("已返結並印單；會員餘額退回待 Ledger 對接")
+            : t("已返結並印返結單"),
       });
     } finally {
       setRoSubmitting(false);
@@ -5372,7 +5411,7 @@ export function PosApp() {
   }
 
   if (isBootstrapping || !bootstrap) {
-    return <div className="empty-state">正在載入門店設定…</div>;
+    return <div className="empty-state">{t("正在載入門店設定…")}</div>;
   }
 
   return (
@@ -5409,20 +5448,28 @@ export function PosApp() {
                   ⇒ 控件簇 340px ≤ 可用 358px（692 − 副標題 322 − 12 間距）→ 單行唔會爆。
                   🔴 CSS 用 `minmax(0,1fr)_auto` ＋ 右側 `flex-nowrap`：標題欄吸收剩餘寬度，
                      控件簇**永遠唔會掉行** —— 唔靠 magic number 遷就。
-                  詳見 docs/mockups/accept-toggle-placement-2026-09-15-v2.html */}
+                  🔴🔴 2026-10-08 補：上面嗰條「永遠唔掉行」嘅鐵律**只適用於 ≥md（768px）**。
+                     手機 390px 實測（`70-mobile-pos-en.png`）：英文翻譯令控件簇變闊
+                     （`線上接單`→`Online orders`、`未接通`→`Not connected`），
+                     控件簇 358px 用盡全部可用寬度 ⇒ `min-w-0` 嘅標題欄被榨到 **3px**，
+                     「桌台總覽」逐個字直排、桌卡消失（中文版同尺寸完全正常）。
+                     ⇒ 改為 `grid-cols-1 md:grid-cols-[minmax(0,1fr)_auto]`：手機直排（標題在上、
+                     控件簇另起一行並可換行），≥md 維持原判（iPad 橫向 1084px 行為不變）。
+                     詳見 docs/mockups/i18n-verify-2026-10-08/70-mobile-pos-{en,zh-Hant}.png
+                  ⇒ 原本嘅單行稿：docs/mockups/accept-toggle-placement-2026-09-15-v2.html */}
               <div className="border-b border-slate-200 bg-white px-4 py-3">
-                <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3">
+                <div className="grid grid-cols-1 items-center gap-3 md:grid-cols-[minmax(0,1fr)_auto]">
                   <div className="min-w-0">
-                    <div className="text-lg font-semibold text-slate-900">桌台總覽</div>
+                    <div className="text-lg font-semibold text-slate-900">{t("桌台總覽")}</div>
                     {/* ⚠️ 副標題刻意用 `text-xs`（12px）唔用 `text-sm`（14px）：
                         14px 時自然闊約 376px，而標題欄只有約 350px → 會 wrap 成兩行，
                         header 由 74px 變 95px（實測）。12px 只需約 322px → 穩穩一行。
                         （v2 確認稿亦係 12px，J 已過目。） */}
                     <div className="mt-0.5 text-xs text-slate-500">
-                      點開桌子後進入點餐介面。桌台狀態：空閒 / 未下單 / 已下單
+                      {t("點開桌子後進入點餐介面。桌台狀態：空閒 / 未下單 / 已下單")}
                     </div>
                   </div>
-                  <div className="flex shrink-0 flex-nowrap items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2 md:shrink-0 md:flex-nowrap">
                     {/* 「開工」（2026-09-14）：未開工才出，擺喺最左。
                         收起「今日未開工」彈窗之後，呢粒就係開工嘅入口。
                         開工後自動隱藏（判準 `shift.openedAt`，同彈窗同一份真源）。
@@ -5432,17 +5479,17 @@ export function PosApp() {
                         <button
                           ref={startWorkButtonRef}
                           type="button"
-                          title="開始今日班次（未開工前不能開枱／落單）"
+                          title={t("開始今日班次（未開工前不能開枱／落單）")}
                           onClick={startWork}
                           className={`rounded-2xl bg-orange-500 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-orange-600 ${
                             startWorkHint ? "pos-start-work-pulse" : ""
                           }`}
                         >
-                          開工
+                          {t("開工")}
                         </button>
                         {startWorkHint ? (
                           <span className="pointer-events-none absolute left-1/2 top-[calc(100%+10px)] z-[8] -translate-x-1/2 whitespace-nowrap rounded-full bg-slate-900 px-3.5 py-1.5 text-xs font-semibold text-white shadow-lg">
-                            👆 開工喺呢度
+                            {t("👆 開工喺呢度")}
                           </span>
                         ) : null}
                       </span>
@@ -5470,8 +5517,8 @@ export function PosApp() {
                   開工後（或彈窗仍在）唔會顯示。 */}
               {!shift.openedAt && startWorkPromptDismissed ? (
                 <div className="flex flex-none items-center gap-2 border-b border-amber-300 bg-amber-50 px-4 py-2.5 font-semibold text-amber-800">
-                  <span className="rounded-full bg-amber-500 px-2.5 py-0.5 text-[11px] font-bold text-white">今日未開工</span>
-                  <span className="text-[13px]">只可以查看／對數，落單功能暫停。要開始營業，請按頁首「開工」。</span>
+                  <span className="rounded-full bg-amber-500 px-2.5 py-0.5 text-[11px] font-bold text-white">{t("今日未開工")}</span>
+                  <span className="text-[13px]">{t("只可以查看／對數，落單功能暫停。要開始營業，請按頁首「開工」。")}</span>
                 </div>
               ) : null}
 
@@ -5485,7 +5532,7 @@ export function PosApp() {
                   onClick={() => setActiveFloorId(ALL_FLOOR_ID)}
                   type="button"
                 >
-                  全部
+                  {t("全部")}
                 </button>
                 {floors.map((floor) => (
                   <button
@@ -5527,13 +5574,11 @@ export function PosApp() {
                     <div className="col-span-full flex flex-wrap items-center gap-2 border-t-[1.5px] border-dashed border-amber-300 pt-3">
                       <span className="flex items-center gap-1.5 text-[13.5px] font-extrabold text-amber-900">
                         <span className="h-2 w-2 rounded-[3px] bg-amber-500" />
-                        返結區
-                      </span>
+                        {t("返結區")}</span>
                       <span className="rounded-full bg-amber-600 px-2 py-0.5 text-[11px] font-extrabold text-white">
-                        {reopenAccountList.length} 張待重結
-                      </span>
+                        {reopenAccountList.length} {t("張待重結")}</span>
                       <span className="ml-auto text-[11.5px] text-amber-800">
-                        已反結 · 錢未收 · 唔計入營業額 · 依返結時間新→舊
+                        {t("已反結 · 錢未收 · 唔計入營業額 · 依返結時間新→舊")}
                       </span>
                     </div>
 
@@ -5562,7 +5607,7 @@ export function PosApp() {
                             </div>
                             <span
                               className="-mr-1 -mt-1 max-w-[66%] shrink-0 truncate rounded-lg bg-white px-2 py-0.5 text-[11px] font-bold leading-5 text-amber-700 shadow-sm ring-1 ring-black/10"
-                              title={`訂單號：${row.orderNo}`}
+                              title={t("訂單號：{no}", { no: row.orderNo })}
                             >
                               {row.orderNo}
                             </span>
@@ -5570,11 +5615,11 @@ export function PosApp() {
                           {/* 第 2 行：返結時間（取代現有卡嘅「樓層」，因為返結單已離開原枱，
                               樓層對跨機對數冇意義；時間才係對數依據）。 */}
                           <div className="mt-2 text-xs text-white/85">
-                            {row.reopenedAt ? `返結 ${formatMacauTime(row.reopenedAt)}` : "—"}
+                            {row.reopenedAt ? t("返結 {time}", { time: formatMacauTime(row.reopenedAt) }) : "—"}
                           </div>
                           {/* 第 3 行：返結次數（對應現有卡嘅「已坐 N/—」位置） */}
                           <div className="mt-1 text-xs font-semibold text-white/90">
-                            {row.reopenCount ? `已返結 ×${row.reopenCount}` : "待重結"}
+                            {row.reopenCount ? t("已返結 ×{n}", { n: row.reopenCount }) : t("待重結")}
                           </div>
                           {/* 第 4 行：應收金額（對應現有卡嘅「應收」位置）。
                               🔴 J 拍板選項 1：維持 truncate，同現有桌台卡完全同一規則。
@@ -5582,14 +5627,14 @@ export function PosApp() {
                           {row.total > 0 ? (
                             <div
                               className="mt-1 truncate text-sm font-bold text-white"
-                              title={`應收 ${formatMoney(row.total)}`}
+                              title={t("應收 {amount}", { amount: formatMoney(row.total) })}
                             >
-                              應收 {formatMoney(row.total)}
+                              {t("應收 ")}{formatMoney(row.total)}
                             </div>
                           ) : null}
                           {/* 第 5 行：狀態標記（同現有卡嘅 badge 同一位置／形狀） */}
                           <div className="mt-3 inline-flex rounded-full bg-white px-3 py-1 text-xs font-semibold text-amber-800">
-                            返結
+                            {t("返結")}
                           </div>
                         </button>
                       );
@@ -5599,8 +5644,7 @@ export function PosApp() {
                     <div className="col-span-full mt-1 flex flex-wrap items-center gap-2 border-t border-slate-200 pt-3">
                       <span className="flex items-center gap-1.5 text-[13.5px] font-extrabold text-slate-400">
                         <span className="h-2 w-2 rounded-[3px] bg-slate-300" />
-                        全部 · {visibleTables.length} 張枱
-                      </span>
+                        {t("全部 · ")}{visibleTables.length} {t("張枱")}</span>
                     </div>
                   </>
                 ) : null}
@@ -5627,14 +5671,14 @@ export function PosApp() {
                     const occupancy = total > 0 ? `${seatedCount}/${total}` : `${seatedCount}/—`;
                     const label =
                       isPaidDineInTable
-                        ? "已結帳 / 待收尾"
+                        ? t("已結帳 / 待收尾")
                         : isReopenedTable
-                          ? "待重結"
+                          ? t("待重結")
                           : status === "sent_to_kitchen"
-                            ? "已下單"
+                            ? t("已下單")
                             : status === "draft"
-                              ? "未下單"
-                              : "空閒";
+                              ? t("未下單")
+                              : t("空閒");
                     const labelFull = label;
                     // 開桌（非空閒）枱：整張格子實底高對比配色，方便一眼分開「有單」vs「空閒」
                     // —— 已結帳待收尾用綠、待重結用琥珀、已下單/未下單用橙；空閒維持白底。
@@ -5685,7 +5729,7 @@ export function PosApp() {
                           {orderBadge.show ? (
                             <span
                               className={`-mr-1 -mt-1 max-w-[68%] shrink-0 truncate rounded-lg bg-white px-2 py-0.5 text-[11px] font-bold leading-5 shadow-sm ring-1 ring-black/10 ${orderBadgeTone}`}
-                              title={`訂單號：${orderBadge.text}`}
+                              title={t("訂單號：{no}", { no: orderBadge.text })}
                             >
                               {orderBadge.text}
                             </span>
@@ -5697,11 +5741,11 @@ export function PosApp() {
                         <div
                           className={`mt-1 text-xs font-semibold ${isOccupied ? "text-white/90" : "text-slate-700"}`}
                         >
-                          已坐 {occupancy}
+                          {t("已坐 ")}{occupancy}
                         </div>
                         {isOccupied && tableDueAmount > 0 ? (
-                          <div className="mt-1 truncate text-sm font-bold text-white" title={`應收 ${formatMoney(tableDueAmount, bootstrap.currency)}`}>
-                            應收 {formatMoney(tableDueAmount, bootstrap.currency)}
+                          <div className="mt-1 truncate text-sm font-bold text-white" title={t("應收 {amount}", { amount: formatMoney(tableDueAmount, bootstrap.currency) })}>
+                            {t("應收 ")}{formatMoney(tableDueAmount, bootstrap.currency)}
                           </div>
                         ) : null}
                         <div
@@ -5718,7 +5762,7 @@ export function PosApp() {
 
             {openTableModalTableId ? (
               <ResponsiveModal
-                title="開桌"
+                title={t("開桌")}
                 onClose={() => setOpenTableModalTableId(null)}
                 actions={
                   <>
@@ -5727,34 +5771,33 @@ export function PosApp() {
                       onClick={() => setOpenTableModalTableId(null)}
                       type="button"
                     >
-                      取消
+                      {t("取消")}
                     </button>
                     <button
                       className="rounded-2xl bg-orange-500 px-4 py-2 text-sm font-semibold text-white"
                       onClick={() => confirmOpenTable()}
                       type="button"
                     >
-                      開桌
+                      {t("開桌")}
                     </button>
                   </>
                 }
               >
                 <div className="space-y-3">
                   <div className="text-sm text-slate-600">
-                    桌台：
-                    {visibleTables.find((t) => t.id === openTableModalTableId)?.name ?? ""}
-                    {visibleTables.find((t) => t.id === openTableModalTableId)?.capacity
-                      ? `（${visibleTables.find((t) => t.id === openTableModalTableId)?.capacity} 座位）`
+                    {t("桌台：")}{visibleTables.find((tbl) => tbl.id === openTableModalTableId)?.name ?? ""}
+                    {visibleTables.find((tbl) => tbl.id === openTableModalTableId)?.capacity
+                      ? t("（{n} 座位）", { n: visibleTables.find((tbl) => tbl.id === openTableModalTableId)?.capacity ?? "" })
                       : ""}
                   </div>
                     <div>
-                    <label className="text-sm font-semibold text-slate-900">入座人數</label>
+                    <label className="text-sm font-semibold text-slate-900">{t("入座人數")}</label>
                     {/* 2026-09-09：由手動輸入改為數字按鈕（1..座位數），點選只做選取（反白），
                         撳右下角「開桌」掣先真正確認開桌。冇填座位數嘅枱 fallback 12 個掣 +
                         提示去設置補填；唔會出現超座選項。 */}
                     {openTableModalTable?.capacity && openTableModalTable.capacity > 0 ? null : (
                       <div className="mt-1 text-xs text-slate-500">
-                        此桌未設座位數，暫以 12 個按鈕代替；請到「設置 → 桌台管理」補填座位數。
+                        {t("此桌未設座位數，暫以 12 個按鈕代替；請到「設置 → 桌台管理」補填座位數。")}
                       </div>
                     )}
                     <div className="mt-2 flex flex-wrap gap-2">
@@ -5784,8 +5827,8 @@ export function PosApp() {
 
             <section className="flex h-full flex-col overflow-hidden border-l border-slate-200 bg-white">
               <div className="border-b border-slate-100 px-4 py-4">
-                <div className="text-base font-semibold text-slate-900">快捷操作</div>
-                <div className="mt-1 text-xs text-slate-500">桌台流程、收銀入口與營運操作集中在這裡</div>
+                <div className="text-base font-semibold text-slate-900">{t("快捷操作")}</div>
+                <div className="mt-1 text-xs text-slate-500">{t("桌台流程、收銀入口與營運操作集中在這裡")}</div>
               </div>
               <div className="min-w-0 flex-1 overflow-auto px-4 py-4">
                 {/* 線上訂單（2026-09-11 用戶要求）：堂食模式之前只有「自取 / 掃碼訂單」（線下 counter 單），
@@ -5801,7 +5844,7 @@ export function PosApp() {
                      都唔可以撐到成頁橫向滾動（2026-09-12 實案：快捷操作欄被撐爆，
                      連帶點餐頁三欄版面被推歪）。 */
                   <div className="min-w-0 overflow-hidden rounded-2xl border border-slate-200 bg-slate-50/70 p-3">
-                    <div className="text-xs font-semibold text-slate-700">線上訂單</div>
+                    <div className="text-xs font-semibold text-slate-700">{t("線上訂單")}</div>
                     <div className="mt-3">
                       <QuickOnlineOrdersPanel
                         autoAccept={autoAcceptOnlineOrders}
@@ -5835,8 +5878,8 @@ export function PosApp() {
                 {!isQuickMode && counterKioskOrders.length > 0 ? (
                   <div className="mt-4 rounded-2xl border border-orange-200 bg-orange-50/70 p-3">
                     <div className="flex items-center justify-between">
-                      <div className="text-xs font-semibold text-orange-700">自取 / 掃碼訂單</div>
-                      <div className="text-[11px] text-orange-500">{counterKioskOrders.length} 張待處理</div>
+                      <div className="text-xs font-semibold text-orange-700">{t("自取 / 掃碼訂單")}</div>
+                      <div className="text-[11px] text-orange-500">{counterKioskOrders.length} {t("張待處理")}</div>
                     </div>
                     <div className="mt-3 space-y-2">
                       {counterKioskOrders.map((order) => (
@@ -5849,8 +5892,7 @@ export function PosApp() {
                             <div className="min-w-0">
                               <div className="truncate text-sm font-semibold text-slate-900">{order.localOrderNo}</div>
                               <div className="mt-0.5 truncate text-xs text-slate-500">
-                                {order.tableName} · {order.items.reduce((n, it) => n + it.quantity, 0)} 件
-                              </div>
+                                {order.tableName} · {order.items.reduce((n, it) => n + it.quantity, 0)} {t("件")}</div>
                               {(() => {
                                 const itemSaving = orderItemDiscountTotal(order.items);
                                 const wholeSaving = Math.max(0, order.discountAmount ?? 0);
@@ -5859,12 +5901,12 @@ export function PosApp() {
                                   <div className="mt-0.5 flex flex-wrap items-baseline gap-x-2 text-[11px]">
                                     {itemSaving > 0 ? (
                                       <span className="font-semibold text-emerald-700">
-                                        單品 -{formatMoney(itemSaving, bootstrap.currency)}
+                                        {t("單品 -")}{formatMoney(itemSaving, bootstrap.currency)}
                                       </span>
                                     ) : null}
                                     {wholeSaving > 0 ? (
                                       <span className="font-semibold text-emerald-700">
-                                        全單 -{formatMoney(wholeSaving, bootstrap.currency)}
+                                        {t("全單 -")}{formatMoney(wholeSaving, bootstrap.currency)}
                                       </span>
                                     ) : null}
                                   </div>
@@ -5906,12 +5948,12 @@ export function PosApp() {
                                       className={`inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-3 py-1 text-sm font-semibold ${badge.bgClass} ${badge.textClass}`}
                                     >
                                       <span className={`h-4 w-4 rounded-full ${badge.dotClass}`} />
-                                      {badge.label}
+                                      {t(badge.label)}
                                     </div>
                                     <div
                                       className={`inline-flex shrink-0 items-center whitespace-nowrap rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${pay.bgClass} ${pay.textClass}`}
                                     >
-                                      {pay.label}
+                                      {t(pay.label)}
                                     </div>
                                   </>
                                 );
@@ -5925,7 +5967,7 @@ export function PosApp() {
                               onClick={() => setViewingOrderId(order.id)}
                               type="button"
                             >
-                              查看
+                              {t("查看")}
                             </button>
                             {/* 自助單 draft → 顯示接受 / 拒絕（規格 6，統一用 SelfOrderActionButtons 避免走樣） */}
                             {order.status === "draft" && isSelfOrder(order) ? (
@@ -5934,18 +5976,18 @@ export function PosApp() {
                                 onConfirm={() => {
                                   const result = confirmSelfOrder(order.id);
                                   if (result.ok) {
-                                    setToast({ tone: "success", message: `已接受自助單 ${order.localOrderNo}` });
+                                    setToast({ tone: "success", message: t("已接受自助單 {no}", { no: order.localOrderNo }) });
                                   } else {
-                                    setToast({ tone: "error", message: result.error ?? "接受失敗" });
+                                    setToast({ tone: "error", message: result.error ?? t("接受失敗") });
                                   }
                                   return result;
                                 }}
                                 onReject={() => {
                                   const result = rejectSelfOrder(order.id);
                                   if (result.ok) {
-                                    setToast({ tone: "success", message: `已拒絕自助單 ${order.localOrderNo}` });
+                                    setToast({ tone: "success", message: t("已拒絕自助單 {no}", { no: order.localOrderNo }) });
                                   } else {
-                                    setToast({ tone: "error", message: result.error ?? "拒絕失敗" });
+                                    setToast({ tone: "error", message: result.error ?? t("拒絕失敗") });
                                   }
                                   return result;
                                 }}
@@ -5962,7 +6004,7 @@ export function PosApp() {
                                     onClick={() => updateQuickFulfillment(order.id)}
                                     type="button"
                                   >
-                                    可取餐
+                                    {t("可取餐")}
                                   </button>
                                 ) : null}
                                 {/* 已標記可取餐 → 只剩「完成」（同快餐卡片一致：可取餐 → 完成 單鏈）。 */}
@@ -5999,7 +6041,7 @@ export function PosApp() {
                                     onClick={() => setPayingOrderId(order.id)}
                                     type="button"
                                   >
-                                    結帳
+                                    {t("結帳")}
                                   </button>
                                 ) : null}
                               </>
@@ -6013,7 +6055,7 @@ export function PosApp() {
 
                 {offlineMode ? (
                   <div className="mt-3 w-full rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-700">
-                    目前離線，恢復網絡後會自動補傳資料
+                    {t("目前離線，恢復網絡後會自動補傳資料")}
                   </div>
                 ) : null}
               </div>
@@ -6040,28 +6082,35 @@ export function PosApp() {
                         <button
                           ref={startWorkButtonRef}
                           type="button"
-                          title="開始今日班次（未開工前不能落單）"
+                          title={t("開始今日班次（未開工前不能落單）")}
                           onClick={startWork}
                           className={`rounded-2xl bg-orange-500 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-orange-600 ${
                             startWorkHint ? "pos-start-work-pulse" : ""
                           }`}
                         >
-                          開工
+                          {t("開工")}
                         </button>
                         {startWorkHint ? (
                           <span className="pointer-events-none absolute right-0 top-[calc(100%+10px)] z-[8] whitespace-nowrap rounded-full bg-slate-900 px-3.5 py-1.5 text-xs font-semibold text-white shadow-lg">
-                            👆 開工喺呢度
+                            {t("👆 開工喺呢度")}
                           </span>
                         ) : null}
                       </span>
                     ) : null}
                     <div className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
-                      快餐模式
+                      {t("快餐模式")}
                     </div>
                   </div>
                 ) : (
                   <div className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
-                    桌號 {activeTable?.name ?? "--"}
+                    {/* 🔴 唔可以直接 `t(activeTable?.name)` —— 真正嘅桌名嚟自
+                        `bootstrap.tables`（DB 值）= **第 2 層，絕對唔可以譯**。
+                        只有快餐模式嘅**合成桌**（`id === "counter"`，`name` 硬編 `"快餐"`）
+                        係 UI 標籤，所以喺呢度 special-case（2026-10-08）。 */}
+                    {t("桌號")}{" "}
+                    {activeTable?.id === "counter"
+                      ? t("快餐")
+                      : (activeTable?.name ?? "--")}
                   </div>
                 )}
               </div>
@@ -6075,10 +6124,10 @@ export function PosApp() {
                     onClick={backToTables}
                     type="button"
                   >
-                    返回桌台
+                    {t("返回桌台")}
                   </button>
                   <div className="text-xs text-slate-500">
-                    狀態：{selectedTableStatus === "paid" ? "已結帳 / 待收尾" : selectedTableStatus === "sent_to_kitchen" ? "已下單" : selectedTableStatus === "reopened" ? "待重結" : selectedTableStatus === "draft" ? "未下單" : "空閒"}
+                    {t("狀態：")}{selectedTableStatus === "paid" ? t("已結帳 / 待收尾") : selectedTableStatus === "sent_to_kitchen" ? t("已下單") : selectedTableStatus === "reopened" ? t("待重結") : selectedTableStatus === "draft" ? t("未下單") : t("空閒")}
                   </div>
                 </div>
               ) : null}
@@ -6089,16 +6138,15 @@ export function PosApp() {
                 <div className="flex items-center gap-2">
                   <span className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full bg-amber-500 px-3 py-1 text-sm font-bold text-white">
                     <span className="h-4 w-4 rounded-full bg-white" />
-                    返結帳
-                  </span>
-                  <span className="min-w-0 flex-1 text-xs font-semibold text-amber-800">此單為返結單，可改價／加餐後重新結帳</span>
+                    {t("返結帳")}</span>
+                  <span className="min-w-0 flex-1 text-xs font-semibold text-amber-800">{t("此單為返結單，可改價／加餐後重新結帳")}</span>
                 </div>
                 {activeOrder.reopenReason ? (
-                  <div className="mt-1 text-[11px] text-amber-700">返結原因：{activeOrder.reopenReason}</div>
+                  <div className="mt-1 text-[11px] text-amber-700">{t("返結原因：")}{activeOrder.reopenReason}</div>
                 ) : null}
                 {activeOrder.originalSettledAt ? (
                   <div className="mt-0.5 text-[11px] text-amber-600">
-                    原結帳時間：{formatMacauDateTime(activeOrder.originalSettledAt)}
+                    {t("原結帳時間：")}{formatMacauDateTime(activeOrder.originalSettledAt)}
                   </div>
                 ) : null}
               </div>
@@ -6110,9 +6158,8 @@ export function PosApp() {
                   <div className="flex items-center gap-2">
                     <span className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full bg-slate-500 px-3 py-1 text-sm font-bold text-white">
                       <span className="h-4 w-4 rounded-full bg-white" />
-                      已結帳
-                    </span>
-                    <span className="min-w-0 flex-1 text-xs font-semibold text-slate-700">唯讀預覽 · 所有操作已鎖定</span>
+                      {t("已結帳")}</span>
+                    <span className="min-w-0 flex-1 text-xs font-semibold text-slate-700">{t("唯讀預覽 · 所有操作已鎖定")}</span>
                   </div>
                   <button
                     className="rounded-2xl bg-amber-600 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50"
@@ -6120,7 +6167,7 @@ export function PosApp() {
                     onClick={() => setRoModalOpen(true)}
                     type="button"
                   >
-                    返結帳
+                    {t("返結帳")}
                   </button>
                 </div>
                 {workspaceOrder?.settledAt ||
@@ -6131,8 +6178,7 @@ export function PosApp() {
                     {/* 🔴 2026-09-24・0057：口徑同交班明細 / 報表明細（均為
                         `settledAt ?? reopenedAt ?? originalSettledAt ?? updatedAt`）。
                         有 settledAt（最近一次結帳，server 永不覆蓋）優先；舊單落返舊鏈。 */}
-                    結帳時間：
-                    {formatMacauDateTime(
+                    {t("結帳時間：")}{formatMacauDateTime(
                       workspaceOrder.settledAt ??
                         workspaceOrder.reopenedAt ??
                         workspaceOrder.originalSettledAt ??
@@ -6145,8 +6191,8 @@ export function PosApp() {
 
             <div className="px-4 py-3">
               <div className="flex items-center justify-between text-sm">
-                <span className="font-semibold text-slate-900">訂單明細</span>
-                <span className="text-xs text-slate-500">{cartItems.length + voidedItems.length} 項</span>
+                <span className="font-semibold text-slate-900">{t("訂單明細")}</span>
+                <span className="text-xs text-slate-500">{cartItems.length + voidedItems.length} {t("項")}</span>
               </div>
               {isQuickMode ? (
                 <div className="mt-3 grid grid-cols-3 gap-2 rounded-2xl border border-slate-200 bg-white p-2">
@@ -6157,7 +6203,7 @@ export function PosApp() {
                     onClick={() => setQuickOrderType("dine_in")}
                     type="button"
                   >
-                    堂食
+                    {t("堂食")}
                   </button>
                   <button
                     className={`rounded-2xl px-3 py-2 text-xs font-semibold ${
@@ -6166,7 +6212,7 @@ export function PosApp() {
                     onClick={() => setQuickOrderType("delivery")}
                     type="button"
                   >
-                    外賣
+                    {t("外賣")}
                   </button>
                   <button
                     className={`rounded-2xl px-3 py-2 text-xs font-semibold ${
@@ -6175,7 +6221,7 @@ export function PosApp() {
                     onClick={() => setQuickOrderType("pickup")}
                     type="button"
                   >
-                    自取
+                    {t("自取")}
                   </button>
                 </div>
               ) : null}
@@ -6186,7 +6232,7 @@ export function PosApp() {
             <div className="flex-1 overflow-auto px-3 pb-3">
               {cartItems.length === 0 && voidedItems.length === 0 ? (
                 <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center text-sm text-slate-500">
-                  請從右側商品區加入菜品
+                  {t("請從右側商品區加入菜品")}
                 </div>
               ) : (
                   <div className="grid gap-2">
@@ -6211,12 +6257,12 @@ export function PosApp() {
                             {item.name}
                             {locked ? (
                               <span className="ml-2 inline-flex rounded-full bg-slate-200 px-2 py-0.5 text-[11px] font-semibold text-slate-700">
-                                已下單
+                                {t("已下單")}
                               </span>
                             ) : null}
                           </div>
                           <div className="mt-1 text-xs text-slate-500">
-                            {specText(item) || item.note || "未選規格"}
+                            {specText(item) || item.note || t("未選規格")}
                             {item.discountRate != null ? (
                               <>
                                 {" · "}
@@ -6235,7 +6281,7 @@ export function PosApp() {
                         <div className="flex items-center gap-1">
                           {locked ? (
                             <div className="rounded-full bg-slate-200 px-3 py-1 text-xs font-semibold text-slate-700">
-                              已下單 x{item.quantity}
+                              {t("已下單 x")}{item.quantity}
                             </div>
                           ) : (
                             <>
@@ -6279,7 +6325,7 @@ export function PosApp() {
                                 }}
                                 type="button"
                               >
-                              {item.note ? "編輯備註" : "加備註"}
+                              {item.note ? t("編輯備註") : t("加備註")}
                             </button>
                           ) : null}
                           <button
@@ -6300,7 +6346,7 @@ export function PosApp() {
                             }}
                             type="button"
                           >
-                            {item.discountRate != null ? "改折扣" : "折扣"}
+                            {item.discountRate != null ? t("改折扣") : t("折扣")}
                           </button>
                           {locked ? (
                               <button
@@ -6316,14 +6362,13 @@ export function PosApp() {
                                 }}
                                 type="button"
                               >
-                              退 1 份
+                              {t("退 1 份")}
                             </button>
                           ) : null}
                         </div>
                         {locked && item.quantity < orderedQty ? (
                           <div className="shrink-0 text-xs font-semibold text-red-600">
-                            已退 {orderedQty - item.quantity} 份
-                          </div>
+                            {t("已退 {n} 份", { n: orderedQty - item.quantity })}</div>
                         ) : null}
                       </div>
                       {/* 單品備註（docs/84 §7）：獨立一行、整寬。長文字向下自動換行，
@@ -6331,8 +6376,8 @@ export function PosApp() {
                           唔再用 truncate 切走，亦唔會向右撐破 card 或產生橫向捲軸。 */}
                       {item.note ? (
                         <div className="mt-1.5 whitespace-pre-wrap break-words text-xs text-slate-500">
-                          備註：{item.note}
-                          {locked ? <span className="ml-1 text-[11px] font-medium text-amber-600">已鎖定</span> : null}
+                          {t("備註：")}{item.note}
+                          {locked ? <span className="ml-1 text-[11px] font-medium text-amber-600">{t("已鎖定")}</span> : null}
                         </div>
                       ) : null}
                     </article>
@@ -6348,18 +6393,18 @@ export function PosApp() {
                           <div className="truncate text-sm font-semibold text-slate-900 line-through">
                             {item.name}
                             <span className="ml-2 inline-flex rounded-full bg-red-500 px-2 py-0.5 text-[11px] font-bold text-white">
-                              已退菜
+                              {t("已退菜")}
                             </span>
                           </div>
                           <div className="mt-1 text-xs text-slate-500">
-                            {specText(item) || item.note || "未選規格"} · {formatMoney(item.price, bootstrap.currency)}
+                            {specText(item) || item.note || t("未選規格")} · {formatMoney(item.price, bootstrap.currency)}
                           </div>
                           {item.voidedReason ? (
-                            <div className="mt-1 text-[11px] text-red-600">退菜原因：{item.voidedReason}</div>
+                            <div className="mt-1 text-[11px] text-red-600">{t("退菜原因：")}{item.voidedReason}</div>
                           ) : null}
                         </div>
                         <div className="shrink-0 rounded-full bg-red-200 px-3 py-1 text-xs font-semibold text-red-700">
-                          已退 x{item.quantity}
+                          {t("已退 x")}{item.quantity}
                         </div>
                       </div>
                     </article>
@@ -6387,7 +6432,7 @@ export function PosApp() {
                     }}
                     type="button"
                   >
-                    全部退菜
+                    {t("全部退菜")}
                   </button>
                 ) : null}
                 {findVoidableTableOrder(activeTableId) ? (
@@ -6403,7 +6448,7 @@ export function PosApp() {
                     }}
                     type="button"
                   >
-                    退桌
+                    {t("退桌")}
                   </button>
                 ) : null}
               </div>
@@ -6411,13 +6456,13 @@ export function PosApp() {
               <div className="flex items-start justify-between gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2">
                 {/* flex-1 + min-w-0：文字區塊食晒剩餘寬度並以 card 邊界為限向下換行（docs/84 §7） */}
                 <div className="min-w-0 flex-1">
-                  <div className="text-xs font-semibold text-slate-600">全單備註</div>
+                  <div className="text-xs font-semibold text-slate-600">{t("全單備註")}</div>
                   <div className="mt-0.5 whitespace-pre-wrap break-words text-xs text-slate-500">
-                    {orderNote ? orderNote : <span className="text-slate-400">（可選）</span>}
+                    {orderNote ? orderNote : <span className="text-slate-400">{t("（可選）")}</span>}
                   </div>
                   {orderNoteLocked ? (
                     <div className="mt-0.5 whitespace-pre-wrap break-words text-[11px] font-medium text-amber-600">
-                      訂單已送出，備註已鎖定
+                      {t("訂單已送出，備註已鎖定")}
                     </div>
                   ) : null}
                 </div>
@@ -6430,7 +6475,7 @@ export function PosApp() {
                     }}
                     type="button"
                   >
-                  {orderNoteLocked ? "已鎖定" : "編輯"}
+                  {orderNoteLocked ? t("已鎖定") : t("編輯")}
                 </button>
               </div>
             </div>
@@ -6454,7 +6499,7 @@ export function PosApp() {
                         onClick={() => setActiveCategoryId(ALL_MENU_CATEGORY_ID)}
                         type="button"
                       >
-                        全部
+                        {t("全部")}
                       </button>
                       {bootstrap.categories.map((category) => (
                         <button
@@ -6478,7 +6523,7 @@ export function PosApp() {
                       onClick={() => setCategoriesExpanded((value) => !value)}
                       type="button"
                     >
-                      {categoriesExpanded ? "收起 ▴" : "全部分類 ▾"}
+                      {categoriesExpanded ? t("收起 ▴") : t("全部分類 ▾")}
                     </button>
                   ) : null}
                 </div>
@@ -6493,7 +6538,7 @@ export function PosApp() {
                         setActiveCategoryId(ALL_MENU_CATEGORY_ID);
                       }
                     }}
-                    placeholder="搜尋商品"
+                    placeholder={t("搜尋商品")}
                     value={searchKeyword}
                   />
                 </div>
@@ -6526,20 +6571,19 @@ export function PosApp() {
                       </div>
                       {hasRemainingBadge ? (
                         <div className="mt-2 inline-flex rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700">
-                          只剩 {remainingQty} 份
-                        </div>
+                          {t("只剩 {n} 份", { n: remainingQty })}</div>
                       ) : null}
                     </div>
                     <div className="mt-2 flex items-center justify-between">
                       <div className="text-base font-semibold text-slate-900">
-                        {item.isMarketPrice ? "時價菜" : formatMoney(item.price, bootstrap.currency)}
+                        {item.isMarketPrice ? t("時價菜") : formatMoney(item.price, bootstrap.currency)}
                       </div>
                       <div
                         className={`rounded-full px-2 py-1 text-xs font-semibold ${
                           soldOut ? "bg-amber-50 text-amber-700" : "bg-orange-50 text-orange-600"
                         }`}
                       >
-                        {soldOut ? "售罄" : "加入"}
+                        {soldOut ? t("售罄") : t("加入")}
                       </div>
                     </div>
                   </button>
@@ -6547,7 +6591,7 @@ export function PosApp() {
                 })}
                 {filteredMenuItems.length === 0 ? (
                   <div className="col-span-full rounded-2xl border border-dashed border-slate-200 bg-white p-10 text-center text-sm text-slate-500">
-                    沒有符合條件的商品
+                    {t("沒有符合條件的商品")}
                   </div>
                 ) : null}
               </div>
@@ -6556,15 +6600,15 @@ export function PosApp() {
 
           <section className="flex h-full flex-col overflow-hidden border-l border-slate-200 bg-white">
             <div className="border-b border-slate-100 px-4 py-4">
-              <div className="text-base font-semibold text-slate-900">收銀與支付</div>
+              <div className="text-base font-semibold text-slate-900">{t("收銀與支付")}</div>
               <div className="mt-1 text-xs text-slate-500">
                 {isQuickMode
-                  ? "點餐結帳在此；線上／線下訂單見螢幕下方"
+                  ? t("點餐結帳在此；線上／線下訂單見螢幕下方")
                   : currentSettlementOrder
-                    ? `待結帳單號 ${currentSettlementOrder.localOrderNo}`
+                    ? t("待結帳單號 {no}", { no: currentSettlementOrder.localOrderNo })
                     : selectedTableStatus === "draft"
-                      ? "目前尚未下單，可繼續加菜或送廚房"
-                      : "目前未有待結帳訂單，可先開台或送廚房單"}
+                      ? t("目前尚未下單，可繼續加菜或送廚房")
+                      : t("目前未有待結帳訂單，可先開台或送廚房單")}
               </div>
             </div>
 
@@ -6572,7 +6616,7 @@ export function PosApp() {
               <>
               <div className="rounded-3xl bg-slate-50 p-4">
                 <div className="flex items-center justify-between text-sm text-slate-500">
-                  <span>小計</span>
+                  <span>{t("小計")}</span>
                   <span className="font-semibold text-slate-900">
                     {formatMoney(paymentSummary.subtotal, bootstrap.currency)}
                   </span>
@@ -6587,11 +6631,11 @@ export function PosApp() {
                   {(!orderItemDiscountTotal(currentSettlementOrder?.items ?? workspaceOrder?.items ?? cartItems) &&
                     !(paymentSummary.discountAmount > 0)) ? (
                     <div className="mb-3 flex items-center justify-between text-sm text-slate-500">
-                      <span>折扣</span>
+                      <span>{t("折扣")}</span>
                       <span className="font-semibold text-slate-900">-{formatMoney(0, bootstrap.currency)}</span>
                     </div>
                   ) : null}
-                  <div className="mt-3 text-xs font-semibold text-slate-500">應收</div>
+                  <div className="mt-3 text-xs font-semibold text-slate-500">{t("應收")}</div>
                   <div className="mt-2 text-3xl font-semibold tracking-tight text-orange-600">
                     {formatMoney(paymentSummary.total, bootstrap.currency)}
                   </div>
@@ -6603,28 +6647,28 @@ export function PosApp() {
                   <button
                     className="rounded-2xl bg-orange-500 px-4 py-3 text-base font-semibold text-white hover:bg-orange-600 disabled:cursor-not-allowed disabled:opacity-40"
                     aria-busy={orderSubmitting}
-                    title={!shift.openedAt ? "今日未開工：請先按頁首「開工」" : undefined}
+                    title={!shift.openedAt ? t("今日未開工：請先按頁首「開工」") : undefined}
                     disabled={orderSubmitting || isReadOnlySettled || !shift.openedAt}
                     onClick={() => void sendToKitchen()}
                     type="button"
                   >
-                    {orderSubmitting ? "提交中…" : isAddOnOrder ? "加單" : "下單"}
+                    {orderSubmitting ? t("提交中…") : isAddOnOrder ? t("加單") : t("下單")}
                   </button>
                 ) : null}
                 <button
                   className="rounded-2xl bg-slate-900 px-4 py-3 text-base font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
-                  title={!shift.openedAt ? "今日未開工：請先按頁首「開工」" : undefined}
+                  title={!shift.openedAt ? t("今日未開工：請先按頁首「開工」") : undefined}
                   disabled={isReadOnlySettled || !shift.openedAt}
                   onClick={() => void openSettlementModal()}
                   type="button"
                 >
-                  去結帳
+                  {t("去結帳")}
                 </button>
               </div>
 
               {offlineMode ? (
                 <div className="mt-3 w-full rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-700">
-                  目前離線，恢復網絡後可補傳資料
+                  {t("目前離線，恢復網絡後可補傳資料")}
                 </div>
               ) : null}
 
@@ -6637,12 +6681,12 @@ export function PosApp() {
                 <div className="flex items-center justify-between px-1">
                   <AutoAcceptPill
                     enabled={autoPrintEnabled}
-                    label="自動打印"
+                    label={t("自動打印")}
                     onChange={setAutoPrint}
                     size="sm"
                   />
                   <span className="text-[11px] font-medium text-slate-400">
-                    {autoPrintEnabled ? "落單／結帳自動出單" : "已關閉 · 唔會自動出單"}
+                    {autoPrintEnabled ? t("落單／結帳自動出單") : t("已關閉 · 唔會自動出單")}
                   </span>
                 </div>
                 <div className="mt-2 grid grid-cols-2 gap-2">
@@ -6653,7 +6697,7 @@ export function PosApp() {
                     onClick={printKitchenTicketNow}
                     type="button"
                   >
-                    {kitchenPrintSubmitting ? "打印中…" : "打印廚房單"}
+                    {kitchenPrintSubmitting ? t("打印中…") : t("打印廚房單")}
                   </button>
                   <button
                     aria-busy={receiptPrintSubmitting}
@@ -6662,12 +6706,12 @@ export function PosApp() {
                     onClick={printReceiptNow}
                     type="button"
                   >
-                    {receiptPrintSubmitting ? "打印中…" : "打印收據"}
+                    {receiptPrintSubmitting ? t("打印中…") : t("打印收據")}
                   </button>
                 </div>
                 {!autoPrintEnabled ? (
                   <div className="mt-2 rounded-xl bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-700">
-                    落單／結帳不會自動打印任何單據；上面兩個掣係手動打印，仍然可以使用。
+                    {t("落單／結帳不會自動打印任何單據；上面兩個掣係手動打印，仍然可以使用。")}
                   </div>
                 ) : null}
               </div>
@@ -6699,7 +6743,10 @@ export function PosApp() {
                       : payload.tone === "warning"
                         ? "warning"
                         : "info",
-                message: payload.message,
+                // ⚠️ pos-app 嘅 toast **存已翻譯字串**（顯示位係 `{toast.message}`，
+                //    唔會再過 t()）→ 一定要喺呢度翻譯埋。
+                //    `payload.message` 係字典 key（＋`vars` 佔位），唔係砌好嘅句子。
+                message: t(payload.message, payload.vars),
               })
             }
             onCheckout={(orderId) => setPayingOrderId(orderId)}
@@ -6707,8 +6754,8 @@ export function PosApp() {
               const result = confirmSelfOrder(order.id);
               setToast(
                 result.ok
-                  ? { tone: "success", message: `已接受自助單 ${order.localOrderNo}` }
-                  : { tone: "error", message: result.error ?? "接受失敗" },
+                  ? { tone: "success", message: t("已接受自助單 {no}", { no: order.localOrderNo }) }
+                  : { tone: "error", message: result.error ?? t("接受失敗") },
               );
               return result;
             }}
@@ -6716,8 +6763,8 @@ export function PosApp() {
               const result = rejectSelfOrder(order.id);
               setToast(
                 result.ok
-                  ? { tone: "success", message: `已拒絕自助單 ${order.localOrderNo}` }
-                  : { tone: "error", message: result.error ?? "拒絕失敗" },
+                  ? { tone: "success", message: t("已拒絕自助單 {no}", { no: order.localOrderNo }) }
+                  : { tone: "error", message: result.error ?? t("拒絕失敗") },
               );
               return result;
             }}
@@ -6752,7 +6799,7 @@ export function PosApp() {
         open={specModalOpen}
         selectedSpecs={selectedSpecValues}
         specGroups={specModalItem?.specGroups ?? []}
-        title={specModalItem ? `${specModalItem.name} 規格` : "規格"}
+        title={specModalItem ? t("{name} 規格", { name: specModalItem.name }) : t("規格")}
       />
 
       {marketPriceItem ? (
@@ -6768,7 +6815,7 @@ export function PosApp() {
         >
           <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_300px] md:h-[520px]">
             <div className="p-5">
-              <div className="text-xs font-semibold uppercase tracking-wide text-rose-500">時價菜</div>
+              <div className="text-xs font-semibold uppercase tracking-wide text-rose-500">{t("時價菜")}</div>
               <h3 className="mt-1 text-xl font-bold text-slate-900">{marketPriceItem.name}</h3>
               {marketPriceSpecs.length > 0 ? (
                 <ul className="mt-3 space-y-1 text-sm text-slate-500">
@@ -6780,21 +6827,21 @@ export function PosApp() {
                 </ul>
               ) : null}
               <p className="mt-4 text-sm text-slate-500">
-                請輸入本次下單的時價金額（{bootstrap.currency}）。
+                {t("請輸入本次下單的時價金額（")}{bootstrap.currency}）。
               </p>
               <div className="mt-3 rounded-2xl bg-slate-50 px-4 py-3 text-3xl font-bold text-slate-900">
                 {bootstrap.currency} {marketPriceValue || "0.00"}
               </div>
               <p className="mt-3 text-xs text-slate-400">
-                金額每次落單都不同，請向廚房確認後填入。
+                {t("金額每次落單都不同，請向廚房確認後填入。")}
               </p>
             </div>
             <FixedNumberPad
-              title="時價金額"
+              title={t("時價金額")}
               value={marketPriceValue}
               onChange={setMarketPriceValue}
               onConfirm={confirmMarketPrice}
-              confirmLabel="加入單"
+              confirmLabel={t("加入單")}
               showDisplay
             />
           </div>
@@ -6810,7 +6857,7 @@ export function PosApp() {
                 onClick={() => setNoteDraft("")}
                 type="button"
               >
-                清空
+                {t("清空")}
               </button>
               <button
                 className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white"
@@ -6830,21 +6877,21 @@ export function PosApp() {
                 }}
                 type="button"
               >
-                保存
+                {t("保存")}
               </button>
             </>
           }
-          description="可多選常用備註，也可自由輸入。"
+          description={t("可多選常用備註，也可自由輸入。")}
           onClose={() => setNoteModal(null)}
-          title={noteModal.type === "order" ? "全單備註" : "單品備註"}
+          title={noteModal.type === "order" ? t("全單備註") : t("單品備註")}
           widthClassName="max-w-2xl"
           zIndexClassName="z-[70]"
         >
             <div>
-              <div className="text-xs font-semibold text-slate-500">常用備註</div>
+              <div className="text-xs font-semibold text-slate-500">{t("常用備註")}</div>
               <div className="mt-2 flex flex-wrap gap-2">
                 {localSettings.notePresets.length === 0 ? (
-                  <div className="text-sm text-slate-500">尚未設定常用備註（可到 設置 → 備註 新增）。</div>
+                  <div className="text-sm text-slate-500">{t("尚未設定常用備註（可到 設置 → 備註 新增）。")}</div>
                 ) : (
                   localSettings.notePresets.map((preset) => (
                     <button
@@ -6865,7 +6912,7 @@ export function PosApp() {
             </div>
 
             <div className="mt-4">
-              <div className="text-xs font-semibold text-slate-500">自由輸入</div>
+              <div className="text-xs font-semibold text-slate-500">{t("自由輸入")}</div>
               {/*
                 iOS 鍵盤（2026-09-14 全單／單品備註「焦點有到、鍵盤唔彈」）四項設定：
                 ① autoFocus —— 焦點喺「開彈窗嗰下嘅 user gesture」內取得；
@@ -6887,7 +6934,7 @@ export function PosApp() {
                 enterKeyHint="done"
                 onChange={(event) => setNoteDraft(event.target.value)}
                 onPointerUp={(event) => refocusForIosKeyboard(event.currentTarget)}
-                placeholder="例如：不要吸管、少辣、走蔥..."
+                placeholder={t("例如：不要吸管、少辣、走蔥...")}
                 rows={4}
                 spellCheck={false}
                 style={{ touchAction: "manipulation", WebkitUserSelect: "text" }}
@@ -6910,30 +6957,29 @@ export function PosApp() {
                 }}
                 type="button"
               >
-                移除折扣
+                {t("移除折扣")}
               </button>
               <button
                 className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white"
                 onClick={() => saveItemDiscount(itemDiscountEditor, itemDiscountDraft)}
                 type="button"
               >
-                保存
+                {t("保存")}
               </button>
             </>
           }
-          description="此折扣只套用於該單品，不影響全單。"
+          description={t("此折扣只套用於該單品，不影響全單。")}
           onClose={() => setItemDiscountEditor(null)}
-          title="單品折扣"
+          title={t("單品折扣")}
           widthClassName="max-w-md"
         >
           <label className="grid gap-1 text-xs font-semibold text-slate-500">
-            選擇折扣
-            <select
+            {t("選擇折扣")}<select
               className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900"
               onChange={(event) => setItemDiscountDraft(event.target.value)}
               value={itemDiscountDraft}
             >
-              <option value="">冇折扣</option>
+              <option value="">{t("冇折扣")}</option>
               {localSettings.discounts.map((disc) => (
                 <option key={disc.id} value={disc.id}>
                   {disc.label}
@@ -6950,17 +6996,17 @@ export function PosApp() {
             if (!target) return null;
             return (
               <ResponsiveModal
-                description={`${target.tableName} · 退回可編輯後重新結帳`}
+                description={t("{table} · 退回可編輯後重新結帳", { table: target.tableName })}
                 onClose={() => {
                   setRoModalOpen(false);
                   setRoReason("");
                 }}
-                title="返結帳（反結賬）"
+                title={t("返結帳（反結賬）")}
                 widthClassName="max-w-md"
               >
                 <div className="grid gap-3">
                   <p className="text-[11px] text-amber-700">
-                    必須揀返結原因。確認後此單退回可編輯，可改價／加餐後重新結帳。
+                    {t("必須揀返結原因。確認後此單退回可編輯，可改價／加餐後重新結帳。")}
                   </p>
                   {/* 🔴 線上已付金額鎖死（商家 2026-09-12 定案：准返結但唔可以改 prepaidAmount）；
                       嗰筆錢喺 Ledger，POS 冇 RPC 可以沖正 → 一定要當面講清楚，
@@ -6971,9 +7017,8 @@ export function PosApp() {
                     if (prepaid <= 0) return null;
                     return (
                       <p className="rounded-xl bg-red-50 px-3 py-2 text-[11px] font-semibold leading-relaxed text-red-700">
-                        ⚠️ 此單線上已付 {bootstrap?.currency ?? "MOP"} {prepaid.toFixed(2)}
-                        ，返結唔會沖正／退款（款項喺會員通 Ledger）。
-                      </p>
+                        {t("⚠️ 此單線上已付 ")}{bootstrap?.currency ?? "MOP"} {prepaid.toFixed(2)}
+                        {t("，返結唔會沖正／退款（款項喺會員通 Ledger）。")}</p>
                     );
                   })()}
                   <select
@@ -6982,7 +7027,7 @@ export function PosApp() {
                     onChange={(e) => setRoReason(e.target.value)}
                   >
                     <option value="" disabled>
-                      揀返結原因…
+                      {t("揀返結原因…")}
                     </option>
                     {(loadPosLocalSettings()?.reopenReasons ?? []).map((r) => (
                       <option key={r} value={r}>
@@ -6996,7 +7041,7 @@ export function PosApp() {
                     disabled={!roReason || roSubmitting}
                     onClick={() => void handlePosReopen()}
                   >
-                    {roSubmitting ? "處理中…" : "返結帳"}
+                    {roSubmitting ? t("處理中…") : t("返結帳")}
                   </button>
                 </div>
               </ResponsiveModal>
@@ -7014,7 +7059,7 @@ export function PosApp() {
                 onClick={() => setViewingOrderId(null)}
                 type="button"
               >
-                關閉
+                {t("關閉")}
               </button>
               {canReprintBill(viewingOrder.status) ? (
                 <button
@@ -7022,7 +7067,7 @@ export function PosApp() {
                   onClick={() => reprintBillForOrder(viewingOrder)}
                   type="button"
                 >
-                  補打帳單
+                  {t("補打帳單")}
                 </button>
               ) : null}
               <button
@@ -7030,7 +7075,7 @@ export function PosApp() {
                 onClick={() => reprintOrder(viewingOrder)}
                 type="button"
               >
-                重打單
+                {t("重打單")}
               </button>
               {/* 用戶反饋：查看內嘅掣要同外面（quick strip）完全一致。
                   將「已完成 / 去結帳 / 取消結帳」舊邏輯換成依訂單狀態 mirror strip：
@@ -7064,10 +7109,10 @@ export function PosApp() {
                       setOrderActionRequest({ type: "void_platform_order", orderId: v.id });
                       setOrderActionReason("");
                     }}
-                    title="平台單作廢（覆寫）：任何階段都可用，會將呢張單唔計入報表"
+                    title={t("平台單作廢（覆寫）：任何階段都可用，會將呢張單唔計入報表")}
                     type="button"
                   >
-                    取消
+                    {t("取消")}
                   </button>
                 ) : null;
 
@@ -7085,20 +7130,20 @@ export function PosApp() {
                       onConfirm={() => {
                         const result = confirmSelfOrder(v.id);
                         if (result.ok) {
-                          setToast({ tone: "success", message: `已接受自助單 ${v.localOrderNo}` });
+                          setToast({ tone: "success", message: t("已接受自助單 {no}", { no: v.localOrderNo }) });
                           setViewingOrderId(null);
                         } else {
-                          setToast({ tone: "error", message: result.error ?? "接受失敗" });
+                          setToast({ tone: "error", message: result.error ?? t("接受失敗") });
                         }
                         return result;
                       }}
                       onReject={() => {
                         const result = rejectSelfOrder(v.id);
                         if (result.ok) {
-                          setToast({ tone: "success", message: `已拒絕自助單 ${v.localOrderNo}` });
+                          setToast({ tone: "success", message: t("已拒絕自助單 {no}", { no: v.localOrderNo }) });
                           setViewingOrderId(null);
                         } else {
-                          setToast({ tone: "error", message: result.error ?? "拒絕失敗" });
+                          setToast({ tone: "error", message: result.error ?? t("拒絕失敗") });
                         }
                         return result;
                       }}
@@ -7119,7 +7164,7 @@ export function PosApp() {
                           }}
                           type="button"
                         >
-                          去結帳
+                          {t("去結帳")}
                         </button>
                       ) : null}
                       {!isReady && v.status !== "draft" ? (
@@ -7128,7 +7173,7 @@ export function PosApp() {
                           onClick={() => updateQuickFulfillment(v.id)}
                           type="button"
                         >
-                          可取餐
+                          {t("可取餐")}
                         </button>
                       ) : null}
                       {isBothDone ? (
@@ -7151,7 +7196,7 @@ export function PosApp() {
                           }}
                           type="button"
                         >
-                          取消結帳
+                          {t("取消結帳")}
                         </button>
                       ) : null}
                     </>
@@ -7180,7 +7225,7 @@ export function PosApp() {
                       }}
                       type="button"
                     >
-                      取消結帳
+                      {t("取消結帳")}
                     </button>
                   );
                   if (isOpen && !isReady) {
@@ -7192,7 +7237,7 @@ export function PosApp() {
                           onClick={() => updateQuickFulfillment(v.id)}
                           type="button"
                         >
-                          可取餐
+                          {t("可取餐")}
                         </button>
                       </>
                     );
@@ -7226,7 +7271,7 @@ export function PosApp() {
                         }}
                         type="button"
                       >
-                        取消結帳
+                        {t("取消結帳")}
                       </button>
                     ) : null}
                     {v.status !== "settled" &&
@@ -7241,7 +7286,7 @@ export function PosApp() {
                         }}
                         type="button"
                       >
-                        去結帳
+                        {t("去結帳")}
                       </button>
                     ) : null}
                     {/* 🔴 已結帳／已完成嘅外賣平台單要靠呢度先有掣（`isQuick` 分支只處理
@@ -7267,7 +7312,7 @@ export function PosApp() {
                     }}
                     type="button"
                   >
-                    部分退款
+                    {t("部分退款")}
                   </button>
                   <button
                     className="rounded-2xl bg-red-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
@@ -7282,7 +7327,7 @@ export function PosApp() {
                     }}
                     type="button"
                   >
-                    整單退款
+                    {t("整單退款")}
                   </button>
                 </>
               ) : null}
@@ -7292,7 +7337,7 @@ export function PosApp() {
           header={
             <div className="flex items-start justify-between gap-3">
               <div>
-                <div className="text-xl font-semibold text-slate-900">訂單詳情</div>
+                <div className="text-xl font-semibold text-slate-900">{t("訂單詳情")}</div>
                 <div className="mt-1 text-sm text-slate-500">
                   {viewingOrder.localOrderNo} · {viewingOrder.tableName}
                 </div>
@@ -7310,7 +7355,7 @@ export function PosApp() {
                         className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold ${badge.bgClass} ${badge.textClass}`}
                       >
                         <span className={`h-2 w-2 rounded-full ${badge.dotClass}`} />
-                        {badge.label}
+                        {t(badge.label)}
                       </div>
                       {/* 快餐單（2026-09-12）：付款狀態同出餐狀態係兩個獨立維度，
                           要同時顯示（例：已結帳 · 製作中）。此時「待完成」多餘 → 唔再出。 */}
@@ -7321,7 +7366,7 @@ export function PosApp() {
                             <div
                               className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${pay.bgClass} ${pay.textClass}`}
                             >
-                              {pay.label}
+                              {t(pay.label)}
                             </div>
                           );
                         })()
@@ -7330,7 +7375,7 @@ export function PosApp() {
                         viewingOrder.status !== "refunded" &&
                         viewingOrder.status !== "partially_refunded" ? (
                         <div className="inline-flex rounded-full bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-700">
-                          待完成
+                          {t("待完成")}
                         </div>
                       ) : null}
                     </>
@@ -7355,7 +7400,7 @@ export function PosApp() {
                       ) : null}
                       {/* docs/84 §7：break-words 預防窄容器下長備註向右撐破版面 */}
                       {item.note ? (
-                        <div className="mt-1 whitespace-pre-wrap break-words text-xs text-slate-500">備註：{item.note}</div>
+                        <div className="mt-1 whitespace-pre-wrap break-words text-xs text-slate-500">{t("備註：")}{item.note}</div>
                       ) : null}
                       {/* 單品折扣：原價刪除線 + 折後價 + 優惠金額（用戶要求查看內見到「折扣多少」） */}
                       <div className="mt-1">
@@ -7364,7 +7409,7 @@ export function PosApp() {
                       {/* 單品折扣原因（2026-09-11）：逐件顯示，令「邊件菜、點解折」一眼睇到 */}
                       {item.discountNote ? (
                         <div className="mt-1 whitespace-pre-wrap break-words text-xs font-semibold text-amber-700">
-                          折扣原因：{item.discountNote}
+                          {t("折扣原因：")}{item.discountNote}
                         </div>
                       ) : null}
                     </div>
@@ -7387,7 +7432,7 @@ export function PosApp() {
                       <div className="truncate text-sm font-semibold text-slate-900 line-through">
                         {item.name}
                         <span className="ml-2 inline-flex rounded-full bg-red-500 px-2 py-0.5 text-[11px] font-bold text-white">
-                          已退菜
+                          {t("已退菜")}
                         </span>
                       </div>
                       {item.selectedSpecs?.length ? (
@@ -7396,11 +7441,11 @@ export function PosApp() {
                         </div>
                       ) : null}
                       {item.voidedReason ? (
-                        <div className="mt-1 text-[11px] text-red-600">退菜原因：{item.voidedReason}</div>
+                        <div className="mt-1 text-[11px] text-red-600">{t("退菜原因：")}{item.voidedReason}</div>
                       ) : null}
                     </div>
                     <div className="shrink-0 rounded-full bg-red-200 px-3 py-1 text-xs font-semibold text-red-700">
-                      已退 x{item.quantity}
+                      {t("已退 x")}{item.quantity}
                     </div>
                   </div>
                 </div>
@@ -7417,8 +7462,7 @@ export function PosApp() {
               {/* 折扣備註（2026-09-11 需求 #2）：凡影響實收嘅調整都要見到原因 */}
               {viewingOrderDiscountNotes.length > 0 ? (
                 <div className="mt-2 rounded-2xl border border-amber-200 bg-amber-50/60 px-3 py-2 text-sm text-slate-500">
-                  折扣備註：
-                  <span className="ml-1 inline-flex flex-wrap gap-1 align-middle">
+                  {t("折扣備註：")}<span className="ml-1 inline-flex flex-wrap gap-1 align-middle">
                     {viewingOrderDiscountNotes.map((note, index) => (
                       <span
                         key={`${note.kind}-${note.text}-${index}`}
@@ -7435,7 +7479,7 @@ export function PosApp() {
                   令佢以為插件冇推到。店內單冇 `platformFees` → 組件自己唔 render。 */}
               <PlatformFeeBreakdown currency={bootstrap.currency} fees={viewingOrder.platformFees} />
               <div className="mt-2 flex items-center justify-between text-sm text-slate-500">
-                <span>總計</span>
+                <span>{t("總計")}</span>
                 <span className="text-base font-semibold text-slate-900">{formatMoney(viewingOrder.total, bootstrap.currency)}</span>
               </div>
               {/* 平台實收（2026-09-26 需求）：營業額 vs 平台實際過數。
@@ -7449,14 +7493,14 @@ export function PosApp() {
               ) : null}
               {viewingOrder.orderNote ? (
                 <div className="mt-2 text-sm text-slate-500">
-                  全單備註：<span className="font-semibold text-slate-900">{viewingOrder.orderNote}</span>
+                  {t("全單備註：")}<span className="font-semibold text-slate-900">{viewingOrder.orderNote}</span>
                 </div>
               ) : null}
               {/* 免單：獨立審計欄位（唔係 orderNote —— 後者受 docs/84 鎖定）。
                   docs/84 §7：長文字要 whitespace-pre-wrap break-words，唔好用 truncate。 */}
               {viewingOrder.compNote ? (
                 <div className="mt-2 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-500">
-                  免單備註：<span className="whitespace-pre-wrap break-words font-semibold text-slate-900">{viewingOrder.compNote}</span>
+                  {t("免單備註：")}<span className="whitespace-pre-wrap break-words font-semibold text-slate-900">{viewingOrder.compNote}</span>
                   {viewingOrder.compedAt ? (
                     <span className="ml-2 text-xs">（{formatMacauDateTime(viewingOrder.compedAt)}）</span>
                   ) : null}
@@ -7464,7 +7508,7 @@ export function PosApp() {
               ) : null}
               {viewingOrder.prepaidAmount ? (
                 <div className="mt-2 flex items-center justify-between text-sm text-slate-500">
-                  <span>已支付</span>
+                  <span>{t("已支付")}</span>
                   <span className="font-semibold text-slate-900">
                     {formatMoney(viewingOrder.prepaidAmount, bootstrap.currency)}
                   </span>
@@ -7472,17 +7516,17 @@ export function PosApp() {
               ) : null}
               {viewingOrder.cancelledReason ? (
                 <div className="mt-2 text-sm text-slate-500">
-                  取消原因：<span className="font-semibold text-slate-900">{viewingOrder.cancelledReason}</span>
+                  {t("取消原因：")}<span className="font-semibold text-slate-900">{viewingOrder.cancelledReason}</span>
                 </div>
               ) : null}
               {viewingOrder.refundedReason ? (
                 <div className="mt-2 text-sm text-slate-500">
-                  退款原因：<span className="font-semibold text-slate-900">{viewingOrder.refundedReason}</span>
+                  {t("退款原因：")}<span className="font-semibold text-slate-900">{viewingOrder.refundedReason}</span>
                 </div>
               ) : null}
               {(viewingOrder.refundedAmount ?? 0) > 0 ? (
                 <div className="mt-2 flex items-center justify-between text-sm text-slate-500">
-                  <span>已退款</span>
+                  <span>{t("已退款")}</span>
                   <span className="font-semibold text-red-700">
                     {formatMoney(viewingOrder.refundedAmount ?? 0, bootstrap.currency)}
                   </span>
@@ -7491,21 +7535,21 @@ export function PosApp() {
               {viewingOrder.refundRecords?.length ? (
                 <div className="mt-4 rounded-2xl border border-red-100 bg-red-50/60 p-3">
                   <div className="flex items-center justify-between gap-3">
-                    <div className="text-sm font-semibold text-slate-900">退款明細</div>
+                    <div className="text-sm font-semibold text-slate-900">{t("退款明細")}</div>
                     <div className="flex flex-wrap gap-2">
                       <button
                         className="rounded-2xl bg-white px-3 py-2 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
                         onClick={() => exportRefundDetails(viewingOrder)}
                         type="button"
                       >
-                        導出明細
+                        {t("導出明細")}
                       </button>
                       <button
                         className="rounded-2xl bg-white px-3 py-2 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
                         onClick={() => setRefundSummaryExportOpen(true)}
                         type="button"
                       >
-                        匯總導出
+                        {t("匯總導出")}
                       </button>
                     </div>
                   </div>
@@ -7521,9 +7565,9 @@ export function PosApp() {
                               {formatMoney(record.amount, bootstrap.currency)}
                             </span>
                           </div>
-                          <div className="mt-1 text-xs text-slate-500">原因：{record.reason}</div>
+                          <div className="mt-1 text-xs text-slate-500">{t("原因：")}{record.reason}</div>
                           <div className="mt-1 text-xs text-slate-500">
-                            操作人：{record.employeeName ?? record.employeeAccount ?? "未記錄"}
+                            {t("操作人：")}{record.employeeName ?? record.employeeAccount ?? t("未記錄")}
                           </div>
                           {record.items?.length ? (
                             <div className="mt-2 grid gap-1">
@@ -7550,14 +7594,14 @@ export function PosApp() {
           header={
             <div className="flex items-start justify-between gap-3">
               <div>
-                <div className="text-xl font-semibold text-slate-900">結帳</div>
+                <div className="text-xl font-semibold text-slate-900">{t("結帳")}</div>
                 <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-slate-500">
                   <span>
                     {payingOrderId === CART_PAYING_ID
-                      ? "本次結帳"
+                      ? t("本次結帳")
                       : currentSettlementOrder
-                        ? `訂單 ${currentSettlementOrder.localOrderNo}`
-                        : "待結帳訂單"}
+                        ? t("訂單 {no}", { no: currentSettlementOrder.localOrderNo })
+                        : t("待結帳訂單")}
                   </span>
                   {/* 顯示位 ③：結帳畫面（規格 7）*/}
                   {currentSettlementOrder ? <OrderSourceBadge order={currentSettlementOrder} /> : null}
@@ -7574,7 +7618,7 @@ export function PosApp() {
                     }}
                     type="button"
                   >
-                    取消結帳
+                    {t("取消結帳")}
                   </button>
                 ) : null}
                 <button
@@ -7585,7 +7629,7 @@ export function PosApp() {
                   }}
                   type="button"
                 >
-                  關閉
+                  {t("關閉")}
                 </button>
               </div>
             </div>
@@ -7596,10 +7640,10 @@ export function PosApp() {
             <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
               <div className="grid gap-4 md:grid-cols-[1.1fr_0.9fr]">
                 <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                  <div className="text-sm font-semibold text-slate-900">本次支付內容</div>
+                  <div className="text-sm font-semibold text-slate-900">{t("本次支付內容")}</div>
                   <div className="mt-3 space-y-2">
                   <div className="flex items-center justify-between text-sm">
-                    <span className="text-slate-500">小計</span>
+                    <span className="text-slate-500">{t("小計")}</span>
                     <span className="font-semibold text-slate-900">
                       {formatMoney(paymentSummary.subtotal, bootstrap.currency)}
                     </span>
@@ -7613,7 +7657,7 @@ export function PosApp() {
                   />
                   {selectedMoneyVoucherAvos > 0 ? (
                     <div className="flex items-center justify-between text-sm">
-                      <span className="text-slate-500">已選現金券（兌換入餘額）</span>
+                      <span className="text-slate-500">{t("已選現金券（兌換入餘額）")}</span>
                       <span className="font-semibold text-slate-900">
                         {formatMoney(avosToMop(selectedMoneyVoucherAvos), bootstrap.currency)}
                       </span>
@@ -7621,7 +7665,7 @@ export function PosApp() {
                   ) : null}
                   {paymentSummary.prepaidAmount > 0 ? (
                     <div className="flex items-center justify-between text-sm">
-                      <span className="text-slate-500">客人已支付</span>
+                      <span className="text-slate-500">{t("客人已支付")}</span>
                       <span className="font-semibold text-emerald-700">
                         {formatMoney(paymentSummary.prepaidAmount, bootstrap.currency)}
                       </span>
@@ -7629,20 +7673,20 @@ export function PosApp() {
                   ) : null}
                   <div className="flex items-center justify-between text-sm">
                     <span className="text-slate-500">
-                      {paymentSummary.prepaidAmount > 0 ? "剩餘需收" : "應收"}
+                      {paymentSummary.prepaidAmount > 0 ? t("剩餘需收") : t("應收")}
                     </span>
                     <span className="text-2xl font-semibold text-orange-600">
                       {formatMoney(paymentSummary.total, bootstrap.currency)}
                     </span>
                   </div>
                   <div className="flex items-center justify-between text-sm">
-                    <span className="text-slate-500">會員扣款</span>
+                    <span className="text-slate-500">{t("會員扣款")}</span>
                     <span className="font-semibold text-slate-900">
                       {formatMoney(paymentSummary.memberDeduction, bootstrap.currency)}
                     </span>
                   </div>
                   <div className="flex items-center justify-between text-sm">
-                    <span className="text-slate-500">找續</span>
+                    <span className="text-slate-500">{t("找續")}</span>
                     <span className="font-semibold text-emerald-600">
                       {formatMoney(changeDue, bootstrap.currency)}
                     </span>
@@ -7651,13 +7695,12 @@ export function PosApp() {
 
                   <div className="mt-4 grid gap-3">
                   <label className="grid gap-1 text-xs font-semibold text-slate-500">
-                    全單折扣
-                    <select
+                    {t("全單折扣")}<select
                       className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900"
                       onChange={(event) => setDiscountValue(event.target.value)}
                       value={discountValue}
                     >
-                      <option value="">冇折扣</option>
+                      <option value="">{t("冇折扣")}</option>
                       {localSettings.discounts.map((disc) => (
                         <option key={disc.id} value={disc.id}>
                           {disc.label}
@@ -7666,8 +7709,7 @@ export function PosApp() {
                     </select>
                   </label>
                   <label className="grid gap-1 text-xs font-semibold text-slate-500">
-                    系統抹零
-                    <input
+                    {t("系統抹零")}<input
                       className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900"
                       inputMode="decimal"
                       onChange={(event) => setRoundingInput(event.target.value)}
@@ -7676,8 +7718,7 @@ export function PosApp() {
                     />
                   </label>
                   <label className="grid gap-1 text-xs font-semibold text-slate-500">
-                    實收金額
-                    <input
+                    {t("實收金額")}<input
                       className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900"
                       inputMode="decimal"
                       onChange={(event) => setReceivedAmount(event.target.value)}
@@ -7685,27 +7726,26 @@ export function PosApp() {
                     />
                   </label>
                   <div className="rounded-2xl border border-slate-200 bg-white p-3">
-                    <div className="text-xs font-semibold text-slate-500">會員優惠 / 餘額</div>
+                    <div className="text-xs font-semibold text-slate-500">{t("會員優惠 / 餘額")}</div>
                     <div className="mt-2 text-xs text-slate-500">
-                      輸入會員手機號碼後，可在右側「支付方式」選「會員餘額」扣款，並核銷獎賞券（須連線）。
+                      {t("輸入會員手機號碼後，可在右側「支付方式」選「會員餘額」扣款，並核銷獎賞券（須連線）。")}
                     </div>
                     {offlineMode && memberPhone.length === 8 ? (
-                      <div className="mt-2 text-xs text-amber-700">離線狀態無法查詢會員或扣款。</div>
+                      <div className="mt-2 text-xs text-amber-700">{t("離線狀態無法查詢會員或扣款。")}</div>
                     ) : null}
                     {ledgerMember ? (
                       <div className="mt-3 rounded-2xl bg-slate-50 p-3 text-sm">
                         <div className="font-semibold text-slate-900">
-                          {ledgerMember.displayName ?? "會員"} · {ledgerMember.customerPhone}
+                          {ledgerMember.displayName ?? t("會員")} · {ledgerMember.customerPhone}
                         </div>
                         <div className="mt-1 text-slate-500">
-                          餘額 {formatMoney(avosToMop(ledgerMember.balanceAvos), bootstrap.currency)} · 可用券{" "}
-                          {ledgerMember.redeemableGrants.length} 張
-                        </div>
+                          {t("餘額 ")}{formatMoney(avosToMop(ledgerMember.balanceAvos), bootstrap.currency)} {t("· 可用券")}{" "}
+                          {ledgerMember.redeemableGrants.length} {t("張")}</div>
                         <label className="mt-3 grid gap-1">
-                          <span className="text-xs font-semibold text-slate-600">核銷獎賞券</span>
+                          <span className="text-xs font-semibold text-slate-600">{t("核銷獎賞券")}</span>
                           <div className="grid gap-2">
                             {ledgerMember.redeemableGrants.length === 0 ? (
-                              <div className="text-xs text-slate-500">目前沒有可核銷獎賞券</div>
+                              <div className="text-xs text-slate-500">{t("目前沒有可核銷獎賞券")}</div>
                             ) : (
                               ledgerMember.redeemableGrants.map((grant) => {
                                 const selected = selectedGrantIds.includes(grant.grantId);
@@ -7722,8 +7762,8 @@ export function PosApp() {
                                       <div className="mt-1 text-xs text-slate-500">
                                         {grantTypeLabel(grant.prizeType)}
                                         {grant.prizeType === "money_voucher"
-                                          ? ` · ${formatMoney(avosToMop(grant.rewardAmountAvos), bootstrap.currency)} 入餘額`
-                                          : " · 結帳時核銷"}
+                                          ? t(" · {amount} 入餘額", { amount: formatMoney(avosToMop(grant.rewardAmountAvos), bootstrap.currency) })
+                                          : t(" · 結帳時核銷")}
                                       </div>
                                     </div>
                                     <input
@@ -7752,9 +7792,9 @@ export function PosApp() {
                 </div>
 
                 <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                  <div className="text-sm font-semibold text-slate-900">支付方式</div>
+                  <div className="text-sm font-semibold text-slate-900">{t("支付方式")}</div>
                   <div className="mt-1 text-xs text-slate-500">
-                    可選「會員餘額」搭配一種其他支付方式；餘額不足時剩餘金額以所選方式收取。
+                    {t("可選「會員餘額」搭配一種其他支付方式；餘額不足時剩餘金額以所選方式收取。")}
                   </div>
                   <div className="mt-3 grid gap-2">
                     <button
@@ -7772,16 +7812,16 @@ export function PosApp() {
                       }}
                       type="button"
                     >
-                      <div>會員餘額</div>
+                      <div>{t("會員餘額")}</div>
                       {ledgerMember ? (
                         <div className="mt-1 text-xs font-normal opacity-80">
-                          可用 {formatMoney(avosToMop(memberAvailableAvos), bootstrap.currency)}
+                          {t("可用 ")}{formatMoney(avosToMop(memberAvailableAvos), bootstrap.currency)}
                           {useMemberBalance && memberDeduction > 0
-                            ? ` · 本次扣 ${formatMoney(memberDeduction, bootstrap.currency)}`
+                            ? t(" · 本次扣 {amount}", { amount: formatMoney(memberDeduction, bootstrap.currency) })
                             : ""}
                         </div>
                       ) : (
-                        <div className="mt-1 text-xs font-normal">請先在右側輸入會員手機號碼</div>
+                        <div className="mt-1 text-xs font-normal">{t("請先在右側輸入會員手機號碼")}</div>
                       )}
                     </button>
                     {paymentMethods.map((method) => (
@@ -7819,7 +7859,7 @@ export function PosApp() {
                         paymentSummary.total > 0 &&
                         !selectedPaymentMethod
                       ) {
-                        setToast({ tone: "info", message: "會員餘額不足，請再選一種支付方式。" });
+                        setToast({ tone: "info", message: t("會員餘額不足，請再選一種支付方式。") });
                         return;
                       }
                       const method =
@@ -7831,12 +7871,12 @@ export function PosApp() {
                     type="button"
                   >
                     {memberCheckoutSubmitting
-                      ? "處理會員扣款中…"
+                      ? t("處理會員扣款中…")
                       : isOnlinePaidComplete
-                        ? "客人已支付，完成訂單"
+                        ? t("客人已支付，完成訂單")
                         : memberCheckoutRedeemDone
-                          ? "重試扣款"
-                          : "去結帳"}
+                          ? t("重試扣款")
+                          : t("去結帳")}
                   </button>
 
                   {/* 免單：全額減免後照結帳（實收 0），必須選／輸入備註。
@@ -7850,38 +7890,37 @@ export function PosApp() {
                     }}
                     type="button"
                   >
-                    免單
+                    {t("免單")}
                   </button>
                 </div>
               </div>
 
               <aside className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white">
                 <div className="border-b border-slate-100 px-4 py-4">
-                  <div className="text-sm font-semibold text-slate-900">會員</div>
-                  <div className="mt-1 text-xs text-slate-500">輸入 8 位手機號碼後會自動查詢</div>
+                  <div className="text-sm font-semibold text-slate-900">{t("會員")}</div>
+                  <div className="mt-1 text-xs text-slate-500">{t("輸入 8 位手機號碼後會自動查詢")}</div>
                 </div>
                 <div className="min-h-0 flex-1 overflow-auto px-4 py-4">
                   <label className="grid gap-1 text-xs font-semibold text-slate-500">
-                    會員號碼（8 位）
-                    <input
+                    {t("會員號碼（8 位）")}<input
                       className="rounded-2xl border border-slate-200 bg-white px-3 py-3 text-base font-semibold text-slate-900 tracking-widest"
                       inputMode="numeric"
                       maxLength={8}
                       onChange={(event) => handleMemberPhoneChange(event.target.value)}
-                      placeholder="例如：63936542"
+                      placeholder={t("例如：63936542")}
                       value={memberPhone}
                     />
                   </label>
-                  {memberSearching ? <div className="mt-2 text-xs text-slate-500">搜尋中…</div> : null}
+                  {memberSearching ? <div className="mt-2 text-xs text-slate-500">{t("搜尋中…")}</div> : null}
                   {memberSearchHint ? <div className="mt-2 text-xs text-red-600">{memberSearchHint}</div> : null}
                   {ledgerMember ? (
                     <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm">
                       <div className="font-semibold text-slate-900">
-                        {ledgerMember.displayName ?? "會員"}
+                        {ledgerMember.displayName ?? t("會員")}
                       </div>
                       <div className="mt-1 text-xs text-slate-600">{ledgerMember.customerPhone}</div>
                       <div className="mt-2 text-xs text-slate-500">
-                        餘額 {formatMoney(avosToMop(ledgerMember.balanceAvos), bootstrap.currency)} · 可用券{" "}
+                        {t("餘額 ")}{formatMoney(avosToMop(ledgerMember.balanceAvos), bootstrap.currency)} {t("· 可用券")}{" "}
                         {ledgerMember.redeemableGrants.length}
                       </div>
                     </div>
@@ -7908,7 +7947,7 @@ export function PosApp() {
                 }}
                 type="button"
               >
-                取消
+                {t("取消")}
               </button>
               <button
                 className="rounded-2xl bg-red-600 px-4 py-2 text-sm font-semibold text-white"
@@ -7922,20 +7961,20 @@ export function PosApp() {
                 type="button"
               >
                 {orderActionRequest.type === "refund_order"
-                  ? "確認退款"
+                  ? t("確認退款")
                   : orderActionRequest.type === "void_platform_order"
-                    ? "確認取消（覆寫）"
-                    : "確認取消"}
+                    ? t("確認取消（覆寫）")
+                    : t("確認取消")}
               </button>
             </>
           }
           description={orders.find((order) => order.id === orderActionRequest.orderId)?.localOrderNo ?? "--"}
           title={
             orderActionRequest.type === "refund_order"
-              ? "退款原因"
+              ? t("退款原因")
               : orderActionRequest.type === "void_platform_order"
-                ? "取消平台單（覆寫）"
-                : "取消結帳原因"
+                ? t("取消平台單（覆寫）")
+                : t("取消結帳原因")
           }
           widthClassName="max-w-md"
           zIndexClassName="z-[60]"
@@ -7943,10 +7982,7 @@ export function PosApp() {
               {orderActionRequest.type === "void_platform_order" ? (
                 /* 🔴 講清楚呢個係 override：唔跟狀態流程，而且會即刻影響報表。 */
                 <p className="mb-2 rounded-2xl bg-amber-50 px-3 py-2 text-xs text-amber-800 ring-1 ring-amber-200">
-                  平台單作廢（覆寫）：<b>任何階段都可以用</b>（含已結帳／已完成）。
-                  執行後呢張單會變成「已取消」，<b>即刻唔計入營業額／報表</b>。
-                  平台照樣收錢嘅話，請自行對帳。
-                </p>
+                  {t("平台單作廢（覆寫）：")}<b>{t("任何階段都可以用")}</b>{t("（含已結帳／已完成）。 執行後呢張單會變成「已取消」，")}<b>{t("即刻唔計入營業額／報表")}</b>{t("。 平台照樣收錢嘅話，請自行對帳。")}</p>
               ) : null}
               <input
                 autoFocus
@@ -7954,10 +7990,10 @@ export function PosApp() {
                 onChange={(event) => setOrderActionReason(event.target.value)}
                 placeholder={
                   orderActionRequest.type === "refund_order"
-                    ? "例如：客人退款 / 支付失敗"
+                    ? t("例如：客人退款 / 支付失敗")
                     : orderActionRequest.type === "void_platform_order"
-                      ? "例如：客人已取消 / 平台已退款（唔填＝平台單作廢（覆寫））"
-                      : "例如：客人不要了 / 重開一單"
+                      ? t("例如：客人已取消 / 平台已退款（唔填＝平台單作廢（覆寫））")
+                      : t("例如：客人不要了 / 重開一單")
                 }
                 value={orderActionReason}
               />
@@ -7974,36 +8010,36 @@ export function PosApp() {
                 onClick={() => setRefundSummaryExportOpen(false)}
                 type="button"
               >
-                取消
+                {t("取消")}
               </button>
               <button
                 className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white"
                 onClick={exportRefundSummary}
                 type="button"
               >
-                導出 CSV
+                {t("導出 CSV")}
               </button>
             </>
           }
-          description="可按日期或按員工，把目前訂單中的退款記錄匯總導出成 CSV。"
-          title="退款匯總導出"
+          description={t("可按日期或按員工，把目前訂單中的退款記錄匯總導出成 CSV。")}
+          title={t("退款匯總導出")}
           widthClassName="max-w-lg"
           zIndexClassName="z-[60]"
         >
             <div className="grid gap-3 md:grid-cols-2">
               <label className="grid gap-1 text-sm font-semibold text-slate-700">
-                <span className="text-xs text-slate-500">匯總方式</span>
+                <span className="text-xs text-slate-500">{t("匯總方式")}</span>
                 <select
                   className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
                   onChange={(event) => setRefundSummaryMode(event.target.value as "date" | "employee")}
                   value={refundSummaryMode}
                 >
-                  <option value="date">按日期</option>
-                  <option value="employee">按員工</option>
+                  <option value="date">{t("按日期")}</option>
+                  <option value="employee">{t("按員工")}</option>
                 </select>
               </label>
               <label className="grid gap-1 text-sm font-semibold text-slate-700">
-                <span className="text-xs text-slate-500">開始日期</span>
+                <span className="text-xs text-slate-500">{t("開始日期")}</span>
                 <input
                   className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
                   onChange={(event) => setRefundSummaryDateFrom(event.target.value)}
@@ -8012,7 +8048,7 @@ export function PosApp() {
                 />
               </label>
               <label className="grid gap-1 text-sm font-semibold text-slate-700">
-                <span className="text-xs text-slate-500">結束日期</span>
+                <span className="text-xs text-slate-500">{t("結束日期")}</span>
                 <input
                   className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
                   onChange={(event) => setRefundSummaryDateTo(event.target.value)}
@@ -8055,8 +8091,8 @@ export function PosApp() {
                 <>
                   <div className="flex items-start justify-between gap-3 border-b border-slate-100 pb-4">
                     <div>
-                      <div className="text-lg font-semibold text-slate-900">部分退款</div>
-                      <div className="mt-1 text-sm text-slate-500">{order.localOrderNo} · 選擇要退款的菜品與數量</div>
+                      <div className="text-lg font-semibold text-slate-900">{t("部分退款")}</div>
+                      <div className="mt-1 text-sm text-slate-500">{order.localOrderNo} {t("· 選擇要退款的菜品與數量")}</div>
                     </div>
                     <button
                       className="rounded-full bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700"
@@ -8067,7 +8103,7 @@ export function PosApp() {
                       }}
                       type="button"
                     >
-                      關閉
+                      {t("關閉")}
                     </button>
                   </div>
                   <div className="mt-4 grid gap-3">
@@ -8077,8 +8113,7 @@ export function PosApp() {
                             <div className="min-w-0">
                               <div className="text-sm font-semibold text-slate-900">{item.name}</div>
                               <div className="mt-1 text-xs text-slate-500">
-                                單價 {formatMoney(item.price, bootstrap.currency)} · 可退 {availableQty} 份
-                              </div>
+                                {t("單價 ")}{formatMoney(item.price, bootstrap.currency)} {t("· 可退 {n} 份", { n: availableQty })}</div>
                               {item.selectedSpecs?.length ? (
                                 <div className="mt-1 text-xs text-slate-500">
                                   {item.selectedSpecs.map((spec) => `${spec.groupName}:${spec.optionLabel}`).join(" / ")}
@@ -8117,16 +8152,16 @@ export function PosApp() {
                       ))}
                   <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
                     <label className="grid gap-1 text-sm font-semibold text-slate-700">
-                      <span className="text-xs text-slate-500">退款原因</span>
+                      <span className="text-xs text-slate-500">{t("退款原因")}</span>
                       <input
                         className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
                         onChange={(event) => setPartialRefundReason(event.target.value)}
-                        placeholder="例如：少做一杯 / 客人退某款配料"
+                        placeholder={t("例如：少做一杯 / 客人退某款配料")}
                         value={partialRefundReason}
                       />
                     </label>
                     <div className="mt-3 flex items-center justify-between text-sm">
-                      <span className="text-slate-500">預計退款</span>
+                      <span className="text-slate-500">{t("預計退款")}</span>
                       <span className="text-lg font-semibold text-red-700">
                         {formatMoney(refundAmount, bootstrap.currency)}
                       </span>
@@ -8143,14 +8178,14 @@ export function PosApp() {
                       }}
                       type="button"
                     >
-                      取消
+                      {t("取消")}
                     </button>
                     <button
                       className="rounded-2xl bg-red-600 px-4 py-2 text-sm font-semibold text-white"
                       onClick={() => partialRefundOrder(order.id, partialRefundReason.trim(), partialRefundQuantities)}
                       type="button"
                     >
-                      確認部分退款
+                      {t("確認部分退款")}
                     </button>
                   </div>
                 </>
@@ -8173,7 +8208,7 @@ export function PosApp() {
                 }}
                 type="button"
               >
-                取消
+                {t("取消")}
               </button>
               <button
                 className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
@@ -8181,20 +8216,20 @@ export function PosApp() {
                 onClick={() => void confirmComp(compNote)}
                 type="button"
               >
-                確認免單
+                {t("確認免單")}
               </button>
             </>
           }
-          description={`全額減免 · 應收 ${formatMoney(paymentBase.total, bootstrap.currency)} → 實收 ${formatMoney(0, bootstrap.currency)}`}
-          title="免單備註"
+          description={t("全額減免 · 應收 {due} → 實收 {paid}", { due: formatMoney(paymentBase.total, bootstrap.currency), paid: formatMoney(0, bootstrap.currency) })}
+          title={t("免單備註")}
           widthClassName="max-w-md"
           zIndexClassName="z-[70]"
         >
           <div>
-            <div className="text-xs font-semibold text-slate-500">免單備註</div>
+            <div className="text-xs font-semibold text-slate-500">{t("免單備註")}</div>
             {localSettings.compNotePresets.length === 0 ? (
               <div className="mt-2 rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-3 text-xs text-slate-500">
-                尚未設定免單備註（可到 設置 → 備註 → 免單備註 新增）。
+                {t("尚未設定免單備註（可到 設置 → 備註 → 免單備註 新增）。")}
               </div>
             ) : (
               <div className="mt-2 flex flex-wrap gap-2">
@@ -8223,7 +8258,7 @@ export function PosApp() {
             enterKeyHint="done"
             onChange={(event) => setCompNote(event.target.value)}
             onPointerUp={(event) => refocusForIosKeyboard(event.currentTarget)}
-            placeholder="可自由輸入免單原因，例如：客人投訴補償"
+            placeholder={t("可自由輸入免單原因，例如：客人投訴補償")}
             spellCheck={false}
             value={compNote}
           />
@@ -8238,10 +8273,11 @@ export function PosApp() {
           const req = discountNoteRequest;
           const targetLabel =
             req.kind === "whole"
-              ? `全單折扣 · ${findDiscountPreset(localSettings.discounts, req.presetId)?.label ?? ""}`
-              : `${cartItems.find((item) => itemIdentity(item) === req.itemKey)?.name ?? "單品"} · ${
-                  localSettings.discounts.find((disc) => disc.rate === req.rate)?.label ?? `${req.rate}%`
-                }`;
+              ? t("全單折扣 · {label}", { label: findDiscountPreset(localSettings.discounts, req.presetId)?.label ?? "" })
+              : t("{name} · {label}", {
+                  name: cartItems.find((item) => itemIdentity(item) === req.itemKey)?.name ?? t("單品"),
+                  label: localSettings.discounts.find((disc) => disc.rate === req.rate)?.label ?? `${req.rate}%`,
+                });
           return (
             <ResponsiveModal
               onClose={cancelDiscountNote}
@@ -8252,7 +8288,7 @@ export function PosApp() {
                     onClick={cancelDiscountNote}
                     type="button"
                   >
-                    取消
+                    {t("取消")}
                   </button>
                   <button
                     className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
@@ -8260,20 +8296,20 @@ export function PosApp() {
                     onClick={confirmDiscountNote}
                     type="button"
                   >
-                    確認折扣
+                    {t("確認折扣")}
                   </button>
                 </>
               }
-              description={`${targetLabel} · 必須選擇打折原因`}
-              title="折扣備註"
+              description={t("{label} · 必須選擇打折原因", { label: targetLabel })}
+              title={t("折扣備註")}
               widthClassName="max-w-md"
               zIndexClassName="z-[70]"
             >
               <div>
-                <div className="text-xs font-semibold text-slate-500">折扣原因</div>
+                <div className="text-xs font-semibold text-slate-500">{t("折扣原因")}</div>
                 {localSettings.discountNotePresets.length === 0 ? (
                   <div className="mt-2 rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-3 text-xs text-slate-500">
-                    尚未設定折扣備註（可到 設置 → 備註 → 折扣備註 新增），暫時請直接自由輸入。
+                    {t("尚未設定折扣備註（可到 設置 → 備註 → 折扣備註 新增），暫時請直接自由輸入。")}
                   </div>
                 ) : (
                   <div className="mt-2 flex flex-wrap gap-2">
@@ -8301,7 +8337,7 @@ export function PosApp() {
                   enterKeyHint="done"
                   onChange={(event) => setDiscountNoteDraft(event.target.value)}
                   onPointerUp={(event) => refocusForIosKeyboard(event.currentTarget)}
-                  placeholder="可自由輸入打折原因，例如：熟客介紹"
+                  placeholder={t("可自由輸入打折原因，例如：熟客介紹")}
                   spellCheck={false}
                   value={discountNoteDraft}
                 />
@@ -8324,7 +8360,7 @@ export function PosApp() {
                 }}
                 type="button"
               >
-                取消
+                {t("取消")}
               </button>
               <button
                 className="rounded-2xl bg-red-600 px-4 py-2 text-sm font-semibold text-white"
@@ -8339,17 +8375,17 @@ export function PosApp() {
                 }}
                 type="button"
               >
-                確認退菜
+                {t("確認退菜")}
               </button>
             </>
           }
-          description={voidRequest.isFullOrder ? "全部退菜" : `${voidRequest.item.name} · 只退 1 份`}
-          title="退菜原因"
+          description={voidRequest.isFullOrder ? t("全部退菜") : t("{name} · 只退 1 份", { name: voidRequest.item.name })}
+          title={t("退菜原因")}
           widthClassName="max-w-md"
           zIndexClassName="z-[60]"
         >
             <div>
-              <div className="text-xs font-semibold text-slate-500">取消備註</div>
+              <div className="text-xs font-semibold text-slate-500">{t("取消備註")}</div>
               <div className="mt-2 flex flex-wrap gap-2">
                 {localSettings.cancelNotePresets.map((preset) => (
                   <button
@@ -8371,7 +8407,7 @@ export function PosApp() {
               autoFocus
               className="mt-4 w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm"
               onChange={(event) => setVoidReason(event.target.value)}
-              placeholder="例如：客人取消 / 廚房售罄"
+              placeholder={t("例如：客人取消 / 廚房售罄")}
               value={voidReason}
             />
         </ResponsiveModal>
@@ -8390,7 +8426,7 @@ export function PosApp() {
                 }}
                 type="button"
               >
-                取消
+                {t("取消")}
               </button>
               <button
                 className="rounded-2xl bg-red-600 px-4 py-2 text-sm font-semibold text-white"
@@ -8401,17 +8437,17 @@ export function PosApp() {
                 }}
                 type="button"
               >
-                確認退桌
+                {t("確認退桌")}
               </button>
             </>
           }
-          description="退桌會將枱上所有菜作廢並釋放枱位，此操作不可還原"
-          title="退桌原因"
+          description={t("退桌會將枱上所有菜作廢並釋放枱位，此操作不可還原")}
+          title={t("退桌原因")}
           widthClassName="max-w-md"
           zIndexClassName="z-[60]"
         >
           <div>
-            <div className="text-xs font-semibold text-slate-500">取消備註</div>
+            <div className="text-xs font-semibold text-slate-500">{t("取消備註")}</div>
             <div className="mt-2 flex flex-wrap gap-2">
               {localSettings.cancelNotePresets.map((preset) => (
                 <button
@@ -8433,7 +8469,7 @@ export function PosApp() {
             autoFocus
             className="mt-4 w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm"
             onChange={(event) => setVoidTableReason(event.target.value)}
-            placeholder="例如：客人取消 / 臨時要走"
+            placeholder={t("例如：客人取消 / 臨時要走")}
             value={voidTableReason}
           />
         </ResponsiveModal>
@@ -8456,7 +8492,7 @@ export function PosApp() {
               用 amber 而唔係 red —— 資料安全留喺本機，只係未上到 DB，唔係即刻營運事故。 */}
           {failedSyncCount > 0 ? (
             <div className="rounded-xl bg-amber-500 px-2.5 py-1.5 text-left text-[11px] font-semibold text-white shadow-md">
-              <div>⚠ {failedSyncCount} 筆未同步</div>
+              <div>⚠ {failedSyncCount} {t("筆未同步")}</div>
               <div className="mt-1 flex gap-1">
                 <button
                   className="rounded bg-white/20 px-2 py-0.5 text-[10px] font-semibold text-white hover:bg-white/30"
@@ -8465,20 +8501,20 @@ export function PosApp() {
                     replaceQueueFromStorage();
                     setToast(
                       revived > 0
-                        ? { tone: "success", message: `已重新排入 ${revived} 筆同步資料` }
-                        : { tone: "error", message: "搵唔到失敗嘅同步資料" },
+                        ? { tone: "success", message: t("已重新排入 {n} 筆同步資料", { n: revived }) }
+                        : { tone: "error", message: t("搵唔到失敗嘅同步資料") },
                     );
                   }}
                   type="button"
                 >
-                  重試
+                  {t("重試")}
                 </button>
                 <button
                   className="rounded bg-white/20 px-2 py-0.5 text-[10px] font-semibold text-white hover:bg-white/30"
                   onClick={() => setShowSyncHealth(true)}
                   type="button"
                 >
-                  詳細與補錄
+                  {t("詳細與補錄")}
                 </button>
               </div>
             </div>
@@ -8496,7 +8532,7 @@ export function PosApp() {
               }}
               type="button"
             >
-              <div>列印失敗 {failedPrintJobs.length} 張 · 去打印中心</div>
+              <div>{t("列印失敗 ")}{failedPrintJobs.length} {t("張 · 去打印中心")}</div>
             </button>
           ) : null}
         </div>
@@ -8518,20 +8554,20 @@ export function PosApp() {
             ⚠
           </span>
           <div className="text-[11px] leading-snug">
-            <div className="font-semibold">即時通知未生效，新單唔會自動彈出</div>
-            <div className="mt-0.5">{describePosRealtimeProbe(realtimeProbe)}</div>
+            <div className="font-semibold">{t("即時通知未生效，新單唔會自動彈出")}</div>
+            <div className="mt-0.5">{t(describePosRealtimeProbe(realtimeProbe))}</div>
             <div className="mt-0.5 text-amber-800/80">
-              連線目標：{realtimeProbe.host ?? "未設定"}（{realtimeProbe.source ?? "none"}）
-              {realtimeStatus && realtimeStatus !== "SUBSCRIBED" ? ` · 渠道：${realtimeStatus}` : ""}
+              {t("連線目標：")}{realtimeProbe.host ?? t("未設定")}（{realtimeProbe.source ?? "none"}）
+              {realtimeStatus && realtimeStatus !== "SUBSCRIBED" ? t(" · 渠道：{status}", { status: realtimeStatus }) : ""}
             </div>
-            <div className="mt-1">請先手動重新載入；若持續，通知技術人員檢查部署環境變數。</div>
+            <div className="mt-1">{t("請先手動重新載入；若持續，通知技術人員檢查部署環境變數。")}</div>
           </div>
           <button
             className="ml-1 shrink-0 rounded-md px-1.5 py-0.5 text-[11px] font-semibold text-amber-800 hover:bg-amber-100"
             onClick={() => setRealtimeBannerDismissed(true)}
             type="button"
           >
-            知道了
+            {t("知道了")}
           </button>
         </div>
       ) : null}
@@ -8565,9 +8601,9 @@ export function PosApp() {
         >
           <div className="text-center">
             <div className="text-3xl">⏰</div>
-            <div className="mt-3 text-lg font-semibold text-slate-900">連續上班提醒</div>
+            <div className="mt-3 text-lg font-semibold text-slate-900">{t("連續上班提醒")}</div>
             <p className="mt-2 text-sm leading-relaxed text-slate-600">
-              你已經連續上班超過 10 個小時，需要交班嗎？
+              {t("你已經連續上班超過 10 個小時，需要交班嗎？")}
             </p>
             <div className="mt-6 grid gap-2.5">
               <button
@@ -8577,7 +8613,7 @@ export function PosApp() {
                 onClick={() => void acknowledgeShiftOvertime()}
                 type="button"
               >
-                取消（繼續營業）
+                {t("取消（繼續營業）")}
               </button>
               <button
                 className="w-full rounded-3xl bg-orange-500 px-6 py-4 text-base font-semibold text-white hover:bg-orange-600"
@@ -8587,7 +8623,7 @@ export function PosApp() {
                 }}
                 type="button"
               >
-                確認，去交班
+                {t("確認，去交班")}
               </button>
             </div>
           </div>
@@ -8626,26 +8662,26 @@ export function PosApp() {
               className="absolute right-3 top-3 grid h-11 w-11 place-items-center rounded-full bg-slate-100 hover:bg-slate-200"
               onClick={dismissStartWorkPrompt}
               type="button"
-              aria-label="關閉（唔開工，只查看資料／對數）"
-              title="關閉（唔開工，只查看資料／對數）"
+              aria-label={t("關閉（唔開工，只查看資料／對數）")}
+              title={t("關閉（唔開工，只查看資料／對數）")}
             >
               <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#334155"
                    strokeWidth="2.4" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
             </button>
-            <div className="text-sm font-semibold tracking-widest text-orange-500">今日未開工</div>
-            <div className="mt-2 text-2xl font-semibold text-slate-900">開始今日營業</div>
+            <div className="text-sm font-semibold tracking-widest text-orange-500">{t("今日未開工")}</div>
+            <div className="mt-2 text-2xl font-semibold text-slate-900">{t("開始今日營業")}</div>
             <div className="mt-2 text-sm text-slate-500">
-              未開工前不能點餐。按下方按鈕後，今日班次正式開始。
+              {t("未開工前不能點餐。按下方按鈕後，今日班次正式開始。")}
             </div>
             <button
               className="mt-6 w-full rounded-3xl bg-orange-500 px-6 py-5 text-xl font-semibold text-white hover:bg-orange-600"
               onClick={startWork}
               type="button"
             >
-              開工
+              {t("開工")}
             </button>
             <div className="mt-3 text-xs leading-relaxed text-slate-400">
-              只想先查帳／對數？按右上角 ✕ 收起本視窗，稍後按頁首「開工」即可開始。
+              {t("只想先查帳／對數？按右上角 ✕ 收起本視窗，稍後按頁首「開工」即可開始。")}
             </div>
         </ResponsiveModal>
       ) : null}
@@ -8653,7 +8689,7 @@ export function PosApp() {
       {orderSuccessFlash ? (
         <div className="pointer-events-none fixed inset-0 z-[55] grid place-items-center p-4">
           <div className="rounded-3xl bg-emerald-600 px-8 py-5 text-lg font-semibold text-white shadow-2xl">
-            下單成功
+            {t("下單成功")}
           </div>
         </div>
       ) : null}
@@ -8661,7 +8697,7 @@ export function PosApp() {
       {settlementFlash ? (
         <div className="pointer-events-none fixed inset-0 z-[55] grid place-items-center p-4">
           <div className="rounded-3xl bg-emerald-600 px-8 py-5 text-lg font-semibold text-white shadow-2xl">
-            已結帳
+            {t("已結帳")}
           </div>
         </div>
       ) : null}

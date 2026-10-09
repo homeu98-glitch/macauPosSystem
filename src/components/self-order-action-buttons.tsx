@@ -31,6 +31,8 @@
 
 import { useState } from "react";
 
+import { useT } from "@/components/lang-provider";
+
 type Action = "confirm" | "reject";
 
 export function SelfOrderActionButtons({
@@ -49,6 +51,7 @@ export function SelfOrderActionButtons({
   fill?: boolean;
 }) {
   const [pending, setPending] = useState<Action | null>(null);
+  const t = useT();
 
   // 只有一種尺寸（2026-09-11 統一）：`rounded-xl px-3 py-2 text-xs`。
   // 想改就改呢一行 —— 唔好再引入 per-call-site 嘅 size prop，就係佢令啲掣走樣。
@@ -77,23 +80,23 @@ export function SelfOrderActionButtons({
     <>
       <button
         aria-busy={pending === "confirm"}
-        aria-label={`接受自助單 ${orderLabel}`}
+        aria-label={t("接受自助單 {no}", { no: orderLabel })}
         className={`${buttonClass} bg-emerald-600 hover:bg-emerald-700`}
         disabled={pending !== null}
         onClick={handle("confirm", onConfirm)}
         type="button"
       >
-        接受
+        {t("接受")}
       </button>
       <button
         aria-busy={pending === "reject"}
-        aria-label={`拒絕自助單 ${orderLabel}`}
+        aria-label={t("拒絕自助單 {no}", { no: orderLabel })}
         className={`${buttonClass} bg-rose-600 hover:bg-rose-700`}
         disabled={pending !== null}
         onClick={handle("reject", onReject)}
         type="button"
       >
-        拒絕
+        {t("拒絕")}
       </button>
     </>
   );

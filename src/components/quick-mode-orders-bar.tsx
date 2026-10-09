@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 
 import { AutoAcceptPill } from "@/components/auto-accept-pill";
+import { useT } from "@/components/lang-provider";
 import { OnlineOpenPill } from "@/components/online-open-pill";
 import { StoreOpenPill } from "@/components/store-open-pill";
 import { QuickLocalOrdersStrip } from "@/components/quick-local-orders-strip";
@@ -54,6 +55,8 @@ function QuickSelfOrderAutoAcceptPill() {
 
   if (!storeId) return null; // 冇登入記錄 → 唔顯示，避免商家以為設定咗
 
+  // ⚠️ AutoAcceptPill 內部會 t(label) / t(busyHint)：以下 prop 一定要傳原文
+  //    （＝字典 key），唔可以自己先包一層 t()（會變雙重翻譯）。
   return (
     <AutoAcceptPill
       busy={loading || saving}
@@ -142,12 +145,14 @@ export function QuickModeOrdersBar({
   onRejectSelfOrder,
   onVoidPlatformOrder,
 }: QuickModeOrdersBarProps) {
+  const t = useT();
+
   return (
     <div className="shrink-0 border-t border-slate-200 bg-white shadow-[0_-4px_20px_rgba(15,23,42,0.06)]">
       <div className="grid grid-cols-1 divide-y divide-slate-200 lg:grid-cols-2 lg:divide-x lg:divide-y-0">
         <section className="min-w-0 px-3 py-2.5">
           <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-            <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">線上訂單</div>
+            <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">{t("線上訂單")}</div>
             <QuickOnlineOrderControls
               autoAccept={autoAcceptOnline}
               onAutoAcceptChange={onAutoAcceptOnlineChange}
@@ -165,7 +170,7 @@ export function QuickModeOrdersBar({
         </section>
         <section className="min-w-0 px-3 py-2.5">
           <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-            <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">線下訂單</div>
+            <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">{t("線下訂單")}</div>
             <div className="flex shrink-0 flex-nowrap items-center gap-2">
               {/* 線下接單 = 店內營業總掣（`pos_store_status.is_open`）：
                   擋掃碼點餐 ＋ 自助點餐機。掣面「營業中」／「已暫停（紅）」。

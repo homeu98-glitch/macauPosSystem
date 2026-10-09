@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState, type ReactElement } from "react";
 
+import { useT } from "@/components/lang-provider";
 import { mockBootstrap } from "@/lib/mock-data";
 import { loadAuthSession, loadBootstrapCache, loadPosLocalSettings } from "@/lib/storage";
 import { loadKioskDeviceBinding } from "@/lib/kiosk-order";
@@ -59,6 +60,7 @@ export function QrSvg({ text, size = 160 }: { text: string; size?: number }) {
  * 亂碼只會出現喺「顯示層」（字體 fallback）或「舊 cache 蓋過最新編輯」嘅情況。
  */
 export function KioskQrPanel() {
+  const t = useT();
   const [host, setHost] = useState("");
   /** 一次性操作提示（複製成功 / 列印被攔截）。 */
   const [hint, setHint] = useState<string | null>(null);
@@ -107,12 +109,12 @@ export function KioskQrPanel() {
 
   return (
     <section className="min-w-0 overflow-hidden rounded-2xl border border-slate-200 bg-white p-4">
-      <div className="mb-1 text-base font-semibold text-slate-900">掃碼點餐 QR</div>
+      <div className="mb-1 text-base font-semibold text-slate-900">{t("掃碼點餐 QR")}</div>
       <p className="mb-4 text-sm text-slate-500">
-        按枱生成 <code className="rounded bg-slate-100 px-1">/menu?tableId=</code> 碼，印出貼枱。客人掃碼即開手機點餐介面（已帶所屬店鋪）。
+        {t("按枱生成")} <code className="rounded bg-slate-100 px-1">/menu?tableId=</code> {t("碼，印出貼枱。客人掃碼即開手機點餐介面（已帶所屬店鋪）。")}
       </p>
 
-      <label className="mb-1 block text-xs text-slate-500">網址主機（host）</label>
+      <label className="mb-1 block text-xs text-slate-500">{t("網址主機（host）")}</label>
       <input
         value={origin}
         onChange={(e) => setHost(e.target.value)}
@@ -121,13 +123,13 @@ export function KioskQrPanel() {
 
       {hint ? (
         <div className="mb-4 rounded-xl bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800" role="status">
-          {hint}
+          {t(hint)}
         </div>
       ) : null}
 
       {tables.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-6 text-center text-sm text-slate-400">
-          尚未設定桌台，請先到「樓層與桌台」新增。
+          {t("尚未設定桌台，請先到「樓層與桌台」新增。")}
         </div>
       ) : (
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4">
@@ -136,7 +138,8 @@ export function KioskQrPanel() {
             return (
               <div key={table.id} className="rounded-2xl border border-slate-200 bg-white p-3 text-center">
                 <div className="mb-2 text-sm font-semibold text-slate-900">
-                  {table.name || "未命名桌台"}
+                  {/* ⚠️ `table.name` / `table.area` 係商家自己輸入嘅資料值 ⇒ 唔翻譯 */}
+                  {table.name || t("未命名桌台")}
                   <span className="ml-1 text-xs font-normal text-slate-400">{table.area}</span>
                 </div>
                 <div className="flex justify-center">
@@ -151,10 +154,11 @@ export function KioskQrPanel() {
                     }}
                     className="rounded-lg bg-slate-100 py-1.5 text-xs font-semibold text-slate-700"
                   >
-                    複製網址
+                    {t("複製網址")}
                   </button>
                   <button
                     onClick={() => {
+                      // ⚠️ 呢三個係**QR 貼紙 / 紙單**內容（客人掃碼見到）⇒ 維持繁中，唔翻譯。
                       const ok = openQrPrintWindow({
                         title: table.name || "桌台",
                         subtitle: bootstrap.storeName || undefined,
@@ -166,7 +170,7 @@ export function KioskQrPanel() {
                     }}
                     className="rounded-lg bg-orange-500 py-1.5 text-xs font-semibold text-white"
                   >
-                    列印
+                    {t("列印")}
                   </button>
                 </div>
               </div>

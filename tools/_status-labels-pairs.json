@@ -1,0 +1,13 @@
+{
+  "已結帳": "Settled",
+  "未結帳": "Unsettled",
+  "製作中": "Preparing",
+  "點單中": "Ordering",
+  "待取餐": "Ready for pickup",
+  "已付款": "Paid",
+  "已退款": "Refunded",
+  "部分退款": "Partially refunded",
+  "已返結": "Reopened",
+  "待交付": "Ready for handover",
+  "待出餐": "Ready to serve"
+}

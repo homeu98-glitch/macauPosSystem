@@ -204,13 +204,33 @@ export function ledgerStatusLabel(status: string, fulfillmentType: string): stri
   return "新單";
 }
 
-export function orderCodeLabel(order: Pick<LedgerOnlineOrder, "id" | "pickupCode" | "tabType">): string {
-  if (order.pickupCode) return `取餐碼 ${order.pickupCode}`;
+/**
+ * `orderCodeLabel()` 嘅**可翻譯**版本 —— 拆成「字典 key ＋ 佔位值」。
+ *
+ * 🔴 為何唔可以就地 `t(orderCodeLabel(order))`（2026-10-08）：
+ *    呢個函式回傳嘅係**已填值**嘅字串（`取餐碼 005` / `自取 ab12cd34`），
+ *    字典 key 係 `取餐碼 {code}`，兩者永遠唔會相等 ⇒ `t()` 靜靜 fallback 返中文，
+ *    英文版第一欄（單號）全部殘留中文，而且**唔會報任何錯**。
+ *    同 `accept-outcome.ts` 嘅 toast 係同一個坑。
+ *
+ * ⚠️ 只喺**顯示位**用；紙單／匯出照用 `orderCodeLabel()`（第 3 層唔跟 UI 語言）。
+ * ⚠️ 兩個函式共用同一份判定（下面 `orderCodeLabel()` 直接由 parts 砌返），
+ *    所以唔可能出現「兩邊唔一致」。
+ */
+export function orderCodeLabelParts(
+  order: Pick<LedgerOnlineOrder, "id" | "pickupCode" | "tabType">,
+): { key: string; vars: { code: string } } {
+  if (order.pickupCode) return { key: "取餐碼 {code}", vars: { code: String(order.pickupCode) } };
   const suffix = order.id.slice(0, 8);
-  if (order.tabType === "pickup") return `自取 ${suffix}`;
-  if (order.tabType === "self_delivery") return `外送 ${suffix}`;
-  if (order.tabType === "dine_in") return `堂食 ${suffix}`;
-  return `線上單 ${suffix}`;
+  if (order.tabType === "pickup") return { key: "自取 {code}", vars: { code: suffix } };
+  if (order.tabType === "self_delivery") return { key: "外送 {code}", vars: { code: suffix } };
+  if (order.tabType === "dine_in") return { key: "堂食 {code}", vars: { code: suffix } };
+  return { key: "線上單 {code}", vars: { code: suffix } };
+}
+
+export function orderCodeLabel(order: Pick<LedgerOnlineOrder, "id" | "pickupCode" | "tabType">): string {
+  const { key, vars } = orderCodeLabelParts(order);
+  return key.replace("{code}", vars.code);
 }
 
 export function rawLedgerStatus(status: string): string {

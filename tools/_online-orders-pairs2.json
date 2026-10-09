@@ -1,0 +1,23 @@
+{
+  "尚未登入，無法切換營業狀態。": "Not signed in — cannot switch the store status.",
+  "儲存營業狀態失敗": "Failed to save the store status",
+  "尚未登入 Ledger，無法開關接單。": "Not signed in to Ledger — cannot toggle ordering.",
+  "未讀到 Ledger 接單狀態，請重新載入頁面。": "Ledger ordering status unavailable. Please reload the page.",
+
+  "關閉": "Close",
+  "自動接單": "Auto-accept",
+
+  "未分區": "Unassigned area",
+  "尚未設定桌台，請至「設置 → 桌台」新增。": "No tables configured yet. Add them in Settings → Tables.",
+  "選擇桌台後會將線上單轉到該枱，並補印廚房單。": "Picking a table moves this online order there and reprints the kitchen ticket.",
+
+  "預約時間：{time}": "Scheduled time: {time}",
+  "預約 {time}": "Scheduled {time}",
+  "{minutes} 分鐘後": "in {minutes} min",
+  "已到時間": "Due now",
+  "已逾時": "Overdue",
+  "已逾時 {overdue} 分鐘": "Overdue by {overdue} min",
+  "預約單": "Scheduled",
+  "預約單 · 已逾時": "Scheduled · Overdue",
+  "預約單 · 快到了": "Scheduled · Due soon"
+}

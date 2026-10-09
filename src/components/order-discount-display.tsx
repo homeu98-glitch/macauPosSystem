@@ -1,6 +1,9 @@
+"use client";
+
 import type { OrderItem } from "@/lib/types";
 import { formatMoney } from "@/lib/format";
 import { discountedUnitPrice, itemDiscountSaving, orderItemDiscountTotal } from "@/lib/pos/discount";
+import { useT } from "@/components/lang-provider";
 
 /**
  * 訂單明細嘅折扣顯示組件（HTML 純樣式、無 React hook / state）。
@@ -31,6 +34,8 @@ export type OrderItemDiscountLineProps = {
 
 /** 單品折扣行：原價（line-through）+ 折後價 + 優惠金額（compact）/ 淨折後價（inline）。 */
 export function OrderItemDiscountLine({ item, currency, variant = "compact" }: OrderItemDiscountLineProps) {
+  // ⚠️ useT() 一定要喺所有 early return 之前（Rules of Hooks）。
+  const t = useT();
   if (item.discountRate == null || !Number.isFinite(item.discountRate) || item.discountRate >= 100) {
     return null;
   }
@@ -47,9 +52,11 @@ export function OrderItemDiscountLine({ item, currency, variant = "compact" }: O
     <span className="inline-flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
       <span className="font-semibold tabular-nums text-amber-700">{formatMoney(discounted * item.quantity, currency)}</span>
       <span className="text-[11px] text-slate-400 line-through tabular-nums">
-        原 {formatMoney(item.price * item.quantity, currency)}
+        {t("原 {amt}", { amt: formatMoney(item.price * item.quantity, currency) })}
       </span>
-      <span className="text-[11px] font-semibold text-emerald-700">優惠 {formatMoney(saving, currency)}</span>
+      <span className="text-[11px] font-semibold text-emerald-700">
+        {t("優惠 {amt}", { amt: formatMoney(saving, currency) })}
+      </span>
     </span>
   );
 }
@@ -68,6 +75,8 @@ export type OrderDiscountRowProps = {
  * 當 total == 0 時唔 render。
  */
 export function OrderDiscountRow({ items, currency, wholeOrderDiscountAmount, variant = "block" }: OrderDiscountRowProps) {
+  // ⚠️ useT() 一定要喺 early return（total <= 0）之前（Rules of Hooks）。
+  const t = useT();
   const itemSaving = orderItemDiscountTotal(items);
   const wholeSaving = Math.max(0, Number(wholeOrderDiscountAmount ?? 0));
   const total = round2(itemSaving + wholeSaving);
@@ -77,19 +86,19 @@ export function OrderDiscountRow({ items, currency, wholeOrderDiscountAmount, va
     <div className={`grid gap-1 ${variant === "compact" ? "" : "mt-1"}`}>
       {itemSaving > 0 ? (
         <div className={`flex items-center justify-between ${sizeText}`}>
-          <span className="text-slate-500">單品折扣</span>
+          <span className="text-slate-500">{t("單品折扣")}</span>
           <span className="font-semibold tabular-nums text-emerald-700">-{formatMoney(itemSaving, currency)}</span>
         </div>
       ) : null}
       {wholeSaving > 0 ? (
         <div className={`flex items-center justify-between ${sizeText}`}>
-          <span className="text-slate-500">全單折扣</span>
+          <span className="text-slate-500">{t("全單折扣")}</span>
           <span className="font-semibold tabular-nums text-emerald-700">-{formatMoney(wholeSaving, currency)}</span>
         </div>
       ) : null}
       {itemSaving > 0 && wholeSaving > 0 ? (
         <div className={`flex items-center justify-between border-t border-slate-100 pt-1 ${sizeText}`}>
-          <span className="font-semibold text-slate-700">合計優惠</span>
+          <span className="font-semibold text-slate-700">{t("合計優惠")}</span>
           <span className="font-bold tabular-nums text-emerald-700">-{formatMoney(total, currency)}</span>
         </div>
       ) : null}

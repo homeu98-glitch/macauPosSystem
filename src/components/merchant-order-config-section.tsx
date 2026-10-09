@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 
 import { AutoAcceptPill } from "@/components/auto-accept-pill";
 import { MerchantOpenPill } from "@/components/merchant-open-pill";
+import { useT } from "@/components/lang-provider";
 import {
   describeOrderConfigBlockers,
   hasAnyOnlinePayment,
@@ -28,6 +29,7 @@ import { loadAuthSession } from "@/lib/storage";
  *    開返店嗰陣原本嘅自動接單設定仍然在。
  */
 export function MerchantOrderConfigSection() {
+  const t = useT();
   // client-only：同 device-settings 其他 storeId 讀法一致（保 SSR/CSR 一致）
   const [storeId, setStoreId] = useState<string | null>(null);
   useEffect(() => {
@@ -53,54 +55,55 @@ export function MerchantOrderConfigSection() {
 
   const busy = config.loading || config.saving !== "none";
   const busyHint = config.loading
-    ? "（讀取中…）"
+    ? t("（讀取中…）")
     : config.saving === "merchant"
-      ? "（切換中…）"
+      ? t("（切換中…）")
       : config.saving === "auto"
-        ? "（儲存中…）"
+        ? t("（儲存中…）")
         : undefined;
 
   const rows: Array<{ label: string; value: string; tone: "warn" | "ok" | "muted" }> = [
     {
-      label: "平台核可",
+      label: t("平台核可"),
       value:
         config.adminEnabled === null
-          ? "未讀到"
+          ? t("未讀到")
           : config.adminEnabled
-            ? "已核可"
-            : "未核可（要搵平台）",
+            ? t("已核可")
+            : t("未核可（要搵平台）"),
       tone: config.adminEnabled === false ? "warn" : config.adminEnabled ? "ok" : "muted",
     },
     {
-      label: "商家狀態",
-      value: config.status ?? "未讀到",
+      label: t("商家狀態"),
+      // ⚠️ `config.status` 係 Ledger server 回傳嘅原始狀態字串 ⇒ 唔翻譯
+      value: config.status ?? t("未讀到"),
       tone: config.status && config.status !== "active" ? "warn" : config.status ? "ok" : "muted",
     },
     {
-      label: "接單時段",
+      label: t("接單時段"),
       value:
         config.hoursEnabled === null
-          ? "未讀到"
+          ? t("未讀到")
           : config.hoursEnabled === false
-            ? "全天接單（未設時段）"
+            ? t("全天接單（未設時段）")
             : config.openNow
-              ? "時段內（營業中）"
-              : "時段外（休息中）",
+              ? t("時段內（營業中）")
+              : t("時段外（休息中）"),
       tone: config.hoursEnabled === true && config.openNow === false ? "warn" : "muted",
     },
     {
-      label: "線上付款方式",
+      label: t("線上付款方式"),
       value:
         anyOnlinePayment === null
-          ? "未讀到"
+          ? t("未讀到")
           : anyOnlinePayment
             ? [
-                config.allowBalanceDeduct ? "餘額扣點" : null,
-                config.allowPayInStore ? "到店付款" : null,
+                config.allowBalanceDeduct ? t("餘額扣點") : null,
+                config.allowPayInStore ? t("到店付款") : null,
               ]
                 .filter(Boolean)
                 .join("、")
-            : "兩種都關住（開唔到店）",
+            : t("兩種都關住（開唔到店）"),
       tone: anyOnlinePayment === false ? "warn" : "muted",
     },
   ];
@@ -109,10 +112,9 @@ export function MerchantOrderConfigSection() {
     <section className="rounded-2xl border border-slate-200 bg-white p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <div className="text-base font-semibold text-slate-900">線上接單（會員通）</div>
+          <div className="text-base font-semibold text-slate-900">{t("線上接單（會員通）")}</div>
           <div className="mt-1 max-w-[52ch] text-sm text-slate-500">
-            呢粒「線上接單」係全店線上單嘅總掣：關咗之後客人喺會員通落唔到新單。
-            店內堂食、快餐、自助點餐完全不受影響。改動會即時同步到其他收銀機。
+            {t("呢粒「線上接單」係全店線上單嘅總掣：關咗之後客人喺會員通落唔到新單。店內堂食、快餐、自助點餐完全不受影響。改動會即時同步到其他收銀機。")}
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -120,14 +122,14 @@ export function MerchantOrderConfigSection() {
             busy={busy}
             busyHint={busyHint}
             disabled={!config.available || !storeId}
-            enabledLabel="接單中"
+            enabledLabel={t("接單中")}
             error={config.saving === "none" ? config.error : null}
-            label="線上接單"
+            label={t("線上接單")}
             merchantEnabled={config.merchantEnabled}
-            offLabel="已暫停"
+            offLabel={t("已暫停")}
             onChange={(next) => void config.setMerchantEnabled(next)}
             unknownHint={
-              storeId ? "未讀到 Ledger 接單狀態，請撳「重新整理」。" : "尚未登入，無法讀取接單狀態。"
+              storeId ? t("未讀到 Ledger 接單狀態，請撳「重新整理」。") : t("尚未登入，無法讀取接單狀態。")
             }
             variant="contained"
           />
@@ -136,7 +138,7 @@ export function MerchantOrderConfigSection() {
             busyHint={busyHint}
             disabled={!config.available || config.merchantEnabled !== true}
             enabled={config.autoAccept}
-            label="自動接單"
+            label={t("自動接單")}
             onChange={(next) => void config.setAutoAccept(next)}
             variant="contained"
           />
@@ -146,30 +148,26 @@ export function MerchantOrderConfigSection() {
             onClick={() => void config.refresh()}
             type="button"
           >
-            {config.loading ? "讀取中…" : "重新整理"}
+            {config.loading ? t("讀取中…") : t("重新整理")}
           </button>
         </div>
       </div>
 
       {!config.available ? (
         <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800">
-          Ledger 接單介面未接通（RPC 未上線，或目前帳號未登入 Ledger）。
-          下面顯示嘅係本機最後同步嘅狀態，暫時無法由 POS 開關。
+          {t("Ledger 接單介面未接通（RPC 未上線，或目前帳號未登入 Ledger）。下面顯示嘅係本機最後同步嘅狀態，暫時無法由 POS 開關。")}
         </div>
       ) : null}
 
       {config.crossTerminalSync === "on-enter" ? (
         <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-600">
-          跨機即時同步未生效：POS 即時連線指向嘅資料庫冇 POS 表（多數係未設
-          NEXT_PUBLIC_POS_SUPABASE_URL / _ANON_KEY，或者設完未重新部署）。
-          改完之後，其他收銀機會喺入頁或返前景時才更新 —— 呢個唔影響本機嘅開關。
+          {t("跨機即時同步未生效：POS 即時連線指向嘅資料庫冇 POS 表（多數係未設 NEXT_PUBLIC_POS_SUPABASE_URL / _ANON_KEY，或者設完未重新部署）。改完之後，其他收銀機會喺入頁或返前景時才更新 —— 呢個唔影響本機嘅開關。")}
         </div>
       ) : null}
 
       {config.merchantEnabled === false ? (
         <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800">
-          「自動接單」已一併停用：店都關咗，自動接單寫住開都唔會接到單。
-          開返店之後原本嘅自動接單設定仍然保留。
+          {t("「自動接單」已一併停用：店都關咗，自動接單寫住開都唔會接到單。開返店之後原本嘅自動接單設定仍然保留。")}
         </div>
       ) : null}
 
@@ -209,9 +207,7 @@ export function MerchantOrderConfigSection() {
       </div>
 
       <div className="mt-3 text-xs leading-relaxed text-slate-500">
-        線上接單只改「開啟接單」一欄，唔會碰接單時段、盒費、折扣、付款方式。
-        自動接單同理，係獨立一欄。兩者都由 Ledger 做真源，POS 只係鏡像 ＋ 廣播。
-        ⚠️ 呢個掣**只管會員通線上落單**；要停店內掃碼點餐／自助點餐機，撳 header 嘅「店內營業」。
+        {t("線上接單只改「開啟接單」一欄，唔會碰接單時段、盒費、折扣、付款方式。自動接單同理，係獨立一欄。兩者都由 Ledger 做真源，POS 只係鏡像 ＋ 廣播。⚠️ 呢個掣只管會員通線上落單；要停店內掃碼點餐／自助點餐機，撳 header 嘅「店內營業」。")}
       </div>
     </section>
   );

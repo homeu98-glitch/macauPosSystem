@@ -174,9 +174,27 @@ export function isActiveOnlineOrder(order: LedgerOnlineOrder): boolean {
   return raw !== "cancelled" && raw !== "completed";
 }
 
-export function paymentSummaryLabel(order: LedgerOnlineOrder, currency: string): string {
+/**
+ * 🔴 付款摘要嘅**字典 key ＋ 佔位符**版本（i18n 用）。
+ *
+ * 點解要有呢個 sibling：`paymentSummaryLabel()` 回傳嘅係**已填值**字串
+ * （例：`已支付 MOP 120`），而字典 key 係 `已支付 {amount}` —— 兩者永遠唔會相等，
+ * `t()` 只會靜靜咁 fallback 返原本嘅中文（唔會 throw、唔會報錯）。
+ *
+ * 所以顯示位一定要行呢個版本：`const p = paymentSummaryLabelParts(o, cur)` 然後
+ * `t(p.key, p.vars)`；`paymentSummaryLabel()` 自己都由呢度砌返出嚟（DRY，兩者唔會走樣）。
+ */
+export function paymentSummaryLabelParts(
+  order: LedgerOnlineOrder,
+  currency: string,
+): { key: string; vars?: Record<string, string | number> } {
   if (order.paymentStatus === "paid") {
-    return `已支付 ${currency} ${order.paidAmount.toFixed(0)}`;
+    return { key: "已支付 {amount}", vars: { amount: `${currency} ${order.paidAmount.toFixed(0)}` } };
   }
-  return paymentModeLabel(order.paymentMode) ?? "未支付";
+  return { key: paymentModeLabel(order.paymentMode) ?? "未支付" };
+}
+
+export function paymentSummaryLabel(order: LedgerOnlineOrder, currency: string): string {
+  const { key, vars } = paymentSummaryLabelParts(order, currency);
+  return vars ? key.replace("{amount}", String(vars.amount)) : key;
 }

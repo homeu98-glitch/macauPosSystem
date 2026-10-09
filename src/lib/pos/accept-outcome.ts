@@ -21,7 +21,23 @@
 
 export type ToastTone = "success" | "info" | "warning" | "error";
 
-export type ToastPayload = { tone: ToastTone; message: string };
+export type ToastPayload = {
+  tone: ToastTone;
+  /**
+   * 中文原文 —— **同時係 i18n 字典 key**（第 1 層顯示文案）。
+   *
+   * 含動態值時用 `{code}` / `{suffix}` 佔位，值放喺 `vars`，
+   * 由顯示位嘅 `t(message, vars)` 填。
+   *
+   * 🔴 唔可以喺呢度砌好最終字串（2026-10-08 修）：砌成
+   *    `已自動接單並已送廚：取餐碼 005` 之後，字典永遠搵唔到 key
+   *    → 英文版照彈中文 toast，而且唔會報錯（靜默漏譯）。
+   * ⚠️ 呢個模組零 runtime 依賴，所以**唔可以**喺度 import 字典／`t()`。
+   */
+  message: string;
+  /** `message` 內 `{...}` 佔位符嘅值。 */
+  vars?: Record<string, string | number>;
+};
 
 /**
  * 接單結果。⚠️ **唔可以**簡化成 boolean：
@@ -76,20 +92,23 @@ export function kitchenHintText(outcome: AcceptOutcome): string {
  */
 export function autoAcceptToast(code: string, outcome: AcceptOutcome): ToastPayload | null {
   const suffix = outcome.message ? `（${outcome.message}）` : "";
+  // ⚠️ `suffix` 係底層例外／RPC 原文（動態、唔可譯），所以一定要行 `vars`
+  //    而唔可以砌入 key —— 砌入去就冇字典命中。
+  const vars = { code, suffix };
 
   if (outcome.failure === "insufficient_balance") return null;
   if (!outcome.ok) {
     return outcome.failure === "kitchen"
-      ? { tone: "error", message: `已自動接單，但廚房單建立失敗：${code}${suffix}` }
-      : { tone: "error", message: `自動接單失敗：${code}${suffix}` };
+      ? { tone: "error", message: "已自動接單，但廚房單建立失敗：{code}{suffix}", vars }
+      : { tone: "error", message: "自動接單失敗：{code}{suffix}", vars };
   }
   if (outcome.kitchenJobCount > 0) {
-    return { tone: "success", message: `已自動接單並已送廚：${code}` };
+    return { tone: "success", message: "已自動接單並已送廚：{code}", vars };
   }
   if (outcome.printAlreadyDone) {
-    return { tone: "info", message: `已自動接單：${code}（此單已出過廚房單，唔會重複印）` };
+    return { tone: "info", message: "已自動接單：{code}（此單已出過廚房單，唔會重複印）", vars };
   }
   // 可能原因：打印開關熄咗 / 冇啟用廚房機 / 明細對唔到餐牌。
   // 唔可以照講「已自動接單」就算 —— 廚房收唔到單，收銀必須見到。
-  return { tone: "warning", message: `已自動接單，但未出廚房單：${code}（請檢查打印開關／補印）` };
+  return { tone: "warning", message: "已自動接單，但未出廚房單：{code}（請檢查打印開關／補印）", vars };
 }

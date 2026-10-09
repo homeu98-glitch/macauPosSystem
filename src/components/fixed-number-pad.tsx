@@ -1,5 +1,7 @@
 "use client";
 
+import { useT } from "@/components/lang-provider";
+
 type FixedNumberPadProps = {
   title: string;
   subtitle?: string;
@@ -26,6 +28,7 @@ export function FixedNumberPad({
   confirmLabel = "確定",
   showDisplay = true,
 }: FixedNumberPadProps) {
+  const t = useT();
   function append(token: string) {
     onChange(`${value}${token}`);
   }
@@ -68,21 +71,21 @@ export function FixedNumberPad({
               onClick={() => onChange("")}
               type="button"
             >
-              清除
+              {t("清除")}
             </button>
             <button
               className="rounded-2xl bg-white px-3 py-4 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
               onClick={() => onChange(value.slice(0, -1))}
               type="button"
             >
-              刪除
+              {t("刪除")}
             </button>
             <button
               className="rounded-2xl bg-orange-500 px-3 py-4 text-sm font-semibold text-white hover:bg-orange-600"
               onClick={() => onConfirm?.()}
               type="button"
             >
-              {confirmLabel}
+              {t(confirmLabel)}
             </button>
           </div>
         </div>

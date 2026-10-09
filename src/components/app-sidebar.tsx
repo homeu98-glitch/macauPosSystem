@@ -11,7 +11,7 @@ import { useState } from "react";
 
 
 import { PendingDot } from "@/components/pending-dot";
-import { useT, useTShort } from "@/components/lang-provider";
+import { useT, useTNav, useTShort } from "@/components/lang-provider";
 
 import { useNetworkOnline } from "@/lib/use-network-online";
 
@@ -69,6 +69,7 @@ export function AppSidebar() {
    */
   const t = useT();
   const tShort = useTShort();
+  const tNav = useTNav();
   const syncHealth = useSyncHealth();
   /** 重試中：避免撳完好似冇反應（`retryReconcileNow` 通常 <1s，但慢網可能幾秒）。 */
   const [syncRetrying, setSyncRetrying] = useState(false);
@@ -233,13 +234,18 @@ export function AppSidebar() {
                 <span className="grid h-7 w-7 place-items-center rounded-full bg-white/10">{tShort(item.short)}</span>
 
                 {/*
-                  ⚠️ 英文版面：呢個 `<span>` 係 `whitespace-pre-line` **冇truncate**
-                  （側欄 72px → `px-2` → 內容淨 56px）。中文 2 字啱啱好，
-                  英文 "Inventory"(9) / "Sold out"(8) 會自動摺行而唔會被剪走 ——
-                  係刻意保留咗呢個特性，唔好為咗塞英文加 `truncate`。
-                  註解見 memory「英文較長溢出處理 · 側欄 56px」。
+                  🔴 英文版面（2026-10-08 J 實機截圖捉到）：`t()` 嘅長譯文
+                  （`Inventory` / `Sold out` / `Printing` / `Members`）喺 56px 淨闊度
+                  **被直接裁走**（`Members` 變 `Member`、`Sold out` 變 `Sold our`）。
+                  兩層修：
+                  ① `tNav()` 用側欄專用字典（≤6 字母）⇒ 根本唔會咁長。
+                  ② 呢個 `<span>` 一定要 `block` —— 預設 inline 唔會斷行，
+                     就算 `tNav` 將來加長都唔會靜靜被剪（`break-words` 允許斷詞）。
+                  ⚠️ 唔可以加 `truncate`（會主動剪字 + 失 tooltip）。
                 */}
-                <span className="whitespace-pre-line text-center leading-tight">{t(item.label)}</span>
+                <span className="block w-full break-words text-center leading-tight">
+                  {tNav(item.label)}
+                </span>
 
               </Link>
 
@@ -347,7 +353,12 @@ export function AppSidebar() {
 
             >
 
-              {t("以此身份登出")}
+              {/*
+                ⚠️ 2026-10-08 J 指示：呢粒掣淨係寫 "登出" / "Sign out"。
+                之前譯 "Sign out of this role" 喺 56px 淨闊度**摺成 4 行**，
+                把側欄底部撑到成條好長。tooltip 保留完整語境。
+              */}
+              <span title={t("以此身份登出")}>{t("登出")}</span>
 
             </button>
 
@@ -421,8 +432,10 @@ export function AppSidebar() {
                 <span className="grid h-6 w-6 place-items-center rounded-full bg-black/5">{tShort(item.short)}</span>
 
                 {/* `.replace("\n","")` 保留：中文 label 內可以有換行（例如「店員\n手機」），
-                    移動底欄刻意剷走換行避免兩行過高。翻譯後同樣處理。 */}
-                <span className="leading-tight">{t(item.label).replace("\n", "")}</span>
+                    移動底欄刻意剷走換行避免兩行過高。翻譯後同樣處理。
+                    ⚠️ 用 `tNav()`（短譯文）—— 底欄 `min-w-[64px]` 雖然比桌面欄闊，
+                    但 8 格並排在 390px 闊度下每格實際只有約 44px，一樣放唔落長譯文。 */}
+                <span className="leading-tight">{tNav(item.label).replace("\n", "")}</span>
 
               </Link>
 

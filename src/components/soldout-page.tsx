@@ -4,11 +4,14 @@ import { useMemo, useState } from "react";
 
 import { AppSidebar } from "@/components/app-sidebar";
 import { FixedNumberPad } from "@/components/fixed-number-pad";
+import { useT } from "@/components/lang-provider";
 import { normalizeBootstrapPayload } from "@/lib/bootstrap-normalizer";
 import { mockBootstrap } from "@/lib/mock-data";
 import { loadBootstrapCache, loadSoldOutState, saveSoldOutState } from "@/lib/storage";
 
 export function SoldOutPage() {
+  // ⚠️ 一定要放喺所有 early return 之前（Rules of Hooks）。
+  const t = useT();
   const bootstrap = useMemo(
     () => normalizeBootstrapPayload(loadBootstrapCache() ?? mockBootstrap),
     [],
@@ -95,9 +98,9 @@ export function SoldOutPage() {
           <div className="rounded-2xl border border-slate-200 bg-white p-4">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
-                <div className="text-lg font-semibold text-slate-900">沽清</div>
+                <div className="text-lg font-semibold text-slate-900">{t("沽清")}</div>
                 <div className="mt-1 text-sm text-slate-500">
-                  為菜品設定可售數量。下單後會自動扣減，扣到 0 會在點餐頁顯示售罄。
+                  {t("為菜品設定可售數量。下單後會自動扣減，扣到 0 會在點餐頁顯示售罄。")}
                 </div>
               </div>
               <button
@@ -109,13 +112,13 @@ export function SoldOutPage() {
                 }}
                 type="button"
               >
-                保存
+                {t("保存")}
               </button>
             </div>
           </div>
 
           <div className="mt-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">
-            {status}
+            {t(status)}
           </div>
 
           <section className="mt-3 rounded-2xl border border-slate-200 bg-white p-4">
@@ -128,7 +131,7 @@ export function SoldOutPage() {
                   onClick={() => setTab("items")}
                   type="button"
                 >
-                  菜品沽清
+                  {t("菜品沽清")}
                 </button>
                 <button
                   className={`rounded-full px-4 py-2 text-sm font-semibold ${
@@ -137,7 +140,7 @@ export function SoldOutPage() {
                   onClick={() => setTab("specs")}
                   type="button"
                 >
-                  規格沽清
+                  {t("規格沽清")}
                 </button>
               </div>
               {tab === "items" ? (
@@ -154,7 +157,7 @@ export function SoldOutPage() {
                     }}
                     type="button"
                   >
-                    全部
+                    {t("全部")}
                   </button>
                   {bootstrap.categories.map((category) => (
                     <button
@@ -181,7 +184,12 @@ export function SoldOutPage() {
               <>
                 <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
                   <div className="text-sm text-slate-600">
-                    共 {filteredMenuItems.length} 個菜品 · 第 {page}/{totalPages} 頁（每頁 {pageSize}）
+                    {t("共 {count} 個菜品 · 第 {page}/{total} 頁（每頁 {size}）", {
+                      count: filteredMenuItems.length,
+                      page,
+                      total: totalPages,
+                      size: pageSize,
+                    })}
                   </div>
                   <div className="flex items-center gap-2">
                     <button
@@ -190,7 +198,7 @@ export function SoldOutPage() {
                       onClick={() => setPage((current) => Math.max(1, current - 1))}
                       type="button"
                     >
-                      上一頁
+                      {t("上一頁")}
                     </button>
                     <button
                       className="rounded-2xl bg-white px-3 py-2 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 disabled:opacity-50"
@@ -198,7 +206,7 @@ export function SoldOutPage() {
                       onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
                       type="button"
                     >
-                      下一頁
+                      {t("下一頁")}
                     </button>
                   </div>
                 </div>
@@ -207,10 +215,10 @@ export function SoldOutPage() {
                   <table className="w-full border-collapse text-sm">
                     <thead>
                       <tr className="text-left text-xs font-semibold text-slate-500">
-                        <th className="border-b border-slate-200 py-2 pr-3">菜品</th>
-                        <th className="border-b border-slate-200 py-2 pr-3">剩餘</th>
-                        <th className="border-b border-slate-200 py-2 pr-3">設定數量</th>
-                        <th className="border-b border-slate-200 py-2">操作</th>
+                        <th className="border-b border-slate-200 py-2 pr-3">{t("菜品")}</th>
+                        <th className="border-b border-slate-200 py-2 pr-3">{t("剩餘")}</th>
+                        <th className="border-b border-slate-200 py-2 pr-3">{t("設定數量")}</th>
+                        <th className="border-b border-slate-200 py-2">{t("操作")}</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -236,7 +244,7 @@ export function SoldOutPage() {
                               >
                                 {item.name}
                               </button>
-                              {soldOut ? <span className="ml-2 text-xs font-semibold text-amber-700">售罄</span> : null}
+                              {soldOut ? <span className="ml-2 text-xs font-semibold text-amber-700">{t("售罄")}</span> : null}
                             </td>
                             <td className="border-b border-slate-100 py-2 pr-3 text-slate-700">
                               {remaining === "" ? "--" : remaining}
@@ -260,7 +268,7 @@ export function SoldOutPage() {
                                     setPadValue(String(qty));
                                   }
                                 }}
-                                placeholder="例如 20"
+                                placeholder={t("例如 20")}
                                 value={initial === "" ? "" : String(initial)}
                               />
                             </td>
@@ -278,7 +286,7 @@ export function SoldOutPage() {
                                   }}
                                   type="button"
                                 >
-                                  清除
+                                  {t("清除")}
                                 </button>
                                 <button
                                   className="rounded-2xl bg-amber-600 px-3 py-2 text-xs font-semibold text-white"
@@ -297,7 +305,7 @@ export function SoldOutPage() {
                                   }}
                                   type="button"
                                 >
-                                  直接售罄
+                                  {t("直接售罄")}
                                 </button>
                               </div>
                             </td>
@@ -312,7 +320,7 @@ export function SoldOutPage() {
               <div className="mt-3 grid gap-3">
                 {specGroups.length === 0 ? (
                   <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
-                    目前菜單沒有規格資料
+                    {t("目前菜單沒有規格資料")}
                   </div>
                 ) : (
                   specGroups.map((group) => (
@@ -329,7 +337,7 @@ export function SoldOutPage() {
                             >
                               <div className="min-w-0">
                                 <div className="text-sm font-semibold text-slate-900">{option.label}</div>
-                                <div className="mt-1 text-xs text-slate-500">勾選後，此規格在點餐時不可選</div>
+                                <div className="mt-1 text-xs text-slate-500">{t("勾選後，此規格在點餐時不可選")}</div>
                               </div>
                               <input
                                 checked={soldOut}
@@ -364,8 +372,12 @@ export function SoldOutPage() {
           <FixedNumberPad
             confirmLabel="完成"
             showDisplay={false}
-            subtitle={selectedItem ? `正在設定：${selectedItem.name}` : "先在左邊選一個菜品"}
-            title="數字鍵盤"
+            subtitle={
+              selectedItem
+                ? t("正在設定：{name}", { name: selectedItem.name })
+                : t("先在左邊選一個菜品")
+            }
+            title={t("數字鍵盤")}
             value={padValue}
             onChange={(value) => applyPadValue(value)}
           />

@@ -2,6 +2,8 @@
 
 import { CSSProperties, ReactNode, Ref } from "react";
 
+import { useT } from "@/components/lang-provider";
+
 type ResponsiveModalProps = {
   children: ReactNode;
   title?: ReactNode;
@@ -41,6 +43,7 @@ export function ResponsiveModal({
   placement = "center",
   allowPointerEventsOnOverlay = true,
 }: ResponsiveModalProps) {
+  const t = useT();
   return (
     <div
       className={`fixed inset-0 ${zIndexClassName} ${placement === "bottom" ? "flex items-end justify-center" : "grid place-items-center"} bg-slate-900/45 p-2 sm:p-4 ${allowPointerEventsOnOverlay ? "" : "pointer-events-none"} ${overlayClassName}`}
@@ -67,7 +70,7 @@ export function ResponsiveModal({
                   onClick={onClose}
                   type="button"
                 >
-                  {closeLabel}
+                  {t(closeLabel)}
                 </button>
               ) : null}
             </div>

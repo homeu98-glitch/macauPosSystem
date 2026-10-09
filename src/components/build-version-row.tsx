@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 
+import { useT } from "@/components/lang-provider";
 import {
   buildLabel,
   describeBuildMismatch,
@@ -37,7 +38,11 @@ import {
  * 「線上最新」係搭 `/api/pos/state` 嘅**回應標頭**（POS 本身每次都會打）
  * ⇒ 零額外呼叫、零額外 egress。
  */
+/** `buildLabel()` 入面會出現嘅環境名（`src/lib/build-info.ts` `envLabel()`）。 */
+const BUILD_LABELS = ["本機", "生產", "預覽"] as const;
+
 export function BuildVersionRow() {
+  const t = useT();
   // 內聯值喺 build 時已經固定，render 期間讀一次就夠。
   const [client] = useState<BuildInfo>(() => readClientBuildInfo());
   const [serverId, setServerId] = useState<string | null>(() => getObservedServerBuildId());
@@ -52,16 +57,25 @@ export function BuildVersionRow() {
   return (
     <div className="mb-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-        <span className="font-semibold text-slate-700">版本</span>
-        <span className="font-mono text-slate-800">{buildLabel(client)}</span>
+        <span className="font-semibold text-slate-700">{t("版本")}</span>
+        {/*
+          ⚠️ `buildLabel()` 嘅 hash／時間係技術值 ⇒ 唔翻譯。
+          但佢入面嘅環境名（`本機` / `生產` / `預覽`）係**顯示文案** ⇒ 只翻譯呢部分。
+          用 split/join 逐個替換，其他字（hash、時間括號）唔會被郁到。
+        */}
+        <span className="font-mono text-slate-800">
+          {BUILD_LABELS.reduce((acc, w) => acc.split(w).join(t(w)), buildLabel(client))}
+        </span>
         {serverId ? (
           <span className="text-xs text-slate-400">
-            線上最新：<span className="font-mono">{serverId}</span>
+            {t("線上最新：{id}", { id: "" }).trim()}
+            <span className="font-mono">{serverId}</span>
           </span>
         ) : null}
       </div>
       {mismatch ? (
         <div className="mt-2 rounded-xl bg-amber-50 px-3 py-2 text-xs font-semibold leading-relaxed text-amber-700 ring-1 ring-amber-200">
+          {/* ⚠️ `mismatch.text` 係技術診斷（build id + hash），唔翻譯 */}
           ⚠ {mismatch.text}
         </div>
       ) : null}

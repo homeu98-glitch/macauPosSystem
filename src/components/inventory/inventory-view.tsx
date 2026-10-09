@@ -18,6 +18,7 @@ import { posDeviceAuthHeadersFresh } from "@/lib/pos/pos-sync-auth";
 import { reorderByStored } from "@/lib/inventory-order";
 import { REPORT_RANGE_OPTIONS, reportRangeLabel, splitReportRangeArg, type ReportRangeArg, type ReportRangeKey } from "@/lib/ledger/report-period";
 import { DateRangeFilterChips } from "@/components/date-range-filter-chips";
+import { useT } from "@/components/lang-provider";
 import {
   buildPurchaseSummary,
   normalizePaymentMethod,
@@ -1727,6 +1728,7 @@ function ReceiptFormModal({
 }
 
 export function InventoryView() {
+  const t = useT();
   const [account, setAccount] = useState<string | null>(null);
   const [storeName, setStoreName] = useState<string>("");
   const [merchantId, setMerchantId] = useState<string | null>(null);
@@ -2220,11 +2222,14 @@ export function InventoryView() {
 
   const methodFilterOptions = useMemo(
     () => [
-      { key: ALL_METHODS, label: `全部（${receipts.length}）` },
+      // 「全部（N）」係第 1 層顯示文案 ⇒ 要翻譯（N 用 `{n}` placeholder）。
+      // 下面 methodChipGroups 嘅 label 係 admin 主檔嘅付款方式名 = 第 2 層
+      // 持久化資料值 ⇒ 一律唔翻譯（所以呢個 chips 要傳 translateLabels={false}）。
+      { key: ALL_METHODS, label: t("全部（{n}）", { n: receipts.length }) },
       ...methodChipGroups.withData,
       ...(showZeroMethods ? methodChipGroups.zero : []),
     ],
-    [receipts.length, methodChipGroups, showZeroMethods],
+    [receipts.length, methodChipGroups, showZeroMethods, t],
   );
 
   const visibleReceipts = useMemo(
@@ -2352,6 +2357,7 @@ export function InventoryView() {
             options={methodFilterOptions}
             value={methodFilter}
             onChange={(key) => setMethodFilter(key)}
+            translateLabels={false}
           />
           {methodChipGroups.zero.length > 0 && (
             <button

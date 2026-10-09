@@ -12,6 +12,7 @@
  * 就等於「呢張單唔係預約單」，唔會留空白行／空 label。
  */
 
+import { useT } from "@/components/lang-provider";
 import { formatMacauDateTime, formatMacauMonthDayTime } from "@/lib/format";
 import { normalizeLedgerStatus } from "@/lib/ledger/order-mapper";
 import {
@@ -20,7 +21,7 @@ import {
   scheduledPickupChipText,
   scheduledPickupKind,
   scheduledPickupMinutesUntil,
-  scheduledPickupRelativeText,
+  scheduledPickupRelativeParts,
   scheduledPickupTimeClass,
 } from "@/lib/pos/scheduled-pickup";
 
@@ -68,6 +69,7 @@ export function ScheduledPickupChip({
   /** 快餐面板／列表窄欄用：細一級字。 */
   compact?: boolean;
 }) {
+  const t = useT();
   // 已完結單（已完成／已取消）→ `closed`，唔會再出「快到了／已逾時」。
   const kind = scheduledPickupKind(order?.scheduledPickupAt, nowMs, undefined, isClosedScheduledOrder(order));
   if (!kind) return null;
@@ -79,7 +81,7 @@ export function ScheduledPickupChip({
       }`}
     >
       <span className={`h-1.5 w-1.5 rounded-full ${badge.dotClass}`} />
-      {scheduledPickupChipText(kind)}
+      {t(scheduledPickupChipText(kind))}
     </span>
   );
 }
@@ -101,16 +103,24 @@ export function ScheduledPickupTimeText({
   full?: boolean;
   className?: string;
 }) {
+  const t = useT();
   const iso = order?.scheduledPickupAt;
   const kind = scheduledPickupKind(iso, nowMs, undefined, isClosedScheduledOrder(order));
   if (!kind || !iso) return null;
   const timeText = full ? formatMacauDateTime(iso) : formatMacauMonthDayTime(iso);
   // ⚠️ `closed` 同 `full` 一樣唔出相對時間：單已完結，冇必要再講「已逾時 N 分鐘」。
-  const relative =
-    full || kind === "closed" ? "" : scheduledPickupRelativeText(scheduledPickupMinutesUntil(iso, nowMs));
+  // ⚠️ 用 `scheduledPickupRelativeParts()` 而唔係 `...Text()` —— 後者回已填值字串
+  //    （`18 分鐘後`），字典 key 係 `{minutes} 分鐘後`，t() 永遠命中唔到。
+  const relParts =
+    full || kind === "closed"
+      ? null
+      : scheduledPickupRelativeParts(scheduledPickupMinutesUntil(iso, nowMs));
+  const relative = relParts ? t(relParts.key, relParts.vars) : "";
   return (
     <span className={`tabular-nums ${scheduledPickupTimeClass(kind)} ${className}`.trim()}>
-      {full ? `預約時間：${timeText}` : `預約 ${timeText}`}
+      {full
+        ? t("預約時間：{time}", { time: timeText })
+        : t("預約 {time}", { time: timeText })}
       {relative ? ` · ${relative}` : ""}
     </span>
   );

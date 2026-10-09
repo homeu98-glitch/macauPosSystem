@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { KioskQrPanel, QrSvg } from "@/components/kiosk-qr-panel";
+import { useT } from "@/components/lang-provider";
 import { loadAuthSession } from "@/lib/storage";
 import { loadKioskDeviceBinding } from "@/lib/kiosk-order";
 import {
@@ -54,6 +55,7 @@ function useQrStoreId(): string {
 
 /** 全店單一快餐 QR（貼櫃檯／快餐區）。 */
 function QuickScanQrPanel({ storeId }: { storeId: string }) {
+  const t = useT();
   const [host, setHost] = useState("");
   const [hint, setHint] = useState<string | null>(null);
 
@@ -66,13 +68,12 @@ function QuickScanQrPanel({ storeId }: { storeId: string }) {
 
   return (
     <section className="min-w-0 overflow-hidden rounded-2xl border border-slate-200 bg-white p-4">
-      <div className="mb-1 text-base font-semibold text-slate-900">快餐掃碼 QR（全店一個）</div>
+      <div className="mb-1 text-base font-semibold text-slate-900">{t("快餐掃碼 QR（全店一個）")}</div>
       <p className="mb-4 text-sm text-slate-500">
-        快餐模式全店只用一個碼，客人掃碼後直接落單、每張單獨立（同自助點餐機快餐流程一致）。
-        印出貼喺櫃檯／快餐區。
+        {t("快餐模式全店只用一個碼，客人掃碼後直接落單、每張單獨立（同自助點餐機快餐流程一致）。印出貼喺櫃檯／快餐區。")}
       </p>
 
-      <label className="mb-1 block text-xs text-slate-500">網址主機（host）</label>
+      <label className="mb-1 block text-xs text-slate-500">{t("網址主機（host）")}</label>
       <input
         value={host}
         onChange={(e) => setHost(e.target.value)}
@@ -82,13 +83,13 @@ function QuickScanQrPanel({ storeId }: { storeId: string }) {
 
       {hint ? (
         <div className="mb-4 rounded-xl bg-amber-50 px-3 py-2 text-xs font-medium text-amber-800" role="status">
-          {hint}
+          {t(hint)}
         </div>
       ) : null}
 
       {!storeId ? (
         <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-6 text-center text-sm text-slate-400">
-          未取得店鋪編號，請先以商戶帳號登入 / 綁店。
+          {t("未取得店鋪編號，請先以商戶帳號登入 / 綁店。")}
         </div>
       ) : (
         <div className="flex flex-col items-center gap-3 rounded-2xl border border-slate-200 bg-white p-6">
@@ -103,11 +104,12 @@ function QuickScanQrPanel({ storeId }: { storeId: string }) {
               }}
               className="rounded-lg bg-slate-100 py-2 text-xs font-semibold text-slate-700"
             >
-              複製網址
+              {t("複製網址")}
             </button>
             <button
               type="button"
               onClick={() => {
+                // ⚠️ 呢三個係**紙單 / 貼紙**內容（客人掃碼見到）⇒ 維持繁中，唔翻譯。
                 const ok = openQrPrintWindow({
                   title: "掃碼點餐",
                   subtitle: "快餐",
@@ -119,7 +121,7 @@ function QuickScanQrPanel({ storeId }: { storeId: string }) {
               }}
               className="rounded-lg bg-orange-500 py-2 text-xs font-semibold text-white"
             >
-              列印
+              {t("列印")}
             </button>
           </div>
         </div>
@@ -129,6 +131,7 @@ function QuickScanQrPanel({ storeId }: { storeId: string }) {
 }
 
 export function ScanModePanel() {
+  const t = useT();
   const storeId = useQrStoreId();
   const [scanMode, setScanMode] = useState<ScanMode>(DEFAULT_SCAN_MODE);
   const [loading, setLoading] = useState(true);
@@ -154,35 +157,32 @@ export function ScanModePanel() {
     <div className="grid min-w-0 gap-4">
       <section className="min-w-0 overflow-hidden rounded-2xl border border-slate-200 bg-white p-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="text-base font-semibold text-slate-900">掃碼點餐模式</div>
+          <div className="text-base font-semibold text-slate-900">{t("掃碼點餐模式")}</div>
           {loading ? null : (
             <span
               className={`rounded-full px-3 py-1 text-xs font-semibold ${
                 scanMode === "quick" ? "bg-orange-100 text-orange-700" : "bg-sky-100 text-sky-700"
               }`}
             >
-              {scanMode === "quick" ? "快餐 · 全店一個碼" : "堂食 · 每枱一個碼"}
+              {scanMode === "quick" ? t("快餐 · 全店一個碼") : t("堂食 · 每枱一個碼")}
             </span>
           )}
         </div>
         <p className="mt-2 text-sm leading-relaxed text-slate-500">
-          呢個模式<b>跟登入模式自動設定</b>，唔需要喺呢一頁揀：
-          <b> 用「快餐」登入 = 全店一個碼</b>；<b>用「堂食」登入 = 每張桌台一個碼</b>。
+          {t("呢個模式跟登入模式自動設定，唔需要喺呢一頁揀：用「快餐」登入 = 全店一個碼；用「堂食」登入 = 每張桌台一個碼。")}
         </p>
         <p className="mt-2 text-xs leading-relaxed text-slate-500">
-          要更改模式，請<b>登出後用另一種模式重新登入</b>（登入畫面已經可以揀）。
-          下方只會顯示目前生效嘅 QR；另一邊嘅碼唔會再出現，避免印錯貼紙。
+          {t("要更改模式，請登出後用另一種模式重新登入（登入畫面已經可以揀）。下方只會顯示目前生效嘅 QR；另一邊嘅碼唔會再出現，避免印錯貼紙。")}
         </p>
         <p className="mt-2 text-xs leading-relaxed text-slate-400">
-          如果呢度顯示嘅模式同你登入嗰陣揀嘅唔一致（例如登入時離線、設定未能上傳），
-          請重新登入一次對應模式。
+          {t("如果呢度顯示嘅模式同你登入嗰陣揀嘅唔一致（例如登入時離線、設定未能上傳），請重新登入一次對應模式。")}
         </p>
 
         {loading ? (
-          <div className="mt-3 text-sm text-slate-400">讀取中…</div>
+          <div className="mt-3 text-sm text-slate-400">{t("讀取中…")}</div>
         ) : !storeId ? (
           <div className="mt-3 rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-6 text-center text-sm text-slate-400">
-            未取得店鋪編號，請先以商戶帳號登入 / 綁店。
+            {t("未取得店鋪編號，請先以商戶帳號登入 / 綁店。")}
           </div>
         ) : null}
       </section>

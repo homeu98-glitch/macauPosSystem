@@ -5,6 +5,7 @@ import { formatMacauDateTime } from "@/lib/format";
 import { useRouter } from "next/navigation";
 
 import { ResponsiveModal } from "@/components/responsive-modal";
+import { useT } from "@/components/lang-provider";
 import { ReceiptTicketPreview } from "@/components/receipt-ticket-preview";
 import { SelfOrderActionButtons } from "@/components/self-order-action-buttons";
 import { SelfOrderAutoAcceptToggle } from "@/components/self-order-auto-accept-toggle";
@@ -60,6 +61,11 @@ import { orderEventISO } from "@/lib/pos/order-event-time";
 import { posDeviceAuthHeaders, posDeviceAuthHeadersFresh, refreshPosDeviceTokenIfNeeded } from "@/lib/pos/pos-sync-auth";
 import { beginStateSince, commitStateSince } from "@/lib/pos/state-sync-client";
 
+/**
+ * ⚠️ label 保持**純中文** —— 呢個係 module scope，用唔到 `useT()`。
+ * 翻譯一律喺**顯示位**做：`t(tab.label)`（見 `activeTabLabel` 同 chips 渲染）。
+ * 呢啲標籤同 `pos-order-filters.ts` 嘅 badge label 同一套（守衛會查字典）。
+ */
 const STATUS_TABS: Array<{ key: LocalOrderPanelTab; label: string }> = [
   { key: "all", label: "全部" },
   { key: "preparing", label: "製作中" },
@@ -108,6 +114,8 @@ function QuickOrderActions({
   /** `row` = 列表一行嘅細掣；`modal` = 彈窗底部（尺寸同點餐頁彈窗一致）。 */
   variant?: "row" | "modal";
 }) {
+  // ⚠️ 一定要排喺下面所有 early return **之前**（Rules of Hooks）。
+  const t = useT();
   if (!isQuickCounterOrder(order)) return null;
   // draft 自助單唔顯示「可取餐」——要等撳「接受」先變 sent_to_kitchen（docs/87 §6）
   if (order.status === "draft" && isSelfOrder(order)) return null;
@@ -128,11 +136,11 @@ function QuickOrderActions({
         className={`${className} bg-orange-500 hover:bg-orange-600`}
         onClick={() => {
           updateQuickFulfillmentInStore(order.id);
-          onChanged(`${order.localOrderNo} 已標記可取餐。`);
+          onChanged(t("{no} 已標記可取餐。", { no: order.localOrderNo }));
         }}
         type="button"
       >
-        可取餐
+        {t("可取餐")}
       </button>
     );
   }
@@ -142,11 +150,11 @@ function QuickOrderActions({
       className={`${className} bg-emerald-600 hover:bg-emerald-700`}
       onClick={() => {
         markQuickOrderCompletedInStore(order.id, { label: completeText });
-        onChanged(`${order.localOrderNo} ${completeText}。`, { closeModal: true });
+        onChanged(t("{no} {status}。", { no: order.localOrderNo, status: t(completeText) }), { closeModal: true });
       }}
       type="button"
     >
-      {completeText}
+      {t(completeText)}
     </button>
   );
 }
@@ -166,6 +174,7 @@ export function LocalOrdersPanel({
   /** 當前 tab + 時間範圍篩選後嘅線下單（供 `/orders` 頁匯出 CSV）。 */
   onFilteredOrdersChange?: (orders: PosOrder[]) => void;
 }) {
+  const t = useT();
   const currency = loadBootstrapCache()?.currency ?? "MOP";
   const router = useRouter();
   const [orders, setOrders] = useState<PosOrder[]>(() => loadOrders().filter(isLocalOrTransferredDineIn));
@@ -338,7 +347,8 @@ export function LocalOrdersPanel({
     return () => window.clearTimeout(timer);
   }, [toast]);
 
-  const activeTabLabel = STATUS_TABS.find((t) => t.key === statusTab)?.label ?? "全部";
+  // ⚠️ arrow 參數唔可以叫 `t`（會 shadow 翻譯函式）；用 `tab`。
+  const activeTabLabel = t(STATUS_TABS.find((tab) => tab.key === statusTab)?.label ?? "全部");
 
   const filteredOrders = useMemo(() => {
     return orders
@@ -438,8 +448,8 @@ export function LocalOrdersPanel({
       }
       setToast(
         isPlatformOrder(cancelTarget)
-          ? `已取消（覆寫）${cancelTarget.localOrderNo}，已唔計入報表`
-          : `已取消 ${cancelTarget.localOrderNo}`,
+          ? t("已取消（覆寫）{no}，已唔計入報表", { no: cancelTarget.localOrderNo })
+          : t("已取消 {no}", { no: cancelTarget.localOrderNo }),
       );
       setCancelTargetOrderId(null);
       setCancelReason("");
@@ -475,7 +485,7 @@ export function LocalOrdersPanel({
   function reprintBillForOrder(order: PosOrder) {
     const count = reprintReceiptForOrder(order);
     if (count > 0) {
-      setToast(`已加入補打帳單打印隊列：${order.localOrderNo}`);
+      setToast(t("已加入補打帳單打印隊列：{no}", { no: order.localOrderNo }));
       return;
     }
     // 診斷文案共用（線上單補打行同一個 helper，保證兩邊提示一致）。
@@ -499,7 +509,7 @@ export function LocalOrdersPanel({
       });
       const data = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string; deleted?: number };
       if (!res.ok || data.ok === false) {
-        setToast(`刪除失敗：${data.error ?? res.status}`);
+        setToast(t("刪除失敗：{reason}", { reason: data.error ?? res.status }));
         return;
       }
       // 1.5) 本地線下單 id 記 tombstone（防 DB 刪除失效 / RLS 擋 / mock 模式時，backfill 又撈返嚟復活）
@@ -522,7 +532,7 @@ export function LocalOrdersPanel({
       if (deleted === 0) {
         setToast("已清除本機訂單，但 DB 未刪除任何單（可能離線 / mock 模式，請檢查連線）");
       } else {
-        setToast(`已刪除 ${deleted} 筆線下訂單（本地 + DB）`);
+        setToast(t("已刪除 {n} 筆線下訂單（本地 + DB）", { n: deleted }));
       }
     } catch {
       setToast("刪除失敗，請檢查網絡");
@@ -575,11 +585,12 @@ export function LocalOrdersPanel({
         */}
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
           <div className="min-w-0 shrink-0">
-            <div className="text-sm font-semibold text-slate-900">店內線下訂單</div>
+            <div className="text-sm font-semibold text-slate-900">{t("店內線下訂單")}</div>
             {/* 與左卡「線上訂單」header 同格式：dateFilter · tab · 共 X 張 · 新單 X 張。 */}
             <div className="mt-1 text-xs text-slate-500 sm:text-sm">
-              {dateFilterLabel(dateFilter)} · {activeTabLabel} · 共 {filteredOrders.length} 張 · 新單 {draftCount} 張
-            </div>
+              {/* ⚠️ `dateFilterLabel()` 回中文原文（字典 key）→ 一定要包 t()。 */}
+              {t(dateFilterLabel(dateFilter))} · {activeTabLabel}{" "}
+              {t("· 共 {total} 張 · 新單 {draft} 張", { total: filteredOrders.length, draft: draftCount })}</div>
           </div>
           <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
             {STATUS_TABS.map((tab) => (
@@ -591,7 +602,7 @@ export function LocalOrdersPanel({
                 onClick={() => setStatusTab(tab.key)}
                 type="button"
               >
-                {tab.label}
+                {t(tab.label)}
               </button>
             ))}
           </div>
@@ -619,7 +630,9 @@ export function LocalOrdersPanel({
       <div className="min-h-0 flex-1 overflow-auto p-3">
         {filteredOrders.length === 0 ? (
           <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center text-sm text-slate-500">
-            {dateFilter === "today" ? "今天暫無線下訂單" : `${dateFilterLabel(dateFilter)}暫無線下訂單`}
+            {dateFilter === "today"
+              ? t("今天暫無線下訂單")
+              : t("{range}暫無線下訂單", { range: t(dateFilterLabel(dateFilter)) })}
           </div>
         ) : (
           /*
@@ -639,14 +652,14 @@ export function LocalOrdersPanel({
             <table className="w-full min-w-[860px] table-fixed border-collapse text-left">
               <thead>
                 <tr>
-                  <th className={`${TH_CELL} w-[11%]`}>訂單號</th>
-                  <th className={`${TH_CELL} w-[10%]`}>餐台</th>
-                  <th className={`${TH_CELL} w-[11%]`}>時間</th>
-                  <th className={TH_CELL}>菜品</th>
-                  <th className={`${TH_CELL} w-[14%] text-right`}>金額</th>
-                  <th className={`${TH_CELL} w-[10%]`}>狀態</th>
-                  <th className={`${TH_CELL} w-[10%]`}>來源</th>
-                  <th className={`${TH_CELL} w-[22%] text-right`}>操作</th>
+                  <th className={`${TH_CELL} w-[11%]`}>{t("訂單號")}</th>
+                  <th className={`${TH_CELL} w-[10%]`}>{t("餐台")}</th>
+                  <th className={`${TH_CELL} w-[11%]`}>{t("時間")}</th>
+                  <th className={TH_CELL}>{t("菜品")}</th>
+                  <th className={`${TH_CELL} w-[14%] text-right`}>{t("金額")}</th>
+                  <th className={`${TH_CELL} w-[10%]`}>{t("狀態")}</th>
+                  <th className={`${TH_CELL} w-[10%]`}>{t("來源")}</th>
+                  <th className={`${TH_CELL} w-[22%] text-right`}>{t("操作")}</th>
                 </tr>
               </thead>
               <tbody>
@@ -699,9 +712,9 @@ export function LocalOrdersPanel({
                         </div>
                         {itemSaving + wholeSaving > 0 ? (
                           <div className="mt-0.5 text-[11px] tabular-nums text-amber-700">
-                            已優惠 -{formatMoney(itemSaving + wholeSaving, currency)}
+                            {t("已優惠 -{amt}", { amt: formatMoney(itemSaving + wholeSaving, currency) })}
                             <span className="ml-1 text-slate-400 line-through">
-                              原 {formatMoney(original, currency)}
+                              {t("原 {amt}", { amt: formatMoney(original, currency) })}
                             </span>
                           </div>
                         ) : null}
@@ -715,13 +728,13 @@ export function LocalOrdersPanel({
                             className={`inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-semibold ${badge.bgClass} ${badge.textClass}`}
                           >
                             <span className={`h-1.5 w-1.5 rounded-full ${badge.dotClass}`} />
-                            {badge.label}
+                            {t(badge.label)}
                           </span>
                           {isQuickCounterOrder(order) ? (
                             <span
                               className={`inline-flex shrink-0 items-center whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-semibold ${paymentBadge.bgClass} ${paymentBadge.textClass}`}
                             >
-                              {paymentBadge.label}
+                              {t(paymentBadge.label)}
                             </span>
                           ) : null}
                         </div>
@@ -761,7 +774,7 @@ export function LocalOrdersPanel({
                             }}
                             type="button"
                           >
-                            查看
+                            {t("查看")}
                           </button>
                           {/* 🔴 2026-09-13：守門由 `status === "settled"` 放寬成 `isReopenable(order)`。
                               `isReopenable()` 本身就**已經接受 `paid`**（見 pos-orders.ts），
@@ -777,7 +790,7 @@ export function LocalOrdersPanel({
                               }}
                               type="button"
                             >
-                              返結帳
+                              {t("返結帳")}
                             </button>
                           ) : null}
                           <QuickOrderActions onChanged={handleQuickAction} order={order} />
@@ -789,7 +802,7 @@ export function LocalOrdersPanel({
                               onClick={() => openCancelSettle(order)}
                               type="button"
                             >
-                              取消
+                              {t("取消")}
                             </button>
                           ) : null}
                           {/* 自助單 draft → 顯示「接受 / 拒絕」掣（規格 6：開關熄咗時需人手接受，統一用 SelfOrderActionButtons 避免走樣） */}
@@ -799,7 +812,7 @@ export function LocalOrdersPanel({
                               onConfirm={() => {
                                 const result = confirmSelfOrder(order.id);
                                 if (result.ok) {
-                                  setToast(`已接受自助單 ${order.localOrderNo}`);
+                                  setToast(t("已接受自助單 {no}", { no: order.localOrderNo }));
                                   refresh();
                                 } else {
                                   setToast(result.error ?? "接受失敗");
@@ -809,7 +822,7 @@ export function LocalOrdersPanel({
                               onReject={() => {
                                 const result = rejectSelfOrder(order.id);
                                 if (result.ok) {
-                                  setToast(`已拒絕自助單 ${order.localOrderNo}`);
+                                  setToast(t("已拒絕自助單 {no}", { no: order.localOrderNo }));
                                   refresh();
                                 } else {
                                   setToast(result.error ?? "拒絕失敗");
@@ -844,7 +857,7 @@ export function LocalOrdersPanel({
                 onClick={() => setViewingOrderId(null)}
                 type="button"
               >
-                關閉
+                {t("關閉")}
               </button>
               {hasReceivableReceipt(viewingOrder) ? (
                 <button
@@ -852,7 +865,7 @@ export function LocalOrdersPanel({
                   onClick={() => reprintBillForOrder(viewingOrder)}
                   type="button"
                 >
-                  補打帳單
+                  {t("補打帳單")}
                 </button>
               ) : null}
               {/* 自助單 draft：接受 / 拒絕（同點餐頁彈窗同一個元件，唔會走樣） */}
@@ -863,7 +876,7 @@ export function LocalOrdersPanel({
                   onConfirm={() => {
                     const result = confirmSelfOrder(viewingOrder.id);
                     if (result.ok) {
-                      setToast(`已接受自助單 ${viewingOrder.localOrderNo}`);
+                      setToast(t("已接受自助單 {no}", { no: viewingOrder.localOrderNo }));
                       refresh();
                       setViewingOrderId(null);
                     } else {
@@ -874,7 +887,7 @@ export function LocalOrdersPanel({
                   onReject={() => {
                     const result = rejectSelfOrder(viewingOrder.id);
                     if (result.ok) {
-                      setToast(`已拒絕自助單 ${viewingOrder.localOrderNo}`);
+                      setToast(t("已拒絕自助單 {no}", { no: viewingOrder.localOrderNo }));
                       refresh();
                       setViewingOrderId(null);
                     } else {
@@ -896,12 +909,12 @@ export function LocalOrdersPanel({
                   onClick={() => openCancelSettle(viewingOrder)}
                   title={
                     isPlatformOrder(viewingOrder)
-                      ? "平台單作廢（覆寫）：任何階段都可用，會將呢張單唔計入報表"
+                      ? t("平台單作廢（覆寫）：任何階段都可用，會將呢張單唔計入報表")
                       : undefined
                   }
                   type="button"
                 >
-                  {isPlatformOrder(viewingOrder) ? "取消" : "取消結帳"}
+                  {isPlatformOrder(viewingOrder) ? t("取消") : t("取消結帳")}
                 </button>
               ) : null}
             </>
@@ -909,7 +922,7 @@ export function LocalOrdersPanel({
           header={
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
-                <div className="text-xl font-semibold text-slate-900">訂單詳情</div>
+                <div className="text-xl font-semibold text-slate-900">{t("訂單詳情")}</div>
                 <div className="mt-1 flex flex-wrap items-center gap-1.5 text-sm text-slate-500">
                   <span>
                     {viewingOrder.localOrderNo} · {viewingOrder.tableName}
@@ -920,7 +933,7 @@ export function LocalOrdersPanel({
                 </div>
                 {viewingOrder.reopenReason ? (
                   <div className="mt-1 text-xs text-indigo-700">
-                    返結原因：{viewingOrder.reopenReason}
+                    {t("返結原因：")}{viewingOrder.reopenReason}
                   </div>
                 ) : null}
               </div>
@@ -935,7 +948,7 @@ export function LocalOrdersPanel({
                       (() => { const b = getOrderStatusBadge(viewingOrder); return b.dotClass; })()
                     }`}
                   />
-                  {(() => { const b = getOrderStatusBadge(viewingOrder); return b.label; })()}
+                  {(() => { const b = getOrderStatusBadge(viewingOrder); return t(b.label); })()}
                 </div>
                 {/* 快餐單：付款狀態（已結帳 / 未結帳）同出餐狀態係兩個獨立維度 */}
                 {isQuickCounterOrder(viewingOrder) ? (
@@ -944,7 +957,7 @@ export function LocalOrdersPanel({
                       (() => { const p = getPaymentBadge(viewingOrder); return `${p.bgClass} ${p.textClass}`; })()
                     }`}
                   >
-                    {(() => { const p = getPaymentBadge(viewingOrder); return p.label; })()}
+                    {(() => { const p = getPaymentBadge(viewingOrder); return t(p.label); })()}
                   </div>
                 ) : null}
               </div>
@@ -969,7 +982,7 @@ export function LocalOrdersPanel({
                       ) : null}
                       {item.note ? (
                         <div className="mt-1 whitespace-pre-wrap break-words text-xs text-slate-500">
-                          備註：{item.note}
+                          {t("備註：")}{item.note}
                         </div>
                       ) : null}
                       {itemHasDiscount ? (
@@ -1006,7 +1019,7 @@ export function LocalOrdersPanel({
                     <div className="truncate text-sm font-semibold text-slate-900 line-through">
                       {item.name}
                       <span className="ml-2 inline-flex rounded-full bg-red-500 px-2 py-0.5 text-[11px] font-bold text-white">
-                        已退菜
+                        {t("已退菜")}
                       </span>
                     </div>
                     {item.selectedSpecs?.length ? (
@@ -1015,11 +1028,11 @@ export function LocalOrdersPanel({
                       </div>
                     ) : null}
                     {item.voidedReason ? (
-                      <div className="mt-1 text-[11px] text-red-600">退菜原因：{item.voidedReason}</div>
+                      <div className="mt-1 text-[11px] text-red-600">{t("退菜原因：")}{item.voidedReason}</div>
                     ) : null}
                   </div>
                   <div className="shrink-0 rounded-full bg-red-200 px-3 py-1 text-xs font-semibold text-red-700">
-                    已退 x{item.quantity}
+                    {t("已退 x")}{item.quantity}
                   </div>
                 </div>
               </div>
@@ -1037,8 +1050,7 @@ export function LocalOrdersPanel({
             {/* 折扣備註（2026-09-11 需求 #2）：凡影響實收嘅調整都要見到原因 */}
             {viewingOrderDiscountNotes.length > 0 ? (
               <div className="mt-2 rounded-2xl border border-amber-200 bg-amber-50/60 px-3 py-2 text-sm text-slate-500">
-                折扣備註：
-                <span className="ml-1 inline-flex flex-wrap gap-1 align-middle">
+                {t("折扣備註：")}<span className="ml-1 inline-flex flex-wrap gap-1 align-middle">
                   {viewingOrderDiscountNotes.map((note, index) => (
                     <span
                       key={`${note.kind}-${note.text}-${index}`}
@@ -1061,19 +1073,18 @@ export function LocalOrdersPanel({
               <PlatformSettlementBreakdown order={viewingOrder} currency={currency} />
             ) : null}
             <div className="mt-2 flex items-center justify-between text-sm text-slate-500">
-              <span>總計</span>
+              <span>{t("總計")}</span>
               <span className="text-base font-semibold text-slate-900">{formatMoney(viewingOrder.total, currency)}</span>
             </div>
             {viewingOrder.orderNote ? (
               <div className="mt-2 text-sm text-slate-500">
-                全單備註：<span className="font-semibold text-slate-900">{viewingOrder.orderNote}</span>
+                {t("全單備註：")}<span className="font-semibold text-slate-900">{viewingOrder.orderNote}</span>
               </div>
             ) : null}
             {/* 免單審計：獨立欄位（唔係 orderNote，後者受 docs/84 鎖定） */}
             {viewingOrder.compNote ? (
               <div className="mt-2 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-500">
-                免單備註：
-                <span className="whitespace-pre-wrap break-words font-semibold text-slate-900">{viewingOrder.compNote}</span>
+                {t("免單備註：")}<span className="whitespace-pre-wrap break-words font-semibold text-slate-900">{viewingOrder.compNote}</span>
               </div>
             ) : null}
           </div>
@@ -1082,17 +1093,17 @@ export function LocalOrdersPanel({
 
       {reopenTarget ? (
         <ResponsiveModal
-          description="把此單退回可編輯，改正後重新結帳"
+          description={t("把此單退回可編輯，改正後重新結帳")}
           onClose={() => {
             setReopenTargetOrderId(null);
             setReopenReason("");
           }}
-          title="返結帳（反結賬）"
+          title={t("返結帳（反結賬）")}
           widthClassName="max-w-md"
         >
           <div className="grid gap-3">
             <p className="text-[11px] text-amber-700">
-              必須揀返結原因，確認後跳去點餐枱面操作（可改價／加餐／重結）。
+              {t("必須揀返結原因，確認後跳去點餐枱面操作（可改價／加餐／重結）。")}
             </p>
             <select
               className="w-full rounded-lg border border-amber-300 bg-white px-2 py-2 text-sm"
@@ -1100,7 +1111,7 @@ export function LocalOrdersPanel({
               onChange={(e) => setReopenReason(e.target.value)}
             >
               <option value="" disabled>
-                揀返結原因…
+                {t("揀返結原因…")}
               </option>
               {(loadPosLocalSettings()?.reopenReasons ?? []).map((r) => (
                 <option key={r} value={r}>
@@ -1114,7 +1125,7 @@ export function LocalOrdersPanel({
               disabled={!reopenReason || reopenSubmitting}
               onClick={() => handleReopen(reopenTarget)}
             >
-              {reopenSubmitting ? "處理中…" : "返結帳"}
+              {reopenSubmitting ? t("處理中…") : t("返結帳")}
             </button>
           </div>
         </ResponsiveModal>
@@ -1122,33 +1133,29 @@ export function LocalOrdersPanel({
 
       {cancelTarget ? (
         <ResponsiveModal
-          description="作廢此單（未收款），原因會記錄在訂單紀錄"
+          description={t("作廢此單（未收款），原因會記錄在訂單紀錄")}
           onClose={() => {
             setCancelTargetOrderId(null);
             setCancelReason("");
           }}
-          title={cancelTarget && isPlatformOrder(cancelTarget) ? "取消平台單（覆寫）" : "取消結帳"}
+          title={cancelTarget && isPlatformOrder(cancelTarget) ? t("取消平台單（覆寫）") : t("取消結帳")}
           widthClassName="max-w-md"
         >
           <div className="grid gap-3">
             {cancelTarget && isPlatformOrder(cancelTarget) ? (
               /* 🔴 講清楚呢個係 override：唔跟狀態流程，而且會即刻影響報表。 */
               <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800 ring-1 ring-amber-200">
-                平台單作廢（覆寫）：<b>任何階段都可以用</b>（含已結帳／已完成）。
-                執行後呢張單會變成「已取消」，<b>即刻唔計入營業額／報表</b>。
-                平台照樣收錢嘅話，請自行對帳。
-              </p>
+                {t("平台單作廢（覆寫）：")}<b>{t("任何階段都可以用")}</b>{t("（含已結帳／已完成）。 執行後呢張單會變成「已取消」，")}<b>{t("即刻唔計入營業額／報表")}</b>{t("。 平台照樣收錢嘅話，請自行對帳。")}</p>
             ) : null}
             <p className="text-xs text-slate-500">
-              訂單 <span className="font-semibold text-slate-900">{cancelTarget.localOrderNo}</span>
-              （{cancelTarget.tableName}）會被標記為「已取消」，唔會計入營業額。
-            </p>
+              {t("訂單 ")}<span className="font-semibold text-slate-900">{cancelTarget.localOrderNo}</span>
+              {t("（{table}）會被標記為「已取消」，唔會計入營業額。", { table: cancelTarget.tableName })}</p>
             {/* 原因可選（同收銀台「取消結帳」一致：唔填 → 記「收銀取消結帳」）。
                 用 datalist 令收銀可以一撳揀常用原因，亦可以自由輸入。 */}
             <input
               className="w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm"
               list="local-order-cancel-reasons"
-              placeholder="（可選）取消原因"
+              placeholder={t("（可選）取消原因")}
               value={cancelReason}
               onChange={(e) => setCancelReason(e.target.value)}
             />
@@ -1167,7 +1174,7 @@ export function LocalOrdersPanel({
                 }}
                 disabled={cancelSubmitting}
               >
-                返回
+                {t("返回")}
               </button>
               <button
                 type="button"
@@ -1175,7 +1182,7 @@ export function LocalOrdersPanel({
                 onClick={handleCancelSettle}
                 disabled={cancelSubmitting}
               >
-                {cancelSubmitting ? "處理中…" : "確認取消"}
+                {cancelSubmitting ? t("處理中…") : t("確認取消")}
               </button>
             </div>
           </div>
@@ -1184,17 +1191,14 @@ export function LocalOrdersPanel({
 
       {confirmDeleteAllOpen ? (
         <ResponsiveModal
-          description="此操作不可復原，會刪除本店全部「店內線下訂單」。"
+          description={t("此操作不可復原，會刪除本店全部「店內線下訂單」。")}
           onClose={() => setConfirmDeleteAllOpen(false)}
-          title="刪除全部訂單"
+          title={t("刪除全部訂單")}
           widthClassName="max-w-md"
         >
           <div className="grid gap-3">
             <p className="text-xs text-red-700">
-              警告：一經確認即永久刪除本店所有線下訂單（含結帳紀錄），無法復原。
-              其他已開啟嘅收銀 / 點餐終端唔會自動清除，佢哋下次同步時會重新拉取空列表刷新畫面。
-              Ledger 線上訂單（會員餘額相關）唔會受影響。
-            </p>
+              {t("警告：一經確認即永久刪除本店所有線下訂單（含結帳紀錄），無法復原。 其他已開啟嘅收銀 / 點餐終端唔會自動清除，佢哋下次同步時會重新拉取空列表刷新畫面。 Ledger 線上訂單（會員餘額相關）唔會受影響。")}</p>
             <div className="flex gap-2">
               <button
                 type="button"
@@ -1202,7 +1206,7 @@ export function LocalOrdersPanel({
                 onClick={() => setConfirmDeleteAllOpen(false)}
                 disabled={deletingAll}
               >
-                取消
+                {t("取消")}
               </button>
               <button
                 type="button"
@@ -1210,7 +1214,7 @@ export function LocalOrdersPanel({
                 onClick={handleDeleteAllOrders}
                 disabled={deletingAll}
               >
-                {deletingAll ? "刪除中…" : "確認刪除全部"}
+                {deletingAll ? t("刪除中…") : t("確認刪除全部")}
               </button>
             </div>
           </div>
@@ -1219,9 +1223,9 @@ export function LocalOrdersPanel({
 
       {receiptPreviewOrder ? (
         <ResponsiveModal
-          description="按現有收據打印模板樣式生成嘅預覽"
+          description={t("按現有收據打印模板樣式生成嘅預覽")}
           onClose={() => setReceiptPreviewOrderId(null)}
-          title={`收據預覽 · ${receiptPreviewOrder.localOrderNo}`}
+          title={t("收據預覽 · {no}", { no: receiptPreviewOrder.localOrderNo })}
           widthClassName="max-w-md"
         >
           <div className="grid gap-3">
@@ -1249,7 +1253,7 @@ export function LocalOrdersPanel({
                 className="w-full rounded-xl bg-slate-900 px-3 py-2.5 text-sm font-semibold text-white hover:bg-slate-800"
                 onClick={() => reprintBillForOrder(receiptPreviewOrder)}
               >
-                補打帳單（收據）
+                {t("補打帳單（收據）")}
               </button>
             ) : null}
           </div>
@@ -1258,7 +1262,7 @@ export function LocalOrdersPanel({
 
       {toast ? (
         <div className="pointer-events-none fixed bottom-6 left-1/2 z-[70] -translate-x-1/2 rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-lg">
-          {toast}
+          {t(toast)}
         </div>
       ) : null}
     </div>

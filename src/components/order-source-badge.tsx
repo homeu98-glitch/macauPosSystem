@@ -1,3 +1,6 @@
+"use client";
+
+import { useT } from "@/components/lang-provider";
 import { PosOrder } from "@/lib/types";
 import { orderSourceLabel, orderSourceOf } from "@/lib/pos/order-source";
 
@@ -24,7 +27,10 @@ export function OrderSourceBadge({
   className?: string;
 }) {
   const source = orderSourceOf(order);
-  const label = orderSourceLabel(source);
+  const t = useT();
+  // ⚠️ orderSourceLabel() 回傳純中文（第 1 層顯示文案，從不參與比較）——
+  //    所以喺顯示位包 t()，令字典成為唯一真源。
+  const label = t(orderSourceLabel(source));
   const style = SOURCE_STYLE[source];
 
   return (

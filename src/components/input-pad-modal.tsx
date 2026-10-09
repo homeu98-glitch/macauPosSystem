@@ -1,6 +1,7 @@
 "use client";
 
 import { ResponsiveModal } from "@/components/responsive-modal";
+import { useT } from "@/components/lang-provider";
 
 type InputPadModalProps = {
   open: boolean;
@@ -34,6 +35,7 @@ export function InputPadModal({
   onClose,
   onConfirm,
 }: InputPadModalProps) {
+  const t = useT();
   if (!open) return null;
 
   const rows = mode === "number" ? NUMBER_ROWS : TEXT_ROWS;
@@ -60,7 +62,7 @@ export function InputPadModal({
               onClick={() => onChange("0")}
               type="button"
             >
-              歸零
+              {t("歸零")}
             </button>
           )}
           <button
@@ -68,20 +70,20 @@ export function InputPadModal({
             onClick={() => onChange(value.slice(0, -1))}
             type="button"
           >
-            刪除
+            {t("刪除")}
           </button>
           <button
             className="rounded-2xl bg-orange-500 px-4 py-3 text-sm font-semibold text-white hover:bg-orange-600"
             onClick={onConfirm}
             type="button"
           >
-            確定
+            {t("確定")}
           </button>
         </>
       }
       allowPointerEventsOnOverlay={false}
       bodyClassName="grid gap-3"
-      description={mode === "number" ? "請輸入數字" : "請輸入文字"}
+      description={mode === "number" ? t("請輸入數字") : t("請輸入文字")}
       onClose={onClose}
       panelClassName="border border-slate-200"
       placement="bottom"

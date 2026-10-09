@@ -1,0 +1,22 @@
+{
+  "已接單並開始製作{hint}：{code}": "Accepted and preparing{hint}: {code}",
+  "已接單{hint}：{code}": "Accepted{hint}: {code}",
+  "排位已成功，但同步線上訂單狀態失敗：{reason}": "Table assigned, but syncing the online order status failed: {reason}",
+  "已接單，但廚房單送出失敗，可稍後重打。": "Order accepted, but the kitchen ticket failed to send. You can reprint later.",
+  "已同意修改，但廚房單補印失敗，可稍後重打。": "Change approved, but the kitchen ticket reprint failed. You can reprint later.",
+  "已處理客人申請。": "Customer request handled.",
+  "已更新訂單。": "Order updated.",
+  "操作失敗": "Action failed",
+  "改到店付款失敗": "Switching to pay-in-store failed",
+  "接單": "Accept",
+  "已拒絕訂單。": "Order rejected.",
+  "確定拒絕這張線上訂單？": "Reject this online order?",
+  "完整列表請至": "See the full list in",
+  "。": ".",
+  "現時：{badge}。選擇新桌台即改枱。": "Current: {badge}. Pick a new table to move it.",
+  "載入品項…": "Loading items…",
+  "{code} · {tab} · {status}": "{code} · {tab} · {status}",
+  "已支付 {amount}": "Paid {amount}",
+  "線上訂單詳情": "Online order details",
+  "暫無待處理線上訂單。": "No pending online orders."
+}

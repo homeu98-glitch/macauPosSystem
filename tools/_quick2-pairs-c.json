@@ -1,0 +1,4 @@
+{
+  "平台單作廢（覆寫）：無論任何階段（含已結帳／已完成）都可以用，會將呢張單唔計入報表": "Void platform order (override): works at any stage (including settled/completed); this order will be excluded from reports",
+  "正在載入 Ledger 線上訂單…": "Loading Ledger online orders…"
+}

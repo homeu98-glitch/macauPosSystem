@@ -1,5 +1,7 @@
 "use client";
 
+import { useT } from "@/components/lang-provider";
+
 /**
  * 「開啟接單」主開關 pill —— 全站**共用同一個樣式**（同 `AutoAcceptPill` 同一套視覺語言）。
  *
@@ -119,6 +121,7 @@ export function MerchantOpenPill({
   residual = false,
   residualHint,
 }: MerchantOpenPillProps) {
+  const t = useT();
   const contained = variant === "contained";
   const sm = size === "sm";
   const xs = size === "xs";
@@ -158,7 +161,7 @@ export function MerchantOpenPill({
    * `span` 唔受嗰條規則影響，所以字級寫落 `span` 就穩。
    * （`sm` / `md` 維持原本做法，避免改到既有外觀。）
    */
-  const stateText = unknown ? "未接通" : enabled ? enabledLabel : offLabel;
+  const stateText = unknown ? t("未接通") : enabled ? t(enabledLabel) : t(offLabel);
   const stateNode = xs ? (
     <span className="block text-[12px] font-semibold leading-[1.35]">{stateText}</span>
   ) : (
@@ -175,19 +178,19 @@ export function MerchantOpenPill({
         */}
         {residual ? (
           <span
-            aria-label={residualHint ?? "仍有接單通道開住"}
+            aria-label={residualHint ? t(residualHint) : t("仍有接單通道開住")}
             className="mr-1 inline-block h-2 w-2 shrink-0 animate-pulse rounded-full bg-amber-500 align-middle"
             role="img"
-            title={residualHint}
+            title={residualHint ? t(residualHint) : undefined}
           />
         ) : null}
-        {label}
+        {t(label)}
         {busy && busyHint ? (
-          <span className="ml-1 font-normal text-slate-400">{busyHint}</span>
+          <span className="ml-1 font-normal text-slate-400">{t(busyHint)}</span>
         ) : null}
       </span>
       <button
-        aria-label={unknown ? "接單狀態未接通" : `開啟或暫停${label}`}
+        aria-label={unknown ? t("接單狀態未接通") : t("開啟或暫停{label}", { label: t(label) })}
         aria-pressed={unknown ? undefined : enabled}
         className={`${buttonSizeClass} ${stateClass} disabled:opacity-60`}
         disabled={!interactive || busy}
@@ -195,18 +198,20 @@ export function MerchantOpenPill({
           if (!interactive) return;
           if (enabled) {
             // 關店：誤觸等於停業 → 一定要問清楚
-            if (typeof window !== "undefined" && !window.confirm(confirmMessage)) return;
+            if (typeof window !== "undefined" && !window.confirm(t(confirmMessage))) return;
             onChange(false);
             return;
           }
           onChange(true);
         }}
-        title={unknown ? unknownHint : undefined}
+        title={unknown ? t(unknownHint) : undefined}
         type="button"
       >
         {stateNode}
       </button>
-      {error ? <span className="text-[11px] font-semibold text-red-600">· {error}</span> : null}
+      {/* ⚠️ `error` 係 hook 回傳嘅**中文原文**（字典 key）—— 顯示位先 t()。
+          動態例外訊息（`e.message`）唔會命中字典 → 原樣返回。 */}
+      {error ? <span className="text-[11px] font-semibold text-red-600">· {t(error)}</span> : null}
     </>
   );
 

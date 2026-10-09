@@ -17,8 +17,8 @@ import {
   normalizeUiLang,
   type UiLang,
 } from "@/lib/i18n";
-import { EN_DICT, SHORT_EN_DICT } from "@/lib/i18n-dict-en";
-import { SHORT_ZH_DICT, ZH_HANT_DICT } from "@/lib/i18n-dict-zh";
+import { EN_DICT, SHORT_EN_DICT, SIDEBAR_EN_DICT } from "@/lib/i18n-dict-en";
+import { SHORT_ZH_DICT, SIDEBAR_ZH_DICT, ZH_HANT_DICT } from "@/lib/i18n-dict-zh";
 import { loadUiLang, saveUiLang } from "@/lib/ui-preference";
 
 /**
@@ -53,6 +53,18 @@ type LangContextValue = {
    * 所以縮寫**必須 ≤3 字母**（`i18n-dict-en.ts` 有註解）。
    */
   tShort: (zh: string) => string;
+  /**
+   * 側欄導航標籤翻譯 —— 用**另一本獨立字典**（2026-10-08）。
+   *
+   * 🔴 點解唔可以用 `t()`？—— 桌面側欄淨闊 56px（`w-[72px]` − `px-2` ×2），
+   * `EN_DICT` 嘅 "Inventory"(9) / "Sold out"(8) / "Printing"(8) 放唔落，
+   * J 實機截圖證實係**直接被裁走**（`Members` → `Member`）。
+   * `tNav()` 嘅譯文全部收窄到 ≤6 字母。
+   *
+   * ⚠️ 唔好因為「英文好短」就還原返 `t()` ——
+   * 同一個 `打印` 喺設置頁要顯示 "Printer settings"，喺側欄只需要 "Print"。
+   */
+  tNav: (zh: string) => string;
 };
 
 const LangContext = createContext<LangContextValue | null>(null);
@@ -140,9 +152,17 @@ export function LangProvider({ children }: { children: ReactNode }) {
     [lang],
   );
 
+  const tNav = useCallback(
+    (zh: string) => {
+      const dict = lang === "en" ? SIDEBAR_EN_DICT : SIDEBAR_ZH_DICT;
+      return lookup(dict, zh);
+    },
+    [lang],
+  );
+
   const value = useMemo(
-    () => ({ lang, setLang, t, tShort }),
-    [lang, setLang, t, tShort],
+    () => ({ lang, setLang, t, tShort, tNav }),
+    [lang, setLang, t, tShort, tNav],
   );
   return <LangContext.Provider value={value}>{children}</LangContext.Provider>;
 }
@@ -172,4 +192,9 @@ export function useT(): LangContextValue["t"] {
 /** 單字徽章翻譯（`short`）。見 `LangContextValue.tShort`。 */
 export function useTShort(): LangContextValue["tShort"] {
   return useLang().tShort;
+}
+
+/** 側欄導航標籤翻譯（≤6 字母版）。見 `LangContextValue.tNav`。 */
+export function useTNav(): LangContextValue["tNav"] {
+  return useLang().tNav;
 }

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { AppSidebar } from "@/components/app-sidebar";
+import { useT } from "@/components/lang-provider";
 import { DateRangeFilterChips } from "@/components/date-range-filter-chips";
 import { LocalOrdersPanel } from "@/components/local-orders-panel";
 import { OnlineOrders } from "@/components/online-orders";
@@ -51,6 +52,7 @@ function todayKey(): string {
  * 免得用戶刷新 / 撳返回時又彈一次。
  */
 export function OrdersHub() {
+  const t = useT();
   const [dateFilter, setDateFilter] = useState<LedgerOrderDateFilterKey>("today");
   const [customRange, setCustomRange] = useState<CustomDateRange | null>(null);
   const [focusOrderId, setFocusOrderId] = useState<string | null>(null);
@@ -200,8 +202,8 @@ export function OrdersHub() {
         <header className="shrink-0 border-b border-slate-200 bg-white px-4 py-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <div className="text-lg font-semibold text-slate-900">訂單</div>
-              <div className="mt-0.5 text-sm text-slate-500">上：會員通線上訂單 · 下：店內線下訂單</div>
+              <div className="text-lg font-semibold text-slate-900">{t("訂單")}</div>
+              <div className="mt-0.5 text-sm text-slate-500">{t("上：會員通線上訂單 · 下：店內線下訂單")}</div>
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <DateRangeFilterChips
@@ -216,19 +218,19 @@ export function OrdersHub() {
                   className="inline-flex min-h-[36px] items-center rounded-full bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-50"
                   disabled={onlineRows.length === 0}
                   onClick={exportOnlineCsv}
-                  title="匯出當前時間範圍內嘅線上訂單（含客人電話）"
+                  title={t("匯出當前時間範圍內嘅線上訂單（含客人電話）")}
                   type="button"
                 >
-                  匯出線上單（{onlineRows.length}）
+                  {t("匯出線上單（{n}）", { n: onlineRows.length })}
                 </button>
                 <button
                   className="inline-flex min-h-[36px] items-center rounded-full bg-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-300 disabled:opacity-50"
                   disabled={localRows.length === 0}
                   onClick={exportLocalCsv}
-                  title="匯出當前時間範圍內嘅線下訂單"
+                  title={t("匯出當前時間範圍內嘅線下訂單")}
                   type="button"
                 >
-                  匯出線下單（{localRows.length}）
+                  {t("匯出線下單（{n}）", { n: localRows.length })}
                 </button>
               </div>
             </div>

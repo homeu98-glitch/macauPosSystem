@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 
+import { useT } from "@/components/lang-provider";
 import {
   customRangeLabel,
   normalizeCustomRange,
@@ -40,6 +41,20 @@ import {
  * 撳「自訂」chip → 開彈窗；**確認之後**才將 `custom` 寫上去。若用戶取消，
  * `key` 保持不變（唔會變成一個「custom 但冇區間」嘅殭屍狀態）。
  * 已套用過區間再撳「自訂」→ 彈窗預填上次區間。
+ *
+ * ## i18n（2026-10-08）
+ *
+ * 彈窗自己嘅文案（標題／按鈕／錯誤／快速預設）**一律**經 `t()`。
+ *
+ * `options` 嘅 `label` 就要 caller 自己決定 —— 因為呢個元件同時被兩種用途借咗：
+ *
+ * - 時間範圍 chips（`今天` / `最近 7 天`…）→ **第 1 層顯示文案**，要翻譯。
+ * - `inventory-view` 嘅付款方式 chips → 撳落去係**第 2 層持久化資料值**
+ *   （admin 主檔嘅付款方式名）。翻譯 = 靜靜壞篩選，所以嗰邊傳
+ *   `translateLabels={false}`。
+ *
+ * 預設 `true`（fail-open）：`t()` 對唔存在嘅 key 係原樣回傳，所以就算有
+ * 新 caller 漏咗傳 flag，最壞情況只係「維持中文」而唔會壞功能。
  */
 export function DateRangeFilterChips<K extends string>({
   options,
@@ -48,6 +63,7 @@ export function DateRangeFilterChips<K extends string>({
   onChange,
   size = "md",
   className = "",
+  translateLabels = true,
 }: {
   /** 選項陣列，最後一項**必須**係 `key: "custom"`（會渲染成特殊 chip）。 */
   options: Array<{ key: K; label: string }>;
@@ -57,12 +73,29 @@ export function DateRangeFilterChips<K extends string>({
   onChange: (key: K, custom: CustomDateRange | null) => void;
   size?: "sm" | "md";
   className?: string;
+  /**
+   * 係唔係將 `options[].label` 當第 1 層文案去翻譯。
+   *
+   * ⚠️ 標籤帶數字（例：`全部（3）`）嘅話，字典 key 要用 `{n}` placeholder
+   * （`全部（{n}）`），並由 caller 自己 `t("全部（{n}）", { n })` ——
+   * 呢度淨係做無參數嘅 `t(label)`。
+   */
+  translateLabels?: boolean;
 }) {
+  const t = useT();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [draftStart, setDraftStart] = useState("");
   const [draftEnd, setDraftEnd] = useState("");
-  const [dialogError, setDialogError] = useState<string | null>(null);
+  /**
+   * 錯誤**存 code 唔存譯文**（2026-10-08）。
+   *
+   * 若果將已翻譯嘅字串放入 state，切換語言時呢個 state 唔會重算 ⇒
+   * 彈窗會殘留上一種語言嘅錯誤訊息。存 code、render 期才 `t()` 就冇呢個問題。
+   */
+  const [dialogError, setDialogError] = useState<"order" | "invalid" | null>(null);
   const startRef = useRef<HTMLInputElement>(null);
+
+  const labelOf = (label: string) => (translateLabels ? t(label) : label);
 
   const customOption = options.find((o) => o.key === "custom") ?? null;
   const plainOptions = options.filter((o) => o.key !== "custom");
@@ -81,8 +114,9 @@ export function DateRangeFilterChips<K extends string>({
     }
     setDialogError(null);
     // 焦點移到起始日，方便鍵盤／觸控輸入
-    const t = window.setTimeout(() => startRef.current?.focus(), 50);
-    return () => window.clearTimeout(t);
+    // ⚠️ 唔可以叫 `t` —— 會 shadow 上面 `useT()` 嘅 `t`（2026-10-08）。
+    const focusTimer = window.setTimeout(() => startRef.current?.focus(), 50);
+    return () => window.clearTimeout(focusTimer);
   }, [dialogOpen, custom]);
 
   // Esc 關閉
@@ -106,7 +140,7 @@ export function DateRangeFilterChips<K extends string>({
   function applyCustom() {
     const normalized = normalizeCustomRange({ start: draftStart, end: draftEnd });
     if (!normalized) {
-      setDialogError(draftStart > draftEnd ? "起始日期唔可以遲過結束日期。" : "請揀有效嘅起始同結束日期。");
+      setDialogError(draftStart > draftEnd ? "order" : "invalid");
       return;
     }
     setDialogOpen(false);
@@ -131,7 +165,7 @@ export function DateRangeFilterChips<K extends string>({
             onClick={() => handleChipClick(opt.key)}
             type="button"
           >
-            {opt.label}
+            {labelOf(opt.label)}
           </button>
         ))}
         {customOption ? (
@@ -142,7 +176,7 @@ export function DateRangeFilterChips<K extends string>({
             onClick={() => handleChipClick(customOption.key)}
             type="button"
           >
-            {isCustomActive && custom ? customRangeLabel(custom) : customOption.label}
+            {isCustomActive && custom ? customRangeLabel(custom) : labelOf(customOption.label)}
           </button>
         ) : null}
       </div>
@@ -155,12 +189,16 @@ export function DateRangeFilterChips<K extends string>({
           }}
         >
           <div className="w-full max-w-[420px] rounded-2xl bg-white p-5 shadow-xl">
-            <div className="text-base font-semibold text-slate-900">自訂日期範圍</div>
-            <div className="mt-1 text-xs text-slate-500">只會顯示區間內嘅資料（含頭含尾・澳門時間）。</div>
+            <div className="text-base font-semibold text-slate-900">{t("自訂日期範圍")}</div>
+            <div className="mt-1 text-xs text-slate-500">
+              {t("只會顯示區間內嘅資料（含頭含尾・澳門時間）。")}
+            </div>
 
             <div className="mt-4 grid grid-cols-2 gap-3">
               <label className="block">
-                <span className="mb-1 block text-xs font-medium text-slate-600">起始日期</span>
+                <span className="mb-1 block text-xs font-medium text-slate-600">
+                  {t("起始日期")}
+                </span>
                 <input
                   ref={startRef}
                   className="h-11 w-full rounded-xl border border-slate-300 px-3 text-sm text-slate-900 outline-none focus:border-slate-900"
@@ -174,7 +212,9 @@ export function DateRangeFilterChips<K extends string>({
                 />
               </label>
               <label className="block">
-                <span className="mb-1 block text-xs font-medium text-slate-600">結束日期</span>
+                <span className="mb-1 block text-xs font-medium text-slate-600">
+                  {t("結束日期")}
+                </span>
                 <input
                   className="h-11 w-full rounded-xl border border-slate-300 px-3 text-sm text-slate-900 outline-none focus:border-slate-900"
                   min={draftStart || undefined}
@@ -190,7 +230,9 @@ export function DateRangeFilterChips<K extends string>({
 
             {dialogError ? (
               <div className="mt-3 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
-                {dialogError}
+                {dialogError === "order"
+                  ? t("起始日期唔可以遲過結束日期。")
+                  : t("請揀有效嘅起始同結束日期。")}
               </div>
             ) : null}
 
@@ -207,7 +249,7 @@ export function DateRangeFilterChips<K extends string>({
                   }}
                   type="button"
                 >
-                  {preset.label}
+                  {t(preset.label)}
                 </button>
               ))}
             </div>
@@ -218,14 +260,14 @@ export function DateRangeFilterChips<K extends string>({
                 onClick={() => setDialogOpen(false)}
                 type="button"
               >
-                取消
+                {t("取消")}
               </button>
               <button
                 className="inline-flex min-h-[44px] items-center rounded-xl bg-slate-900 px-5 text-sm font-semibold text-white hover:bg-slate-800"
                 onClick={applyCustom}
                 type="button"
               >
-                套用
+                {t("套用")}
               </button>
             </div>
 
@@ -238,7 +280,7 @@ export function DateRangeFilterChips<K extends string>({
                 }}
                 type="button"
               >
-                清除自訂範圍（返回「今天」）
+                {t("清除自訂範圍（返回「今天」）")}
               </button>
             ) : null}
           </div>

@@ -6,6 +6,7 @@ import { formatMacauDateTime } from "@/lib/format";
 import { AppSidebar } from "@/components/app-sidebar";
 import { AutoAcceptPill } from "@/components/auto-accept-pill";
 import { DateRangeFilterChips } from "@/components/date-range-filter-chips";
+import { useT } from "@/components/lang-provider";
 import { MerchantOpenPill } from "@/components/merchant-open-pill";
 import { ResponsiveModal } from "@/components/responsive-modal";
 import { ReceiptTicketPreview } from "@/components/receipt-ticket-preview";
@@ -63,7 +64,7 @@ import {
   LedgerOrderTab,
   mergeLedgerOrders,
   normalizeLedgerStatus,
-  orderCodeLabel,
+  orderCodeLabelParts,
   paymentModeLabel,
   rawLedgerStatus,
   tabLabel,
@@ -96,6 +97,22 @@ import { formatMoney } from "@/lib/format";
 import { formatSpecLine } from "@/lib/escpos-render";
 import { toResolvedSpecs } from "@/lib/ledger/order-item-specs";
 import { PosOrder } from "@/lib/types";
+
+/**
+ * 單號顯示（可翻譯）—— module scope helper，唔可以喺 module scope call `useT()`，
+ * 所以 `t` 由 caller 傳入。
+ *
+ * 🔴 `orderCodeLabel()` 回傳已填值字串（`取餐碼 005`），字典 key 係 `取餐碼 {code}`
+ *    ⇒ 直接 `tOrderCode(t, order)` 永遠命中唔到字典（英文版第一欄殘留中文，
+ *    而且唔會報錯）。要行 `orderCodeLabelParts()` 攞 key + vars。
+ */
+function tOrderCode(
+  t: (key: string, vars?: Record<string, string | number>) => string,
+  order: Parameters<typeof orderCodeLabelParts>[0],
+): string {
+  const parts = orderCodeLabelParts(order);
+  return t(parts.key, parts.vars);
+}
 
 const TABS: Array<{ key: LedgerOrderTab; label: string }> = [
   { key: "all", label: "全部" },
@@ -258,6 +275,19 @@ export function OnlineOrders({
   /** 當前 tab + 時間範圍篩選後嘅線上單（供 `/orders` 頁匯出 CSV）。 */
   onFilteredOrdersChange?: (orders: LedgerOnlineOrder[]) => void;
 }) {
+  // ⚠️ 一定要放喺所有 early return 之前（Rules of Hooks）。
+  const t = useT();
+  /**
+   * `t` 嘅 identity 每次切語言都會變（`useT()` 內部係 `useCallback([lang])`）。
+   * 直接入 `useCallback` / `useEffect` deps 嘅話，切一次語言會令下面幾個 callback
+   * 重建，連帶令「自動接單掃描」「廚房單補底」兩個 effect 重跑（無謂副作用）。
+   * 所以收落 ref：callback 喺**呼叫當刻**讀最新嘅 `t`，既唔 stale 又唔使入 deps。
+   * （同 `pos-app.tsx` 嘅 `tRef` 同一個做法。）
+   */
+  const tRef = useRef(t);
+  useEffect(() => {
+    tRef.current = t;
+  }, [t]);
   const merchantId = getLedgerMerchantId();
   const [localSettings, setLocalSettings] = useState(() => loadPosLocalSettings());
   /**
@@ -288,9 +318,17 @@ export function OnlineOrders({
   /** 分頁抓齊時達到 10 頁安全上限 → 列表可能唔齊，UI 要明確提示（唔可以靜默）。 */
   const [truncated, setTruncated] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [toast, setToast] = useState<{ tone: "success" | "info" | "error" | "warning"; message: string } | null>(
-    null,
-  );
+  /**
+   * `message` 係**字典 key**（唔係已翻譯字串）—— 顯示位先 `t(message, vars)`。
+   * 咁樣 `pushStatus()` 收到嘅 `successMessage`、`autoAcceptToast()` 回嘅 payload
+   * 全部可以繼續傳中文原文，翻譯責任集中在一個出口。
+   * ⚠️ 動態字串（`err.message`）唔會命中字典 → `t()` 原樣返回，安全。
+   */
+  const [toast, setToast] = useState<{
+    tone: "success" | "info" | "error" | "warning";
+    message: string;
+    vars?: Record<string, string | number>;
+  } | null>(null);
   const [actionLoadingKey, setActionLoadingKey] = useState<string | null>(null);
   const [viewingOrderId, setViewingOrderId] = useState<string | null>(null);
   const [detailItems, setDetailItems] = useState<
@@ -448,13 +486,19 @@ export function OnlineOrders({
   const ensureKitchenPrintForAccepted = useCallback(async (order: LedgerOnlineOrder) => {
     const result = await ensureKitchenPrintForLedgerOrderOnce(order);
     if (result.printed) {
-      setToast({ tone: "success", message: `已補印廚房單：${orderCodeLabel(order)}` });
+      setToast({
+        tone: "success",
+        message: tRef.current("已補印廚房單：{code}", { code: tOrderCode(tRef.current, order) }),
+      });
       return;
     }
     if (result.reason === "error") {
       setToast({
         tone: "error",
-        message: `廚房單補印失敗：${orderCodeLabel(order)}（${result.errorMessage ?? "未知原因"}）`,
+        message: tRef.current("廚房單補印失敗：{code}（{reason}）", {
+          code: tOrderCode(tRef.current, order),
+          reason: result.errorMessage ?? tRef.current("未知原因"),
+        }),
       });
     }
   }, []);
@@ -598,11 +642,17 @@ export function OnlineOrders({
       if (hasInitializedSnapshotRef.current) {
         if (prevRequestType !== "cancel" && nextRequestType === "cancel") {
           playSound("cancel_request");
-          setToast({ tone: "error", message: `客人申請取消：${orderCodeLabel(order)}` });
+          setToast({
+            tone: "error",
+            message: tRef.current("客人申請取消：{code}", { code: tOrderCode(tRef.current, order) }),
+          });
         }
         if (prevRequestType !== "modify" && nextRequestType === "modify") {
           playSound("modify_request");
-          setToast({ tone: "error", message: `客人申請修改：${orderCodeLabel(order)}` });
+          setToast({
+            tone: "error",
+            message: tRef.current("客人申請修改：{code}", { code: tOrderCode(tRef.current, order) }),
+          });
         }
         // 拒絕／同意／客人撤回 → 申請欄位清空；若唔係因為取消成功，收起橫幅繼續做餐
         if (prevRequestType && !nextRequestType && normalizeLedgerStatus(order.status) !== "cancelled") {
@@ -745,7 +795,7 @@ export function OnlineOrders({
           if (!silent) {
             setToast({
               tone: "error",
-              message: `已接單，但廚房單建立失敗：${errMsg}`,
+              message: tRef.current("已接單，但廚房單建立失敗：{msg}", { msg: errMsg }),
             });
           }
           // 仍標 accepted（DB 已接），但 ok:false 令上層唔彈 success toast
@@ -763,11 +813,15 @@ export function OnlineOrders({
           setToast({
             tone: "success",
             message: options?.tableId
-              ? `已接單並安排到 ${options.tableName}。`
+              ? tRef.current("已接單並安排到 {table}。", { table: options?.tableName ?? "" })
               : // 出紙後綴由 `kitchenHintText()` 統一供應（兩個入口同一口徑）：
                 // 有紙＝並已送廚／已出過＝唔會重複印／0 張＝按打印設定未出廚房單。
                 // 唔可以照講「已送廚」——廚房收唔到單，講咗就係假成功。
-                `已接單${kitchenHintText({ ok: true, kitchenJobCount, printAlreadyDone })}。`,
+                tRef.current("已接單{hint}。", {
+                  hint: tRef.current(
+                    kitchenHintText({ ok: true, kitchenJobCount, printAlreadyDone }),
+                  ),
+                }),
           });
         }
         return acceptOk(kitchenJobCount, printAlreadyDone);
@@ -795,7 +849,7 @@ export function OnlineOrders({
           // 🔴 2026-09-14 J 要求：自動接單**唔准靜默**。舊寫法只認成功／失敗，
           // 0 張廚房 job 都照講「已自動接單」＝假成功（實案：取餐碼 005 冇紙又冇 job）。
           // 文案同分類由 `autoAcceptToast()` 統一供應（兩個入口同一口徑）。
-          const payload = autoAcceptToast(orderCodeLabel(order), outcome);
+          const payload = autoAcceptToast(tOrderCode(tRef.current, order), outcome);
           if (payload) setToast(payload);
         })
         .finally(() => {
@@ -916,10 +970,13 @@ export function OnlineOrders({
     try {
       const count = await reprintReceiptForLedgerOrder(order);
       if (count > 0) {
-        setToast({ tone: "success", message: `已加入補打帳單打印隊列：${orderCodeLabel(order)}` });
+        setToast({
+          tone: "success",
+          message: t("已加入補打帳單打印隊列：{code}", { code: tOrderCode(t, order) }),
+        });
         return;
       }
-      setToast({ tone: "error", message: describeNoReceiptPrinterError() });
+      setToast({ tone: "error", message: t(describeNoReceiptPrinterError()) });
     } catch (err) {
       setToast({ tone: "error", message: err instanceof Error ? err.message : "補打帳單失敗" });
     } finally {
@@ -955,16 +1012,18 @@ export function OnlineOrders({
       if (!result.ledgerProgress.ok) {
         setToast({
           tone: "error",
-          message: `${result.created ? "已排位" : "已改枱到"} ${tableName}，但同步線上訂單狀態失敗：${
-            result.ledgerProgress.error ?? "未知錯誤"
-          }`,
+          message: t("{action} {table}，但同步線上訂單狀態失敗：{err}", {
+            action: result.created ? t("已排位") : t("已改枱到"),
+            table: tableName,
+            err: result.ledgerProgress.error ?? t("未知錯誤"),
+          }),
         });
       } else {
         setToast({
           tone: "success",
           message: result.created
-            ? `已排位 ${tableName}：${orderCodeLabel(order)}`
-            : `已改枱到 ${tableName}：${orderCodeLabel(order)}`,
+            ? t("已排位 {table}：{code}", { table: tableName, code: tOrderCode(t, order) })
+            : t("已改枱到 {table}：{code}", { table: tableName, code: tOrderCode(t, order) }),
         });
       }
       setAssigningOrderId(null);
@@ -1037,7 +1096,7 @@ export function OnlineOrders({
   }
 
   async function cancelOrder(order: LedgerOnlineOrder) {
-    const ok = window.confirm("確定要取消這張訂單？");
+    const ok = window.confirm(t("確定要取消這張訂單？"));
     if (!ok) return;
     await pushStatus(order, "cancelled", "已取消訂單。");
     setViewingOrderId(null);
@@ -1048,9 +1107,9 @@ export function OnlineOrders({
     const confirmOk = window.confirm(
       action === "approve"
         ? isCancel
-          ? "確定同意客人取消這張訂單？取消後不可復原。"
-          : "確定同意客人的修改申請？套用後以新明細／新金額為準。"
-        : "確定拒絕客人的申請？訂單會繼續處理。",
+          ? t("確定同意客人取消這張訂單？取消後不可復原。")
+          : t("確定同意客人的修改申請？套用後以新明細／新金額為準。")
+        : t("確定拒絕客人的申請？訂單會繼續處理。"),
     );
     if (!confirmOk) return;
     setActionLoadingKey(`${order.id}:${action === "approve" ? "approve_change" : "reject_change"}`);
@@ -1090,9 +1149,9 @@ export function OnlineOrders({
         message:
           action === "approve"
             ? isCancel
-              ? "已同意客人取消，訂單已取消。"
-              : "已同意客人修改，已套用新明細。"
-            : "已拒絕申請，訂單繼續處理。",
+              ? t("已同意客人取消，訂單已取消。")
+              : t("已同意客人修改，已套用新明細。")
+            : t("已拒絕申請，訂單繼續處理。"),
       });
       setViewingOrderId(null);
     } catch (err) {
@@ -1121,7 +1180,7 @@ export function OnlineOrders({
             onClick={() => setAssigningOrderId(order.id)}
             type="button"
           >
-            {onlineTableAssignLabel(order)}
+            {t(onlineTableAssignLabel(order))}
           </button>
         ) : null}
         {!hasRequest && raw === "pending" ? (
@@ -1140,14 +1199,15 @@ export function OnlineOrders({
               onClick={() => void cancelOrder(order)}
               type="button"
             >
-              拒單
+              {t("拒單")}
             </button>
           </>
         ) : null}
         {hasRequest ? (
           <>
             <span className={`${btn} bg-rose-50 text-rose-700 ring-1 ring-rose-200`}>
-              {changeRequestLabel(order)}
+              {/* ⚠️ `changeRequestLabel()` 回 `string | null`，唔可以直接 t(null)。 */}
+              {t(changeRequestLabel(order) ?? "")}
             </span>
             <button
               className={`${btn} bg-slate-900 text-white hover:bg-slate-800 disabled:opacity-60`}
@@ -1163,7 +1223,7 @@ export function OnlineOrders({
               onClick={() => void resolveChangeRequest(order, "reject")}
               type="button"
             >
-              拒絕
+              {t("拒絕")}
             </button>
           </>
         ) : null}
@@ -1174,7 +1234,7 @@ export function OnlineOrders({
             onClick={() => void pushStatus(order, "preparing", "已開始製作。")}
             type="button"
           >
-            開始製作
+            {t("開始製作")}
           </button>
         ) : null}
         {!hasRequest && raw === "preparing" ? (
@@ -1194,7 +1254,7 @@ export function OnlineOrders({
             onClick={() => void pushStatus(order, "delivering", "已標記配送中。")}
             type="button"
           >
-            配送中
+            {t("配送中")}
           </button>
         ) : null}
         {!hasRequest && (raw === "ready" || raw === "delivering") && (
@@ -1204,7 +1264,7 @@ export function OnlineOrders({
             onClick={() => void pushStatus(order, "completed", "訂單已完成。")}
             type="button"
           >
-            完成
+            {t("完成")}
           </button>
         )}
         {!hasRequest && order.paymentMode === "in_store" && order.paymentStatus === "unpaid" && raw !== "pending" && raw !== "cancelled" && raw !== "completed" ? (
@@ -1214,7 +1274,7 @@ export function OnlineOrders({
             onClick={() => void markPaidInStore(order)}
             type="button"
           >
-            標記已收款
+            {t("標記已收款")}
           </button>
         ) : null}
       </>
@@ -1258,14 +1318,19 @@ export function OnlineOrders({
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
           <div className="min-w-0 shrink-0">
             <div className={`font-semibold text-slate-900 ${embedded ? "text-sm" : "text-lg"}`}>
-              {embedded ? "線上訂單" : "會員通線上訂單"}
+              {embedded ? t("線上訂單") : t("會員通線上訂單")}
             </div>
             <div className="mt-1 text-xs text-slate-500 sm:text-sm">
-              {dateFilterLabel(dateFilter)} · {tabLabel(activeTab)} · 共 {stats.total} 張 · 新單 {stats.pending} 張
+              {t("{date} · {tab} · 共 {total} 張 · 新單 {pending} 張", {
+                date: t(dateFilterLabel(dateFilter)),
+                tab: t(tabLabel(activeTab)),
+                total: stats.total,
+                pending: stats.pending,
+              })}
             </div>
             {truncated ? (
               <div className="mt-1 text-xs font-medium text-amber-700">
-                ⚠️ 訂單較多，只載入最近 1000 張；如需完整資料請縮窄日期範圍。
+                {t("⚠️ 訂單較多，只載入最近 1000 張；如需完整資料請縮窄日期範圍。")}
               </div>
             ) : null}
           </div>
@@ -1279,7 +1344,8 @@ export function OnlineOrders({
                 onClick={() => setActiveTab(tab.key)}
                 type="button"
               >
-                {tab.label}
+                {/* ⚠️ `TABS` 喺 module scope，唔可以喺嗰度 call `useT()` → 顯示位包 t()。 */}
+                {t(tab.label)}
               </button>
             ))}
             {!embedded ? (
@@ -1311,6 +1377,8 @@ export function OnlineOrders({
               disabled={!merchantOrderConfig.available || !merchantId}
               enabledLabel="接單中"
               error={merchantOrderConfig.saving === "none" ? merchantOrderConfig.error : null}
+              /* ⚠️ MerchantOpenPill 內部會 t(label)：呢度一定要傳原文（＝字典 key），
+                 唔可以自己先包一層 t()（會變雙重翻譯）。以下四個 prop 同理。 */
               label="線上接單"
               merchantEnabled={merchantOrderConfig.merchantEnabled}
               offLabel="已暫停"
@@ -1331,7 +1399,7 @@ export function OnlineOrders({
               onClick={() => void manualRefresh()}
               type="button"
             >
-              {refreshing ? "刷新中…" : "手動刷新"}
+              {refreshing ? t("刷新中…") : t("手動刷新")}
             </button>
           </div>
         </div>
@@ -1339,16 +1407,18 @@ export function OnlineOrders({
 
       <div className={`min-h-0 flex-1 overflow-auto ${embedded ? "p-3" : "p-4"}`}>
         {error ? (
-          <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">{error}</div>
+          <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">{t(error)}</div>
         ) : null}
 
         {loading ? (
-          <div className="rounded-2xl border border-slate-200 bg-white p-6 text-sm text-slate-500">正在載入…</div>
+          <div className="rounded-2xl border border-slate-200 bg-white p-6 text-sm text-slate-500">{t("正在載入…")}</div>
         ) : null}
 
         {!loading && filteredOrders.length === 0 ? (
           <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-10 text-center text-sm text-slate-500">
-            {dateFilter === "today" ? "今天暫無訂單" : `${dateFilterLabel(dateFilter)}暫無訂單`}
+            {dateFilter === "today"
+              ? t("今天暫無訂單")
+              : t("{range}暫無訂單", { range: t(dateFilterLabel(dateFilter)) })}
           </div>
         ) : null}
 
@@ -1363,14 +1433,14 @@ export function OnlineOrders({
           <table className="w-full min-w-[860px] table-fixed border-collapse text-left">
             <thead>
               <tr>
-                <th className={`${TH_CELL} w-[11%]`}>訂單號</th>
-                <th className={`${TH_CELL} w-[11%]`}>類型 · 客戶</th>
-                <th className={`${TH_CELL} w-[11%]`}>時間</th>
-                <th className={TH_CELL}>菜品</th>
-                <th className={`${TH_CELL} w-[12%] text-right`}>金額</th>
-                <th className={`${TH_CELL} w-[10%]`}>狀態</th>
-                <th className={`${TH_CELL} w-[15%]`}>支付</th>
-                <th className={`${TH_CELL} w-[18%] text-right`}>操作</th>
+                <th className={`${TH_CELL} w-[11%]`}>{t("訂單號")}</th>
+                <th className={`${TH_CELL} w-[11%]`}>{t("類型 · 客戶")}</th>
+                <th className={`${TH_CELL} w-[11%]`}>{t("時間")}</th>
+                <th className={TH_CELL}>{t("菜品")}</th>
+                <th className={`${TH_CELL} w-[12%] text-right`}>{t("金額")}</th>
+                <th className={`${TH_CELL} w-[10%]`}>{t("狀態")}</th>
+                <th className={`${TH_CELL} w-[15%]`}>{t("支付")}</th>
+                <th className={`${TH_CELL} w-[18%] text-right`}>{t("操作")}</th>
               </tr>
             </thead>
             <tbody>
@@ -1383,11 +1453,14 @@ export function OnlineOrders({
                 return (
                   <tr key={order.id} className="border-t border-slate-100 even:bg-slate-50/60">
                     <td className={TD_CELL}>
-                      <div className="truncate text-sm font-semibold text-slate-900">{orderCodeLabel(order)}</div>
+                      <div className="truncate text-sm font-semibold text-slate-900">{tOrderCode(t, order)}</div>
                     </td>
                     <td className={TD_CELL}>
                       <div className="truncate text-xs text-slate-500">
-                        {tabLabel(order.tabType)} · 客戶：{order.customerName ?? "--"}
+                        {t("{tab} · 客戶：{name}", {
+                          tab: t(tabLabel(order.tabType)),
+                          name: order.customerName ?? "--",
+                        })}
                       </div>
                       {scheduled ? (
                         <div className="mt-1">
@@ -1408,7 +1481,9 @@ export function OnlineOrders({
                     <td className={TD_CELL}>
                       <div className="truncate text-xs text-slate-500">
                         {order.itemSummary ?? "--"}
-                        {order.itemCount && order.itemCount > 1 ? ` 等 ${order.itemCount} 項` : ""}
+                        {order.itemCount && order.itemCount > 1
+                          ? t(" 等 {n} 項", { n: order.itemCount })
+                          : ""}
                       </div>
                     </td>
                     <td className={`${TD_CELL} text-right`}>
@@ -1417,10 +1492,10 @@ export function OnlineOrders({
                       </div>
                       {order.discountAmount && order.discountAmount > 0 ? (
                         <div className="mt-0.5 text-[11px] tabular-nums text-amber-700">
-                          已優惠 -{formatMoney(order.discountAmount)}
+                          {t("已優惠 -{amt}", { amt: formatMoney(order.discountAmount) })}
                           {order.subtotalBeforeDiscount != null ? (
                             <span className="ml-1 text-slate-400 line-through">
-                              原 {formatMoney(order.subtotalBeforeDiscount)}
+                              {t("原 {amt}", { amt: formatMoney(order.subtotalBeforeDiscount) })}
                             </span>
                           ) : null}
                         </div>
@@ -1431,10 +1506,10 @@ export function OnlineOrders({
                         className={`inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-0.5 text-xs font-semibold ${statusBadge.bgClass} ${statusBadge.textClass}`}
                       >
                         <span className={`h-2 w-2 rounded-full ${statusBadge.dotClass}`} />
-                        {statusBadge.label}
+                        {t(statusBadge.label)}
                       </span>
                       {externalAccepted ? (
-                        <div className="mt-1 text-[11px] text-amber-600">已由外部接單</div>
+                        <div className="mt-1 text-[11px] text-amber-600">{t("已由外部接單")}</div>
                       ) : null}
                     </td>
                     <td className={TD_CELL}>
@@ -1445,8 +1520,10 @@ export function OnlineOrders({
                             : "bg-amber-50 text-amber-700 ring-1 ring-amber-200"
                         }`}
                       >
-                        {order.paymentStatus === "paid" ? "已支付" : "未支付"}
-                        {order.paymentMode ? `（${paymentModeLabel(order.paymentMode)}）` : ""}
+                        {order.paymentStatus === "paid" ? t("已支付") : t("未支付")}
+                        {order.paymentMode
+                          ? t("（{mode}）", { mode: t(paymentModeLabel(order.paymentMode)) })
+                          : ""}
                       </span>
                     </td>
                     <td className={`${TD_CELL} text-right`}>
@@ -1456,7 +1533,7 @@ export function OnlineOrders({
                           onClick={() => void openOrderDetail(order.id)}
                           type="button"
                         >
-                          查看
+                          {t("查看")}
                         </button>
                         {renderOrderActions(order)}
                       </div>
@@ -1479,14 +1556,19 @@ export function OnlineOrders({
           busyTableId={assigningTableId}
           description={
             onlineTableBadge(assigningOrder, { quickMode: false }).label === "待安排座位"
-              ? "選擇桌台後會將線上單轉到該枱（建立本地堂食單）並補印一張帶枱名嘅廚房單。"
-              : `現時：${onlineTableBadge(assigningOrder, { quickMode: false }).label}。選擇新桌台即改枱。`
+              ? t("選擇桌台後會將線上單轉到該枱（建立本地堂食單）並補印一張帶枱名嘅廚房單。")
+              : t("現時：{status}。選擇新桌台即改枱。", {
+                  status: t(onlineTableBadge(assigningOrder, { quickMode: false }).label),
+                })
           }
           occupiedTableIds={occupiedTableIds}
           onClose={() => setAssigningOrderId(null)}
           onSelect={(table) => void assignDineInTable(assigningOrder, table.id, table.name)}
           tables={tables}
-          title={`${onlineTableAssignLabel(assigningOrder)} · ${orderCodeLabel(assigningOrder)}`}
+          title={t("{action} · {code}", {
+            action: t(onlineTableAssignLabel(assigningOrder)),
+            code: tOrderCode(t, assigningOrder),
+          })}
         />
       ) : null}
 
@@ -1499,7 +1581,7 @@ export function OnlineOrders({
                 onClick={() => setBalanceFallbackOrderId(null)}
                 type="button"
               >
-                稍後
+                {t("稍後")}
               </button>
               <button
                 className="rounded-2xl bg-orange-500 px-4 py-2 text-sm font-semibold text-white hover:bg-orange-600 disabled:opacity-60"
@@ -1507,16 +1589,16 @@ export function OnlineOrders({
                 onClick={() => void acceptInStoreFallback(balanceFallbackOrder)}
                 type="button"
               >
-                改到店付款接單
+                {t("改到店付款接單")}
               </button>
             </>
           }
-          description="此單為餘額扣點，會員餘額不足。可改為到店付款後接單。"
+          description={t("此單為餘額扣點，會員餘額不足。可改為到店付款後接單。")}
           onClose={() => setBalanceFallbackOrderId(null)}
-          title="餘額不足"
+          title={t("餘額不足")}
           widthClassName="max-w-md"
         >
-          <div className="text-sm text-slate-700">{orderCodeLabel(balanceFallbackOrder)} · {formatMoney(balanceFallbackOrder.total)}</div>
+          <div className="text-sm text-slate-700">{tOrderCode(t, balanceFallbackOrder)} · {formatMoney(balanceFallbackOrder.total)}</div>
         </ResponsiveModal>
       ) : null}
 
@@ -1532,20 +1614,23 @@ export function OnlineOrders({
                   : "bg-red-600"
           }`}
         >
-          {toast.message}
+          {t(toast.message, toast.vars)}
         </div>
       ) : null}
 
       {viewingOrder ? (
         <ResponsiveModal
           actions={renderOrderActions(viewingOrder)}
-          description={`${orderCodeLabel(viewingOrder)} · ${tabLabel(viewingOrder.tabType)}`}
+          description={t("{code} · {tab}", {
+            code: tOrderCode(t, viewingOrder),
+            tab: t(tabLabel(viewingOrder.tabType)),
+          })}
           onClose={() => {
             setViewingOrderId(null);
             setDetailItems(null);
             setReceiptPreviewOrder(null);
           }}
-          title="訂單詳情"
+          title={t("訂單詳情")}
           widthClassName="max-w-2xl"
         >
           {/* 收據預覽：同線下 settled 單「查看」一致，用同一個 ReceiptTicketPreview。
@@ -1556,14 +1641,16 @@ export function OnlineOrders({
             </div>
           ) : detailLoading ? (
             <div className="mb-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">
-              正在載入收據…
+              {t("正在載入收據…")}
             </div>
           ) : null}
 
           <div className="grid gap-2 text-sm text-slate-700">
-            <div>客戶：{viewingOrder.customerName ?? "--"}</div>
-            <div>電話：{viewingOrder.phone ?? "--"}</div>
-            {viewingOrder.deliveryAddress ? <div>地址：{viewingOrder.deliveryAddress}</div> : null}
+            <div>{t("客戶：{name}", { name: viewingOrder.customerName ?? "--" })}</div>
+            <div>{t("電話：{phone}", { phone: viewingOrder.phone ?? "--" })}</div>
+            {viewingOrder.deliveryAddress ? (
+              <div>{t("地址：{addr}", { addr: viewingOrder.deliveryAddress })}</div>
+            ) : null}
             {/* 預約單（Ledger `scheduled_pickup_at`）：時間 ＋ 狀態標籤。
                 非預約單完全唔 render（同線下單詳情版面一模一樣）。 */}
             {hasScheduledPickup(viewingOrder) ? (
@@ -1572,10 +1659,14 @@ export function OnlineOrders({
                 <ScheduledPickupChip order={viewingOrder} nowMs={nowTick} />
               </div>
             ) : null}
-            {viewingOrder.note ? <div>備註：{viewingOrder.note}</div> : null}
+            {viewingOrder.note ? (
+              <div>{t("備註：{note}", { note: viewingOrder.note })}</div>
+            ) : null}
             <div>
-              支付：{paymentModeLabel(viewingOrder.paymentMode)} ·{" "}
-              {viewingOrder.paymentStatus === "paid" ? "已支付" : "未支付"}
+              {t("支付：{mode} · {status}", {
+                mode: t(paymentModeLabel(viewingOrder.paymentMode)),
+                status: viewingOrder.paymentStatus === "paid" ? t("已支付") : t("未支付"),
+              })}
             </div>
             {/* 派生標籤（唔新增 status 值）：付款維度「已結帳」＋枱位維度「待安排座位」。 */}
             {isOnlineDineIn(viewingOrder) ? (
@@ -1591,7 +1682,7 @@ export function OnlineOrders({
                       className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold ${badge.bgClass} ${badge.textClass}`}
                     >
                       <span className={`h-1.5 w-1.5 rounded-full ${badge.dotClass}`} />
-                      {badge.label}
+                      {t(badge.label)}
                     </span>
                   ));
                 })()}
@@ -1600,9 +1691,9 @@ export function OnlineOrders({
           </div>
 
           <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
-            <div className="text-sm font-semibold text-slate-900">菜品明細</div>
+            <div className="text-sm font-semibold text-slate-900">{t("菜品明細")}</div>
             <div className="mt-3 grid gap-2">
-              {detailLoading ? <div className="text-sm text-slate-500">正在載入明細…</div> : null}
+              {detailLoading ? <div className="text-sm text-slate-500">{t("正在載入明細…")}</div> : null}
               {!detailLoading && detailItems?.length
                 ? detailItems.map((item, index) => {
                     const itemHasDiscount =
@@ -1616,7 +1707,9 @@ export function OnlineOrders({
                             {item.name}
                             {itemHasDiscount ? (
                               <span className="ml-2 inline-flex rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700">
-                                {item.discountRate != null ? `${item.discountRate}% off` : "已優惠"}
+                                {item.discountRate != null
+                                  ? t("{rate}% off", { rate: item.discountRate })
+                                  : t("已優惠")}
                               </span>
                             ) : null}
                           </span>
@@ -1629,7 +1722,9 @@ export function OnlineOrders({
                             {specs.map((line, specIndex) => (
                               <div key={`${line}-${specIndex}`}>· {line}</div>
                             ))}
-                            {item.note ? <div>備註：{item.note}</div> : null}
+                            {item.note ? (
+                              <div>{t("備註：{note}", { note: item.note })}</div>
+                            ) : null}
                           </div>
                         ) : null}
                       </div>
@@ -1643,12 +1738,12 @@ export function OnlineOrders({
             {/* 折扣分項（用戶要求所有訂單明細位都要見到「折扣多少、優惠多少」） */}
             {viewingOrder.discountAmount && viewingOrder.discountAmount > 0 ? (
               <div className="mt-3 flex items-center justify-between text-sm text-emerald-700">
-                <span className="font-semibold">折扣</span>
+                <span className="font-semibold">{t("折扣")}</span>
                 <span className="font-semibold tabular-nums">-{formatMoney(viewingOrder.discountAmount)}</span>
               </div>
             ) : null}
             <div className="mt-3 flex items-center justify-between text-sm text-slate-500">
-              <span>總計</span>
+              <span>{t("總計")}</span>
               <span className="text-base font-semibold text-slate-900">{formatMoney(viewingOrder.total)}</span>
             </div>
           </div>

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { useT } from "@/components/lang-provider";
 import { ResponsiveModal } from "@/components/responsive-modal";
 import {
   hasScheduledPickup,
@@ -49,7 +50,7 @@ import {
   LedgerOnlineOrder,
   mergeLedgerOrders,
   normalizeLedgerStatus,
-  orderCodeLabel,
+  orderCodeLabelParts,
   paymentModeLabel,
   rawLedgerStatus,
   tabLabel,
@@ -61,7 +62,7 @@ import {
   ledgerStatusBadgeLabel,
   onlineOrderActionButtonClass,
   OnlineOrderAction,
-  paymentSummaryLabel,
+  paymentSummaryLabelParts,
 } from "@/lib/ledger/online-order-actions";
 import { getOrderDetail, listMerchantOrders } from "@/lib/ledger/orders";
 import { getLedgerMerchantId, restoreLedgerSession } from "@/lib/ledger/session";
@@ -119,6 +120,22 @@ function optimisticPatch(order: LedgerOnlineOrder, status: string): LedgerOnline
   return { ...order, status, updatedAt: new Date().toISOString() };
 }
 
+/**
+ * 訂單編號標籤嘅 i18n 版本。
+ *
+ * 🔴 唔可以寫 `t(orderCodeLabel(order))`：`orderCodeLabel()` 回傳嘅係**已填值**字串
+ * （例：`取餐碼 005`），而字典 key 係 `取餐碼 {code}` —— 兩者永遠唔會相等，
+ * `t()` 只會靜靜咁 fallback 返原本嘅中文（唔會 throw、唔會報錯、測試全綠）。
+ * 一定要行 `orderCodeLabelParts()` 攞 key + vars。
+ */
+function tOrderCode(
+  t: (key: string, vars?: Record<string, string | number>) => string,
+  order: Parameters<typeof orderCodeLabelParts>[0],
+): string {
+  const parts = orderCodeLabelParts(order);
+  return t(parts.key, parts.vars);
+}
+
 export function QuickOnlineOrdersPanel({
   currency,
   autoAccept,
@@ -131,6 +148,15 @@ export function QuickOnlineOrdersPanel({
   quickCounter = false,
   tableAssign = false,
 }: QuickOnlineOrdersPanelProps) {
+  // ⚠️ 一定要放喺所有 early return 之前（Rules of Hooks）。
+  const t = useT();
+  // `t` 嘅身份每次切語言都會變；放入 useCallback deps 會令「自動接單掃描」
+  // 同「廚房單兜底」兩個 effect 無謂重跑 → 用 ref 喺呼叫當刻取最新實作。
+  const tRef = useRef(t);
+  useEffect(() => {
+    tRef.current = t;
+  }, [t]);
+
   const merchantId = getLedgerMerchantId();
   const [loading, setLoading] = useState(true);
   const [orders, setOrders] = useState<LedgerOnlineOrder[]>([]);
@@ -319,11 +345,19 @@ export function QuickOnlineOrdersPanel({
       if (hasInitializedSnapshotRef.current) {
         if (prevRequestType !== "cancel" && nextRequestType === "cancel") {
           playSound("cancel_request");
-          onToast({ tone: "error", message: `客人申請取消：${orderCodeLabel(order)}` });
+          onToast({
+            tone: "error",
+            message: "客人申請取消：{code}",
+            vars: { code: tOrderCode(tRef.current, order) },
+          });
         }
         if (prevRequestType !== "modify" && nextRequestType === "modify") {
           playSound("modify_request");
-          onToast({ tone: "info", message: `客人申請修改：${orderCodeLabel(order)}` });
+          onToast({
+            tone: "info",
+            message: "客人申請修改：{code}",
+            vars: { code: tOrderCode(tRef.current, order) },
+          });
         }
         if (prevRequestType && !nextRequestType && normalizeLedgerStatus(order.status) !== "cancelled") {
           onToast({ tone: "info", message: "客人申請已處理，訂單繼續。" });
@@ -481,9 +515,9 @@ export function QuickOnlineOrdersPanel({
           const kitchenHint = kitchenHintText({ ok: true, kitchenJobCount, printAlreadyDone });
           onToast({
             tone: "success",
-            message: options?.autoStartPreparing
-              ? `已接單並開始製作${kitchenHint}：${orderCodeLabel(order)}`
-              : `已接單${kitchenHint}：${orderCodeLabel(order)}`,
+            // ⚠️ 呢度只交「字典 key + vars」—— 真正 t() 喺 pos-app（見 ToastPayload 合約）。
+            message: options?.autoStartPreparing ? "已接單並開始製作{hint}：{code}" : "已接單{hint}：{code}",
+            vars: { hint: tRef.current(kitchenHint), code: tOrderCode(tRef.current, order) },
           });
         }
         return acceptOk(kitchenJobCount, printAlreadyDone);
@@ -515,7 +549,7 @@ export function QuickOnlineOrdersPanel({
         .then((outcome) => {
           // 🔴 2026-09-14 J 要求：自動接單**唔准靜默**（實案：取餐碼 005 冇紙又冇 job，
           // 但收銀只見到「已自動接單」）。文案同分類由 `autoAcceptToast()` 統一供應。
-          const payload = autoAcceptToast(orderCodeLabel(order), outcome);
+          const payload = autoAcceptToast(tOrderCode(tRef.current, order), outcome);
           if (payload) onToast(payload);
         })
         .finally(() => {
@@ -542,13 +576,21 @@ export function QuickOnlineOrdersPanel({
     for (const order of ledgerOrders) {
       void ensureKitchenPrintForLedgerOrderOnce(order).then((result) => {
         if (result.printed) {
-          onToastRef.current({ tone: "success", message: `已補印廚房單：${orderCodeLabel(order)}` });
+          onToastRef.current({
+            tone: "success",
+            message: "已補印廚房單：{code}",
+            vars: { code: tOrderCode(tRef.current, order) },
+          });
           return;
         }
         if (result.reason === "error") {
           onToastRef.current({
             tone: "error",
-            message: `廚房單補印失敗：${orderCodeLabel(order)}（${result.errorMessage ?? "未知原因"}）`,
+            message: "廚房單補印失敗：{code}（{reason}）",
+            vars: {
+              code: tOrderCode(tRef.current, order),
+              reason: tRef.current(result.errorMessage ?? "未知原因"),
+            },
           });
         }
       });
@@ -589,22 +631,24 @@ export function QuickOnlineOrdersPanel({
       }
 
       if (action.key === "reject") {
-        const ok = window.confirm("確定拒絕這張線上訂單？");
+        const ok = window.confirm(tRef.current("確定拒絕這張線上訂單？"));
         if (!ok) return;
       }
 
       if (action.key === "approve_change") {
         const isCancel = String(order.changeRequestType ?? "").toLowerCase() === "cancel";
         const ok = window.confirm(
-          isCancel
-            ? "確定同意客人取消這張訂單？取消後不可復原。"
-            : "確定同意客人的修改申請？套用後以新明細／新金額為準。",
+          tRef.current(
+            isCancel
+              ? "確定同意客人取消這張訂單？取消後不可復原。"
+              : "確定同意客人的修改申請？套用後以新明細／新金額為準。",
+          ),
         );
         if (!ok) return;
       }
 
       if (action.key === "reject_change") {
-        const ok = window.confirm("確定拒絕客人的申請？訂單會繼續處理。");
+        const ok = window.confirm(tRef.current("確定拒絕客人的申請？訂單會繼續處理。"));
         if (!ok) return;
       }
 
@@ -734,18 +778,17 @@ export function QuickOnlineOrdersPanel({
         });
         onToast({
           tone: "success",
-          message: result.created
-            ? `已排位 ${table.name}：${orderCodeLabel(order)}`
-            : `已改枱到 ${table.name}：${orderCodeLabel(order)}`,
+          message: result.created ? "已排位 {table}：{code}" : "已改枱到 {table}：{code}",
+          // ⚠️ `table.name` 係第 2 層資料值（真枱名）⇒ 只放入 vars，唔可以 t()。
+          vars: { table: table.name, code: tOrderCode(tRef.current, order) },
         });
         // 🔴 2026-09-13：排位同時已將 Ledger 推去已完成（商家口徑：排位＝開始製作）。
         // 失敗唔可以靜默 —— 本地排位成功但 Ledger 停留舊狀態，客人端／對賬會對唔上。
         if (!result.ledgerProgress.ok) {
           onToast({
             tone: "error",
-            message: `排位已成功，但同步線上訂單狀態失敗：${
-              result.ledgerProgress.error ?? "未知錯誤"
-            }`,
+            message: "排位已成功，但同步線上訂單狀態失敗：{reason}",
+            vars: { reason: tRef.current(result.ledgerProgress.error ?? "未知錯誤") },
           });
         }
         // 枱位狀態存在本機投影（Ledger 側冇枱概念）→ 用新 ref 逼一次 re-render 更新標籤。
@@ -778,7 +821,7 @@ export function QuickOnlineOrdersPanel({
             onClick={() => void runAction(order, action)}
             type="button"
           >
-            {busy ? "處理中…" : action.label}
+            {busy ? t("處理中…") : t(action.label)}
           </button>
         ))}
       </>
@@ -806,7 +849,7 @@ export function QuickOnlineOrdersPanel({
             onClick={() => setAssigningOrderId(order.id)}
             type="button"
           >
-            {onlineTableAssignLabel(order)}
+            {t(onlineTableAssignLabel(order))}
           </button>
         ) : null}
         {primary ? (
@@ -820,7 +863,7 @@ export function QuickOnlineOrdersPanel({
             onClick={() => void runAction(order, primary)}
             type="button"
           >
-            {busy ? "處理中…" : primary.label}
+            {busy ? t("處理中…") : t(primary.label)}
           </button>
         ) : null}
         {rawLedgerStatus(order.status) === "pending" ? (
@@ -840,7 +883,7 @@ export function QuickOnlineOrdersPanel({
             }
             type="button"
           >
-            拒單
+            {t("拒單")}
           </button>
         ) : null}
       </>
@@ -855,9 +898,12 @@ export function QuickOnlineOrdersPanel({
 
   function renderOrderCard(order: LedgerOnlineOrder) {
     const cancelRequest = changeRequestLabel(order);
-    const paymentLabel = paymentSummaryLabel(order, currency);
+    // 🔴 `paymentSummaryLabel()` 回傳已填值字串（例：`已支付 MOP 120`）⇒ 一定要行 *Parts() 版本。
+    const paymentParts = paymentSummaryLabelParts(order, currency);
+    const paymentLabel = t(paymentParts.key, paymentParts.vars);
     const statusLabel = ledgerStatusBadgeLabel(order.status, order.fulfillmentType);
     const typeLabel = tabLabel(order.tabType);
+    const codeLabel = tOrderCode(t, order);
     // 預約單（Ledger `scheduled_pickup_at` 有值）：類型旁邊出「預約單」標籤 + 預約時間。
     const scheduled = hasScheduledPickup(order);
     const busy = actionLoadingKey?.startsWith(`${order.id}:`) ?? false;
@@ -876,7 +922,7 @@ export function QuickOnlineOrdersPanel({
             className={`inline-flex max-w-full items-center gap-1 whitespace-nowrap rounded-full px-2 py-0.5 text-[10px] font-semibold ${item.bgClass} ${item.textClass}`}
           >
             <span className={`h-1.5 w-1.5 rounded-full ${item.dotClass}`} />
-            {item.label}
+            {t(item.label)}
           </span>
         ))}
       </div>
@@ -887,9 +933,9 @@ export function QuickOnlineOrdersPanel({
         <article key={order.id} className="w-[240px] shrink-0 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0">
-              <div className="truncate text-sm font-semibold text-slate-900">{orderCodeLabel(order)}</div>
+              <div className="truncate text-sm font-semibold text-slate-900">{codeLabel}</div>
               <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
-                <span className="text-xs text-slate-500">{typeLabel}</span>
+                <span className="text-xs text-slate-500">{t(typeLabel)}</span>
                 {scheduled ? <ScheduledPickupChip order={order} nowMs={nowTick} compact /> : null}
               </div>
               {scheduled ? (
@@ -899,17 +945,17 @@ export function QuickOnlineOrdersPanel({
               ) : null}
             </div>
             <span className="shrink-0 rounded-full bg-orange-50 px-2 py-0.5 text-[10px] font-semibold text-orange-700">
-              {statusLabel}
+              {t(statusLabel)}
             </span>
           </div>
           <div className="mt-2 flex items-baseline justify-between gap-2 text-xs">
-            <span className="text-slate-600">{paymentLabel}</span>
+            <span className="text-slate-600">{t(paymentLabel)}</span>
             {order.discountAmount && order.discountAmount > 0 ? (
-              <span className="font-semibold text-amber-700">已優惠 -{formatMoney(order.discountAmount, currency)}</span>
+              <span className="font-semibold text-amber-700">{t("已優惠 -{amt}", { amt: formatMoney(order.discountAmount, currency) })}</span>
             ) : null}
           </div>
           {cancelRequest ? (
-            <div className="mt-1 rounded-lg bg-rose-50 px-2 py-1 text-[10px] font-semibold text-rose-700">{cancelRequest}</div>
+            <div className="mt-1 rounded-lg bg-rose-50 px-2 py-1 text-[10px] font-semibold text-rose-700">{t(cancelRequest)}</div>
           ) : null}
           {order.itemSummary ? <div className="mt-1 truncate text-xs text-slate-500">{order.itemSummary}</div> : null}
           {dineInBadges ? <div className="mt-1">{dineInBadges}</div> : null}
@@ -919,7 +965,7 @@ export function QuickOnlineOrdersPanel({
               onClick={() => setViewingOrderId(order.id)}
               type="button"
             >
-              查看
+              {t("查看")}
             </button>
             {showTableAssign ? (
               <button
@@ -928,7 +974,7 @@ export function QuickOnlineOrdersPanel({
                 onClick={() => setAssigningOrderId(order.id)}
                 type="button"
               >
-                {onlineTableAssignLabel(order)}
+                {t(onlineTableAssignLabel(order))}
               </button>
             ) : null}
             {hasPendingChangeRequest(order) ? (
@@ -942,7 +988,7 @@ export function QuickOnlineOrdersPanel({
                     onClick={() => void runAction(order, primary)}
                     type="button"
                   >
-                    {busy ? "處理中…" : primary.label}
+                    {busy ? t("處理中…") : t(primary.label)}
                   </button>
                 ) : null}
                 {rawLedgerStatus(order.status) === "pending" ? (
@@ -952,7 +998,7 @@ export function QuickOnlineOrdersPanel({
                     onClick={() => void runAction(order, { key: "reject", label: "拒單", tone: "slate", nextStatus: "cancelled", successMessage: "已拒絕訂單。" })}
                     type="button"
                   >
-                    拒單
+                    {t("拒單")}
                   </button>
                 ) : null}
               </>
@@ -970,7 +1016,7 @@ export function QuickOnlineOrdersPanel({
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="truncate text-sm font-semibold text-slate-900">
-              {orderCodeLabel(order)} <span className="ml-2 text-xs font-semibold text-slate-500">{typeLabel}</span>
+              {codeLabel} <span className="ml-2 text-xs font-semibold text-slate-500">{t(typeLabel)}</span>
               {scheduled ? (
                 <span className="ml-2 align-middle">
                   <ScheduledPickupChip order={order} nowMs={nowTick} compact />
@@ -983,14 +1029,14 @@ export function QuickOnlineOrdersPanel({
               </div>
             ) : null}
             <div className="mt-1 text-xs text-slate-500">
-              {statusLabel} · {paymentLabel}
+              {t(statusLabel)} · {t(paymentLabel)}
             </div>
             {order.discountAmount && order.discountAmount > 0 ? (
               <div className="mt-1 text-xs font-semibold text-amber-700 tabular-nums">
-                已優惠 -{formatMoney(order.discountAmount, currency)}
+                {t("已優惠 -{amt}", { amt: formatMoney(order.discountAmount, currency) })}
               </div>
             ) : null}
-            {cancelRequest ? <div className="mt-1 text-xs font-semibold text-rose-600">{cancelRequest}</div> : null}
+            {cancelRequest ? <div className="mt-1 text-xs font-semibold text-rose-600">{t(cancelRequest)}</div> : null}
             {order.itemSummary ? <div className="mt-2 truncate text-xs text-slate-500">{order.itemSummary}</div> : null}
             {dineInBadges ? <div className="mt-2">{dineInBadges}</div> : null}
           </div>
@@ -1000,7 +1046,7 @@ export function QuickOnlineOrdersPanel({
               onClick={() => setViewingOrderId(order.id)}
               type="button"
             >
-              查看
+              {t("查看")}
             </button>
             {/* ⚠️ stack 版面嘅「排位」掣由 `renderStackActions() → renderModalActions()` 出，
                 呢度唔可以再加，否則會出現兩粒（strip 版面唔行 renderModalActions，所以要自己出）。 */}
@@ -1017,7 +1063,7 @@ export function QuickOnlineOrdersPanel({
     <div className={layout === "strip" ? "grid gap-2" : "grid gap-3"}>
       {showAutoAcceptControls ? (
         <div className="flex items-center justify-between gap-2">
-          <div className="text-xs font-semibold text-slate-500">{autoAcceptLabel}</div>
+          <div className="text-xs font-semibold text-slate-500">{t(autoAcceptLabel)}</div>
           {onAutoAcceptChange ? (
             <button
               className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
@@ -1026,14 +1072,14 @@ export function QuickOnlineOrdersPanel({
               onClick={() => onAutoAcceptChange(!autoAccept)}
               type="button"
             >
-              {autoAccept ? "開" : "關"}
+              {autoAccept ? t("開") : t("關")}
             </button>
           ) : null}
         </div>
       ) : null}
 
       {error ? (
-        <div className="rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">{error}</div>
+        <div className="rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">{t(error)}</div>
       ) : null}
 
       {loading ? (
@@ -1042,7 +1088,7 @@ export function QuickOnlineOrdersPanel({
             layout === "strip" ? "flex h-[108px] items-center px-4" : "p-4"
           }`}
         >
-          正在載入 Ledger 線上訂單…
+          {t("正在載入 Ledger 線上訂單…")}
         </div>
       ) : visibleOrders.length === 0 ? (
         <div
@@ -1050,15 +1096,14 @@ export function QuickOnlineOrdersPanel({
             layout === "strip" ? "flex h-[108px] items-center px-4" : "p-4"
           }`}
         >
-          暫無待處理線上訂單。
-          {layout === "stack" ? (
+          {t("暫無待處理線上訂單。")}{layout === "stack" ? (
             <>
               {" "}
-              完整列表請至{" "}
+              {t("完整列表請至")}{" "}
               <Link className="font-semibold text-orange-600 underline" href="/orders">
-                線上訂單
+                {t("線上訂單")}
               </Link>
-              。
+              {t("。")}
             </>
           ) : null}
         </div>
@@ -1075,22 +1120,27 @@ export function QuickOnlineOrdersPanel({
           busyTableId={assigningTableId}
           description={
             needsTableAssignment(assigningOrder, { quickMode: quickCounter })
-              ? "選擇桌台後會將線上單轉到該枱，並補印一張帶枱名嘅廚房單。"
-              : `現時：${onlineTableBadge(assigningOrder, { quickMode: quickCounter }).label}。選擇新桌台即改枱。`
+              ? // ⚠️ 呢度傳「字典 key」（TableAssignModal 內部會 t(description)）。
+                "選擇桌台後會將線上單轉到該枱，並補印一張帶枱名嘅廚房單。"
+              : // ⚠️ 有動態值（枱位標籤）⇒ 冇得傳純 key，要喺度譯好再傳
+                //    （t() 查唔到英文 key 會原樣返回，唔會雙重翻譯）。
+                t("現時：{badge}。選擇新桌台即改枱。", {
+                  badge: t(onlineTableBadge(assigningOrder, { quickMode: quickCounter }).label),
+                })
           }
           occupiedTableIds={occupiedTableIds}
           onClose={() => setAssigningOrderId(null)}
           onSelect={(table) => void assignTable(assigningOrder, table)}
           tables={tables}
-          title={`${onlineTableAssignLabel(assigningOrder)} · ${orderCodeLabel(assigningOrder)}`}
+          title={`${t(onlineTableAssignLabel(assigningOrder))} · ${tOrderCode(t, assigningOrder)}`}
         />
       ) : null}
 
       {balanceFallbackOrder ? (
         <ResponsiveModal
-          description="會員餘額不足，可改為到店付款接單。"
+          description={t("會員餘額不足，可改為到店付款接單。")}
           onClose={() => setBalanceFallbackOrderId(null)}
-          title="餘額不足"
+          title={t("餘額不足")}
           widthClassName="max-w-sm"
           actions={
             <>
@@ -1099,56 +1149,62 @@ export function QuickOnlineOrdersPanel({
                 onClick={() => setBalanceFallbackOrderId(null)}
                 type="button"
               >
-                取消
+                {t("取消")}
               </button>
               <button
                 className="rounded-2xl bg-orange-500 px-4 py-2 text-sm font-semibold text-white"
                 onClick={() => void acceptInStoreFallback(balanceFallbackOrder)}
                 type="button"
               >
-                改到店付款接單
+                {t("改到店付款接單")}
               </button>
             </>
           }
         >
-          <div className="text-sm text-slate-600">{orderCodeLabel(balanceFallbackOrder)}</div>
+          <div className="text-sm text-slate-600">{tOrderCode(t, balanceFallbackOrder)}</div>
         </ResponsiveModal>
       ) : null}
 
       {viewingOrder ? (
         <ResponsiveModal
           actions={renderModalActions(viewingOrder)}
-          description={`${orderCodeLabel(viewingOrder)} · ${tabLabel(viewingOrder.tabType)} · ${ledgerStatusLabel(viewingOrder.status, viewingOrder.fulfillmentType)}`}
+          description={t("{code} · {tab} · {status}", {
+            code: tOrderCode(t, viewingOrder),
+            tab: t(tabLabel(viewingOrder.tabType)),
+            status: t(ledgerStatusLabel(viewingOrder.status, viewingOrder.fulfillmentType)),
+          })}
           onClose={() => setViewingOrderId(null)}
-          title="線上訂單詳情"
+          title={t("線上訂單詳情")}
           widthClassName="max-w-md"
         >
           <div className="grid gap-2 text-sm text-slate-700">
-            <div>客戶：{viewingOrder.customerName ?? "--"}</div>
-            <div>電話：{viewingOrder.phone ?? "--"}</div>
-            {viewingOrder.deliveryAddress ? <div>地址：{viewingOrder.deliveryAddress}</div> : null}
+            <div>{t("客戶：{name}", { name: viewingOrder.customerName ?? "--" })}</div>
+            <div>{t("電話：{phone}", { phone: viewingOrder.phone ?? "--" })}</div>
+            {viewingOrder.deliveryAddress ? <div>{t("地址：{addr}", { addr: viewingOrder.deliveryAddress })}</div> : null}
             {hasScheduledPickup(viewingOrder) ? (
               <div className="flex flex-wrap items-center gap-2">
                 <ScheduledPickupTimeText order={viewingOrder} nowMs={nowTick} full className="font-semibold" />
                 <ScheduledPickupChip order={viewingOrder} nowMs={nowTick} />
               </div>
             ) : null}
-            {viewingOrder.note ? <div>備註：{viewingOrder.note}</div> : null}
+            {viewingOrder.note ? <div>{t("備註：{note}", { note: viewingOrder.note })}</div> : null}
             <div>
-              支付：{paymentModeLabel(viewingOrder.paymentMode)} ·{" "}
-              {viewingOrder.paymentStatus === "paid" ? "已支付" : "未支付"}
+              {t("支付：{mode} · {status}", {
+                mode: t(paymentModeLabel(viewingOrder.paymentMode)),
+                status: viewingOrder.paymentStatus === "paid" ? t("已支付") : t("未支付"),
+              })}
             </div>
             {/* 折扣指示（用戶要求所有訂單明細位都要見到「折扣多少」） */}
             {viewingOrder.discountAmount && viewingOrder.discountAmount > 0 ? (
               <div className="flex items-baseline justify-between">
-                <span className="font-semibold text-amber-700">已優惠</span>
+                <span className="font-semibold text-amber-700">{t("已優惠")}</span>
                 <span className="font-semibold text-amber-700 tabular-nums">
                   -{formatMoney(viewingOrder.discountAmount, currency)}
                 </span>
               </div>
             ) : null}
             <div className="font-semibold text-slate-900">{formatMoney(viewingOrder.total, currency)}</div>
-            {detailLoading ? <div className="text-slate-500">載入品項…</div> : null}
+            {detailLoading ? <div className="text-slate-500">{t("載入品項…")}</div> : null}
             {detailItems?.map((item, index) => {
               const itemHasDiscount =
                 item.discountRate != null ||
@@ -1161,7 +1217,7 @@ export function QuickOnlineOrdersPanel({
                       {item.name} × {item.qty}
                       {itemHasDiscount ? (
                         <span className="ml-2 inline-flex rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700">
-                          {item.discountRate != null ? `${item.discountRate}% off` : "已優惠"}
+                          {item.discountRate != null ? t("{rate}% off", { rate: item.discountRate }) : t("已優惠")}
                         </span>
                       ) : null}
                     </span>
@@ -1172,7 +1228,7 @@ export function QuickOnlineOrdersPanel({
                       {specs.map((line, specIndex) => (
                         <div key={`${line}-${specIndex}`}>· {line}</div>
                       ))}
-                      {item.note ? <div>備註：{item.note}</div> : null}
+                      {item.note ? <div>{t("備註：{note}", { note: item.note })}</div> : null}
                     </div>
                   ) : null}
                 </div>

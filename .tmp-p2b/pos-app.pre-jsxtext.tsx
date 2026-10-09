@@ -1,0 +1,8687 @@
+"use client";
+
+import { useRouter } from "next/navigation";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+
+import { tryAutoPairCompanion } from "@/lib/print-bridge/auto-pair-companion";
+
+import { AppSidebar } from "@/components/app-sidebar";
+import { useT } from "@/components/lang-provider";
+import { ItemSpecModal } from "@/components/item-spec-modal";
+import { FixedNumberPad } from "@/components/fixed-number-pad";
+import { NumericKeypad } from "@/components/numeric-keypad";
+import { AutoAcceptPill } from "@/components/auto-accept-pill";
+import { NoticeFocusCard } from "@/components/notice-focus-card";
+import { OrderSourceBadge } from "@/components/order-source-badge";
+import { OrderDiscountRow, OrderItemDiscountLine } from "@/components/order-discount-display";
+import { PlatformFeeBreakdown } from "@/components/platform-fee-breakdown";
+import { PlatformSettlementBreakdown } from "@/components/platform-settlement-breakdown";
+import { buildOrderDetailNotes } from "@/lib/pos/order-notes";
+import {
+  PLATFORM_VOID_DEFAULT_REASON,
+  canVoidPlatformOrder,
+  isPlatformOrder,
+} from "@/lib/pos/platform-order";
+import { QuickModeOrdersBar } from "@/components/quick-mode-orders-bar";
+import { QuickOnlineOrdersPanel } from "@/components/quick-online-orders-panel";
+import { ResponsiveModal } from "@/components/responsive-modal";
+import { SelfOrderActionButtons } from "@/components/self-order-action-buttons";
+import { SelfOrderNoticeStack } from "@/components/self-order-notice-stack";
+import { SyncHealthModal } from "@/components/sync-health-modal";
+import { PosToolsMenu } from "@/components/pos-tools-menu";
+import { OnlineOpenPill } from "@/components/online-open-pill";
+import { StoreOpenPill } from "@/components/store-open-pill";
+import { applyLedgerMerchantToBootstrap, resolveStoreDisplaySubtitle, resolveStoreDisplayTitle } from "@/lib/store-display";
+import { normalizeBootstrapPayload } from "@/lib/bootstrap-normalizer";
+import { resolvePrintJobStatus } from "@/lib/print-bridge/companion";
+import { mergePrintJobs } from "@/lib/pos/print-job-merge";
+import { posDeviceAuthHeaders, refreshPosDeviceTokenIfNeeded } from "@/lib/pos/pos-sync-auth";
+import {
+  flushPosSyncQueue,
+  notifyQueueChanged,
+  resolveStoreId,
+  retryFailedSyncEvents,
+  POS_SYNC_BLOCKED_EVENT,
+  POS_SYNC_FAILED_EVENT,
+  withStoreScope,
+} from "@/lib/pos/sync-flush";
+import { getStoreStatusSnapshot } from "@/lib/pos/use-store-status";
+import { observeServerBuildFromResponse } from "@/lib/build-info-observe";
+import { BuildStaleBanner } from "@/components/build-stale-banner";
+import { SessionRevokedBanner } from "@/components/pos-session-revoked-banner";
+import { markPosSessionRevoked } from "@/lib/pos/session-revoked";
+import { POS_SESSION_CLOSED_HEADER } from "@/lib/pos/session-record";
+import {
+  isOrderNoteLocked,
+  ITEM_SPEC_LOCKED_MESSAGE,
+  ORDER_NOTE_LOCKED_MESSAGE,
+} from "@/lib/pos/order-note-lock";
+import { enqueueEvents, isOutboxV2Enabled } from "@/lib/pos/queue-outbox";
+import { shouldBackfillOnResubscribe } from "@/lib/pos/resubscribe-guard";
+// 🆕 2026-09-22 P1：增量拉取水位（決策係純函式 `state-sync-watermark`，
+// 執行層 `state-sync-client` 同訂單頁共用一份，避免兩邊口徑漂移）。
+import { beginStateSince, commitStateSince } from "@/lib/pos/state-sync-client";
+import { queueSignature } from "@/lib/pos/queue-signature";
+import { createSingleFlight, SingleFlight } from "@/lib/pos/single-flight";
+import { ensureActivityTracking } from "@/lib/pos/activity-tracker";
+import {
+  evaluatePollGate,
+  reportRealtimeConnected,
+  subscribeIdleRecovery,
+} from "@/lib/pos/poll-gate-client";
+import { refocusForIosKeyboard } from "@/lib/pos/ios-keyboard";
+import {
+  restoreAllQuarantinedOrders,
+} from "@/lib/pos/sync-reconcile";
+import {
+  buildKitchenPrintJobs,
+  buildKioskReceiptPrintJobs,
+  buildLabelPrintJobs,
+  buildPlatformKitchenPrintJobs,
+  buildReceiptPrintJobs,
+  buildVoidPrintJobsForOrder,
+  describeNoReceiptPrinterError,
+  isPrintContentEnabled,
+  normalizePrintJobStatus,
+  reprintReceiptForOrder,
+} from "@/lib/print-jobs";
+import { isSelfOrder } from "@/lib/pos/order-source";
+import {
+  decidePlatformKitchenBackfill,
+  normalizePlatformPrinterZone,
+  platformZonePrinterCount,
+} from "@/lib/pos/platform-kitchen-print";
+// 🔴 2026-09-22：自助單（掃碼／kiosk）嘅自動出紙一律用 `appendPrintJobsWithSync`。
+// `appendPrintJobs`（`@/lib/print-jobs`）語義已於 2026-09-11 改為「**只寫本機、唔上雲**」，
+// 用佢 = 打印中心綠色「已發送」但永遠唔出紙（零紅標、零症狀）。見
+// `docs/reviews/print-out-failure-and-latency-2026-09-22.md`。
+import { appendPrintJobsWithSync, claimOncePrintJobs } from "@/lib/pos/print-job-enqueue";
+import {
+  addSelfOrderNotice,
+  dismissSelfOrderNotice,
+  markSelfOrderNoticeSettled,
+  toSelfOrderNoticeItems,
+  MAX_SELF_ORDER_NOTICES,
+  type SelfOrderNotice,
+  type SelfOrderNoticeItem,
+} from "@/lib/pos/self-order-notice";
+import { discountAmountFromRate, discountedUnitPrice, findDiscountPreset, orderItemDiscountTotal } from "@/lib/pos/discount";
+import { isTerminalOrderStatus, filterResurrectedOrders, getOrderStatusBadge } from "@/lib/pos-order-filters";
+import { defaultDeviceConfig } from "@/lib/mock-data";
+import {
+  loadBootstrapCache,
+  loadDeviceConfig,
+  loadAuthSession,
+  clearLegacyMembersCache,
+  loadOperatingMode,
+  saveOperatingMode,
+  hasPosLocalSettings,
+  loadPosLocalSettings,
+  loadQuickCompletedMinutes,
+  loadOrders,
+  loadPrintJobs,
+  loadQueue,
+  loadShiftState,
+  loadSoldOutState,
+  loadClearedPrintJobIds,
+  loadDeletedOrderIds,
+  loadQuarantinedOrders,
+  addDeletedOrderIds,
+  maxUsedDailyOrderSeq,
+  nextLocalDailyOrderNo,
+  loadSelfOrderNotices,
+  saveSelfOrderNotices,
+  saveBootstrapCache,
+  saveDeviceConfig,
+  saveOrders,
+  savePosLocalSettings,
+  savePrintJobs,
+  saveQueue,
+  saveQuickCompletedMinutes,
+  saveShiftState,
+  saveSoldOutState,
+  loadPrintTemplateSyncMeta,
+  savePrintTemplateSyncMeta,
+  loadNotePresetSyncMeta,
+  saveNotePresetSyncMeta,
+  type ShiftState,
+} from "@/lib/storage";
+import {
+  isShiftOvertimeDue,
+  reconcileLocalShift,
+  serverActiveToLocal,
+  serverAckOvertime,
+  serverOpenShift,
+} from "@/lib/shift-sync";
+import { executeLedgerMemberCheckout, LedgerMemberCheckoutError } from "@/lib/ledger/checkout-member";
+import { friendlyLedgerMemberError } from "@/lib/ledger/member-errors";
+import { getLedgerMerchantId } from "@/lib/ledger/session";
+import { lookupCustomerWallet } from "@/lib/ledger/members";
+import { useOnlineOrderSettings } from "@/lib/pos/use-online-order-settings";
+import {
+  avosToMop,
+  grantTypeLabel,
+  LedgerCheckoutMember,
+  mopToAvos,
+  sumMoneyVoucherAvos,
+} from "@/lib/ledger/member-types";
+import { listRedeemableGrantsForCustomer } from "@/lib/ledger/rewards";
+import { patchMenuFromRealtimeRecord, mergeLedgerMenuReference } from "@/lib/ledger/menu-import";
+import { fetchLedgerOrderMenu } from "@/lib/ledger/menu";
+import { useLedgerProductsRealtime } from "@/lib/ledger/use-ledger-products-realtime";
+import {
+  quickCompleteLabel,
+  quickCompletionLabel,
+} from "@/lib/quick-order-fulfillment";
+import { NETWORK_STATUS_EVENT, readNetworkOnline, useNetworkOnline } from "@/lib/use-network-online";
+import {
+  compareOrderByLocalNo,
+  filterQuickActionBarOrders,
+  getPaymentBadge,
+  isQuickCounterOrder,
+  isQuickOrderReady,
+  localOrderStatusLabel,
+  mergeOrderLists,
+} from "@/lib/pos-order-filters";
+import { usePosRealtime } from "@/lib/pos/use-pos-realtime";
+import {
+  describePosRealtimeProbe,
+  isPosRealtimeHealthy,
+  probePosRealtimeTarget,
+  safeHost,
+  type PosRealtimeProbe,
+} from "@/lib/pos/realtime-target";
+import { getPosRealtimeConfig } from "@/lib/pos/supabase-client";
+import { confirmSelfOrder, reopenPosOrder, rejectSelfOrder, removeReopenTempTable } from "@/lib/pos-orders";
+import { DeviceConfig, DiscountPreset, MenuItem, MenuSpecGroup, OrderItem, PosBootstrap, PosLocalSettings, PosOrder, PrintJob, PrintTemplates, QueueEvent, ShiftTemplateVariant, StoreTable } from "@/lib/types";
+import { formatMoney, formatMacauDateTime, formatMacauTime } from "@/lib/format";
+import { addedItemsSignature, diffAddedItems } from "@/lib/pos/order-item-diff";
+import { syncOnlineQuickFulfillmentInBackground } from "@/lib/pos/online-quick-fulfillment";
+// 🔴 2026-09-14：本地「完成／結帳」線上單之後，一定要順手推 Ledger 到 `completed`
+// （Ledger 報表 RPC 只認「已完成」；推唔到 ＝ 嗰筆錢喺 Ledger／交班「線上」度消失）。
+import { syncOnlineDineInCompletionInBackground } from "@/lib/pos/online-dinein-fulfillment";
+// 枱／樓層真源（bootstrap 優先 + 本地 overlay）抽到共用模組，令排位彈窗同桌台總覽同一口徑。
+import { buildDisplayFloors } from "@/lib/pos/display-floors";
+import { isReopenTempTable } from "@/lib/pos/table-scope";
+import { excludeRowsWithLocalTempTable, reopenAccountRows } from "@/lib/pos/reopen-account-rows";
+import { tableOrderBadge } from "@/lib/pos/table-order-badge";
+import { isPaidDineInOrder, isSettleableOrder } from "@/lib/pos/online-dinein-labels";
+import { resolveSettleTargetOrder as resolveSettleTargetOrderCore } from "@/lib/pos/settle-target";
+
+/**
+ * 已補印嘅「加單」簽名（`orderId` → 已出過嘅新增菜品簽名集合）。
+ *
+ * 用途：`onOrderUpsert` 收到同一張單嘅**同一個更新版本**兩次（realtime 重送 / 同一個
+ * tick 兩條事件）時，唔好出兩張「加單」廚房單。只係 in-memory（reload 後重設），
+ * 但 reload 後 `existing.items` 已經係最新版 → 差額為 0 → 自然唔會重印。
+ */
+const printedAddonSignatures = new Map<string, Set<string>>();
+
+/**
+ * 撳「掃碼新單」提示之後，訂單卡高亮維持幾耐（2026-09-11 用戶要求）。
+ * 2.4 秒 ≈ 一眼掃到「就係呢張」而唔會長期干擾；期間收銀可以直接撳卡上嘅動作掣。
+ */
+const NOTICE_FOCUS_MS = 2400;
+
+/**
+ * Toast 自動消失時間（2026-09-14 J 要求：**2 秒**後自己走）。
+ *
+ * 收銀台係觸控高頻操作，提示唔應該長期蓋住操作區（以前 2.6 秒）。
+ * ⚠️ 若日後要顯示長文案，唔好直接調大呢個值（會令所有提示一齊變慢），
+ * 改為縮短該處文案 —— 提示係「一睇就知」，唔係閱讀材料。
+ */
+const TOAST_AUTO_DISMISS_MS = 2000;
+
+type Toast = {
+  tone: "info" | "success" | "warning" | "error";
+  message: string;
+};
+
+function uid(prefix: string) {
+  return `${prefix}-${crypto.randomUUID().slice(0, 8)}`;
+}
+
+function orderTotals(items: OrderItem[], bootstrap: PosBootstrap) {
+  // 單品折扣摺入 subtotal：每項用折後單價計小計（docs/折扣需求 #3）。
+  const subtotal = items.reduce((sum, item) => {
+    const rate = item.discountRate;
+    const unit = rate != null && Number.isFinite(rate) ? (item.price * rate) / 100 : item.price;
+    return sum + Math.round(unit * 100 * item.quantity) / 100;
+  }, 0);
+  const serviceChargeAmount = subtotal * bootstrap.rules.serviceChargeRate;
+  const taxAmount = subtotal * bootstrap.rules.taxRate;
+  const total = subtotal + serviceChargeAmount + taxAmount;
+
+  return { subtotal, serviceChargeAmount, taxAmount, total };
+}
+
+/**
+ * 由已存 discountAmount 反向配對折扣預設 id：pre-discount 總額 = total + discountAmount，
+ * 逐個 preset 計應減金額，吻合就用嗰個 id；搵唔到（例如 preset 之後被刪）就返 ""（冇折扣）。
+ */
+function matchDiscountId(discounts: DiscountPreset[], orderTotal: number, storedDiscount: number): string {
+  if (!storedDiscount || storedDiscount <= 0) return "";
+  const preDiscountTotal = orderTotal + storedDiscount;
+  const match = discounts.find((d) => discountAmountFromRate(preDiscountTotal, d.rate) === round2(storedDiscount));
+  return match?.id ?? "";
+}
+
+function round2(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+/** 樓層選擇器嘅「全部」特殊值：一掣顯示所有樓層嘅枱。 */
+const ALL_FLOOR_ID = "__all__";
+
+const CART_PAYING_ID = "__cart__";
+const ALL_MENU_CATEGORY_ID = "__all__";
+// 分類 chips 折疊閾值：多於此數量時預設收起為兩行，提供「全部分類 ▾」展開
+const CATEGORY_COLLAPSE_THRESHOLD = 8;
+// 開桌入座人數：桌台冇填座位數（capacity 缺失 / ≤0）時嘅按鈕數上限 fallback。
+// 正常情況按鈕數 = 該枱 capacity（1..capacity，一鍵設定，唔畀超過座位數）。
+const OPEN_TABLE_FALLBACK_MAX_SEATS = 12;
+
+/**
+ * 《realtime 重連補拉》最少間隔（2026-09-21 egress 優化，**唔可以拆**）。
+ *
+ * ## 為何要（實測數據，唔係估算）
+ *
+ * Vercel log 實測：**連續 9 分鐘、每 4.47 秒一次**嘅「全量 state 拉取」，
+ * 每次 **857 KB**（orders 200 ＋ queue 300 ＋ printJobs 200 ＋ 設定）⇒ 單單嗰 9 分鐘就 **80 MB**，
+ * 佔該窗口全部 egress **96%**。秒級間隔全部落在 3–4.5 秒、103 次之中**冇任何兩次喺同一秒**
+ * ⇒ 係**定時循環**（唔係人手點）。對得上 `use-pos-realtime.ts` 嘅
+ * `RESUBSCRIBE_DEBOUNCE_MS = 3000`：channel 反覆「訂上 → 即斷」時，每輪都會
+ * `onResubscribed()` → `loadRuntimeState()`，而每次成功訂上都 reset `reconnectAttempt`
+ * ⇒ 重連永遠 3 秒，形成穩定循環（Safari **背景分頁會殺 WebSocket**，最常見成因）。
+ *
+ * ## 兩重守衛（見下面 `onResubscribed`）
+ *
+ *   ① **分頁隱藏就唔拉** —— 背景分頁冇人睇，拉 857 KB 純浪費。
+ *      ✅ 正確性不變：使用者一返前景 → `visibilitychange` → `subscribe()` → `SUBSCRIBED`
+ *      → 照樣會補一次（即「睡醒之後一定睇到最新」嘅保證完全保留）。
+ *   ② **最少間隔** —— 短暫斷線（幾秒）唔值得重拉；長時間斷線照樣補。
+ *
+ * ⚠️ 只加喺 resubscribe 路徑，**唔可以**加落 `loadRuntimeState()` 本身：
+ *  mount／手動更新／`backToTables()`（`setRuntimeRefreshTick`）都係刻意即時刷新嘅入口。
+ * 要還原舊行為：把呢個常數設成 `0`（等於唔節流，但仍保留「隱藏唔拉」）。
+ */
+const RESUBSCRIBE_BACKFILL_MIN_GAP_MS = 30_000;
+
+export function PosApp() {
+  const t = useT();
+  const router = useRouter();
+  const cachedBootstrapRaw = loadBootstrapCache();
+  const cachedBootstrap = cachedBootstrapRaw
+    ? applyLedgerMerchantToBootstrap(normalizeBootstrapPayload(cachedBootstrapRaw), loadAuthSession())
+    : null;
+  const initialHasBootstrapRef = useRef(Boolean(cachedBootstrap));
+  const [operatingMode, setOperatingModeState] = useState(() => loadOperatingMode());
+  const [bootstrap, setBootstrap] = useState<PosBootstrap | null>(() => cachedBootstrap);
+  const [activeTableId, setActiveTableId] = useState<string>(() => cachedBootstrap?.tables[0]?.id ?? "");
+  const [cartItems, setCartItems] = useState<OrderItem[]>([]);
+  const [voidedItems, setVoidedItems] = useState<OrderItem[]>([]);
+  const [selectedItemId, setSelectedItemId] = useState<string>("");
+  const networkOnline = useNetworkOnline();
+  const offlineMode = !networkOnline;
+  const [queue, setQueue] = useState<QueueEvent[]>(() => loadQueue());
+  /**
+   * ## 🔴🔴 同步隊列「array 身分」守衛（2026-09-21 egress 修復，**唔可以拆**）
+   *
+   * ### 病徵（實測）
+   *
+   * 下面 1132 行嗰個 effect 嘅 dependency 包含 `queue`：
+   *
+   * ```ts
+   * useEffect(() => {
+   *   if (offlineMode) return;
+   *   if (queue.some((e) => e.status === "pending")) return;
+   *   void loadRuntimeState();
+   * }, [offlineMode, runtimeRefreshTick, queue]);
+   * ```
+   *
+   * React 認嘅係 **array 身分**，唔係內容。所以 `setQueue(loadQueue())`
+   * ——即「由 localStorage 重新讀一份返嚟」——**就算內容一個字都冇變**都會令
+   * effect 重跑 ⇒ 再一次全量拉取。
+   *
+   * 2026-09-21 營業中實測：`/api/pos/state` 每 **4.49 秒**一次、每次 **424,181 B**
+   * ⇒ 5.5 分鐘 62 次 ≈ **25 MB**。上游只需一個秒級事件源（`pos-print-jobs-changed`
+   * 每 2.5 秒／`sync-acks` 每 15 秒／`POS_SYNC_QUEUE_CHANGED_EVENT` 每 30 秒）
+   * 就會形成**穩定嘅 4~5 秒循環**（103 次之中冇任何兩次喺同一秒 ⇒ 定時循環、唔係人手）。
+   *
+   * ### 修法
+   *
+   * 所有「重新讀 localStorage 塞返隊列」嘅入口一律改行 `replaceQueueFromStorage()`：
+   * 內容簽名一樣就**唔 `setQueue`** ⇒ 唔換身分 ⇒ effect 唔重跑。
+   *
+   * ### 為何零功能影響
+   *
+   * - **`saveQueue()` 照樣每次都寫 localStorage**（磁碟一致性完全保留）。
+   * - UI 只讀內容（`failedSyncCount`、`readySyncCount`、待同步提示）——
+   *   內容一樣 ⇒ 畫面／計算／DOM 結果**逐項相同**，只係少一輪無謂 re-render。
+   * - 內容**真係變咗**（狀態由 `pending` → `failed`／`synced`、多／少一筆）
+   *   ⇒ 簽名唔同 ⇒ 照樣 `setQueue`，UI 更新行為完全不變。
+   * - 同 1298 行既有嘅 backfill 簽名守衛**同一口徑**（現已統一用呢一個 ref），
+   *   ⇒ 唔會引入新盲點。
+   *
+   * 要還原舊行為（每次都換身分）：把 `replaceQueueFromStorage()` 改返
+   * `setQueue(loadQueue())`。但咁樣 424 KB 循環會即時返嚟。
+   */
+  const queueSignatureRef = useRef<string | null>(null);
+  // 首次 render 用當前 state 初始化（lazy，唔會每次 render 都算一次簽名）。
+  if (queueSignatureRef.current === null) queueSignatureRef.current = queueSignature(queue);
+  /**
+   * 由 localStorage 重新載入同步隊列；**內容冇變就唔換 array 身分**。
+   * 見上面 `queueSignatureRef` 嘅完整說明。
+   */
+  function replaceQueueFromStorage() {
+    const next = loadQueue();
+    const signature = queueSignature(next);
+    if (signature === queueSignatureRef.current) return;
+    queueSignatureRef.current = signature;
+    setQueue(next);
+  }
+  const [orders, setOrders] = useState<PosOrder[]>(() => loadOrders());
+  /**
+   * 掃碼自助單「新訂單提示」（2026-09-10 需求）：右上角一個提示對應一張桌台。
+   *
+   * 為何係 localStorage 而唔係純 state：需求明確要「唔會自動消失，直到用戶處理」，
+   * 而且要跨 reload 保留（收銀機中途 reload / 部署都唔應該丟失未處理提示）。
+   * 生命週期只得兩個出口：
+   *   - 撳 → 留在點餐頁面顯示該張單（`openSelfOrderNotice`；有枱 → 該枱工作台，
+   *     冇枱 → 高亮該張訂單卡。**唔會**跳去訂單頁）
+   *   - 向右滑 → 略過（`dismissSelfOrderNotice`）
+   * 冇任何 timer、冇任何狀態變化會令佢自動消失（包括訂單已結帳 —— 嗰陣會轉文案示警）。
+   */
+  const [selfOrderNotices, setSelfOrderNotices] = useState<SelfOrderNotice[]>(() => loadSelfOrderNotices());
+  /**
+   * 撳「掃碼新單」提示之後，喺**當前點餐頁面**要閃一下／捲到嘅訂單（2026-09-11 用戶要求）。
+   *
+   * 舊行為：撳提示 → 冇枱嘅訂單（快餐／自助機自取）會 `router.push("/orders?orderId=")`，
+   * 跳去訂單頁再開「訂單詳情」彈窗 —— 收銀只是想知「邊張單新到」，唔想離開點餐頁面。
+   * 新行為：**留在點餐頁面**，把該張訂單卡（快餐 = 線下訂單 strip；堂食 = 右欄「自取 /
+   * 掃碼訂單」面板）圈住 + 捲入視線，`NOTICE_FOCUS_MS` 之後自動熄。
+   *
+   * `seq` 每次撳都遞增：同一張卡連撳兩次都要重新捲動（純 boolean 第二下唔會觸發 effect）。
+   */
+  const [noticeFocus, setNoticeFocus] = useState<{ orderId: string; seq: number } | null>(null);
+  const [printJobs, setPrintJobs] = useState<PrintJob[]>(() => loadPrintJobs());
+  // 同步健康檢查（L1 失敗事件重試 / L2 已結帳未上雲補錄）彈窗開關。
+  const [showSyncHealth, setShowSyncHealth] = useState(false);
+  /**
+   * 即時連線（Realtime）健康狀態（2026-09-10 P0）。
+   *
+   * 為何要有：Supabase 訂一張**唔存在**嘅表**唔會**報錯（channel 一樣 SUBSCRIBED），
+   * 所以「設定指錯專案」係靜默失效 —— 收銀台完全冇提示，只有 reload 先見到新單。
+   * `probe` = mount 時一次性問 PostgREST「呢個專案有冇 pos_orders」（唔係 polling）；
+   * `status` = realtime channel 嘅 SUBSCRIBED / CHANNEL_ERROR / TIMED_OUT。
+   */
+  const [realtimeProbe, setRealtimeProbe] = useState<PosRealtimeProbe | null>(null);
+  const [realtimeStatus, setRealtimeStatus] = useState<string | null>(null);
+  const [realtimeBannerDismissed, setRealtimeBannerDismissed] = useState(false);
+  const [toast, setToast] = useState<Toast | null>(null);
+  const [isBootstrapping, setIsBootstrapping] = useState(() => !loadBootstrapCache());
+  const [manualSyncing, setManualSyncing] = useState(false);
+  const [activeCategoryId, setActiveCategoryId] = useState<string>(() => cachedBootstrap?.categories[0]?.id ?? "");
+  // ── 分類 chips：預設兩行，多於 8 個分類可展開／收起 ──
+  const [categoriesExpanded, setCategoriesExpanded] = useState(false);
+  const [searchKeyword, setSearchKeyword] = useState("");
+  const [payingOrderId, setPayingOrderId] = useState<string | null>(null);
+  const [viewingOrderId, setViewingOrderId] = useState<string | null>(null);
+  const [roReason, setRoReason] = useState("");
+  // ── 開桌彈窗（空閒枱 click → 揀入座人數）──
+  const [openTableModalTableId, setOpenTableModalTableId] = useState<string | null>(null);
+  const [openTablePartySize, setOpenTablePartySize] = useState<number>(1);
+  const [seatedPartySizes, setSeatedPartySizes] = useState<Record<string, number>>(() => {
+    const all = loadOrders();
+    // 只從進行中訂單初始化入座人數，避免已結帳/取消/退款嘅舊單殘留
+    return Object.fromEntries(
+      all
+        .filter(
+          (o) =>
+            o.partySize != null &&
+            (o.status === "draft" || o.status === "sent_to_kitchen" || o.status === "paid" || o.status === "reopened"),
+        )
+        .map((o) => [o.tableId, o.partySize as number]),
+    );
+  });
+  const [roModalOpen, setRoModalOpen] = useState(false);
+  const [roSubmitting, setRoSubmitting] = useState(false);
+  const [activeOrderId, setActiveOrderId] = useState<string | null>(null);
+  // 全單折扣：儲存已選折扣預設 id（"" = 冇折扣）。由 preset.rate 計應減金額。
+  const [discountValue, setDiscountValue] = useState("");
+  // 單品折扣彈窗：正編輯緊嘅 cart item（key = itemIdentity），null = 關咗。
+  const [itemDiscountEditor, setItemDiscountEditor] = useState<string | null>(null);
+  // 單品折扣彈窗內暫選嘅 preset id。
+  const [itemDiscountDraft, setItemDiscountDraft] = useState("");
+  // ── 折扣備註（2026-09-11）──
+  // 全單折扣嘅原因。有折扣就一定有原因（結帳頁彈窗係硬閘），落 PosOrder.discountNote。
+  const [discountNote, setDiscountNote] = useState("");
+  /**
+   * 折扣備註彈窗請求：`whole` = 剛揀完全單折扣下拉；`item` = 剛撳單品折扣彈窗嘅保存。
+   *
+   * ⚠️ 請求期間折扣**未落實** —— 撳「取消」就等於冇折過（下拉／單品都維持原值），
+   * 唔會出現「折扣已套用但冇原因」嘅中間狀態（就係需求講嘅「未選原因唔可以完成折扣」）。
+   */
+  const [discountNoteRequest, setDiscountNoteRequest] = useState<
+    { kind: "whole"; presetId: string } | { kind: "item"; itemKey: string; rate: number } | null
+  >(null);
+  // 彈窗內暫選／輸入嘅原因。
+  const [discountNoteDraft, setDiscountNoteDraft] = useState("");
+  const [receivedAmount, setReceivedAmount] = useState("");
+  // 系統抹零（結帳頁 input，寫 PosOrder.roundingAmount；見 docs/88 §5.1）。空 = 0。
+  const [roundingInput, setRoundingInput] = useState("");
+  const [posMode, setPosMode] = useState<"tables" | "order">(() => (loadOperatingMode() === "quick" ? "order" : "tables"));
+
+  // ── 自動配對桌面 Companion：mount 嗰陣 ran 一次，唔使用家手動填 URL（見 auto-pair-companion.ts）──
+  useEffect(() => {
+    tryAutoPairCompanion();
+  }, []);
+
+  // 注意：sync flush worker 已經由 root layout 嘅 <PosSyncFlushWorker /> 統一安裝，
+  // 此處唔再重複裝（同 installPosSyncQueueAutoFlush() 內部 `listenersInstalled` guard 一致）。
+  // 推 queue 嘅位置（pushEvents）會經 notifyQueueChanged() 觸發 flush。
+
+  // ── M7：Ledger 餐牌 realtime ── 單筆 patch/upsert bootstrap cache，唔全 re-fetch。
+  const ledgerMerchantId = getLedgerMerchantId();
+  useLedgerProductsRealtime(ledgerMerchantId, Boolean(ledgerMerchantId), {
+    onChange: ({ record, eventType }) => {
+      patchMenuFromRealtimeRecord(record, eventType);
+    },
+  });
+
+  // 餐牌被 realtime / 匯入改動後，重讀 bootstrap 令收銀介面即時反映（kiosk 側已聽同一事件）。
+  useEffect(() => {
+    function onBootstrapChanged() {
+      const fresh = loadBootstrapCache();
+      if (fresh) {
+        setBootstrap(applyLedgerMerchantToBootstrap(normalizeBootstrapPayload(fresh), loadAuthSession()));
+      }
+    }
+    window.addEventListener("pos-bootstrap-changed", onBootstrapChanged);
+    return () => window.removeEventListener("pos-bootstrap-changed", onBootstrapChanged);
+  }, []);
+
+  // ── Deep-link：orders 面板「查看」非 counter 單會跳到 `/pos?tableId=...&orderId=...` ──
+  // ⚠️ 2026-09-22：來源一定要 `router.push("/pos?…")`。`/` 自 2026-09-17 起係「選擇工作台」頁，
+  //    推去 `/` 會令收銀員卡喺選擇頁（見 `local-orders-panel.tsx` 兩處呼叫點）。
+  //    呢個 effect 自己用 `window.location.search` 讀 query，所以路徑改動唔影響佢。
+  // 喺呢度載入單到工作台（已結/未結/已返結一律支援，搵全量 orders 唔靠 openOrders）。
+  // quick mode 下 activeTable 鎖死 counter、真枱載唔到，故遇到堂食單要切返 dinein。
+  // 用 ref 做 one-shot，避免 router.replace 後重複觸發。
+  // 用 window.location.search 讀 query，避開 useSearchParams 喺 server page 嘅 Suspense 要求。
+  const deepLinkConsumedRef = useRef(false);
+  useEffect(() => {
+    if (deepLinkConsumedRef.current) return;
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const tableId = params.get("tableId");
+    const orderId = params.get("orderId");
+    if (!tableId || !orderId) return;
+    const order = orders.find((o) => o.id === orderId) ?? null;
+    if (!order) return;
+    deepLinkConsumedRef.current = true;
+    if (operatingMode === "quick") {
+      setOperatingModeState("dinein");
+      saveOperatingMode("dinein");
+    }
+    loadOrderIntoWorkspace(order, order.tableId);
+    setPosMode("order");
+    // 鎖定枱所屬 floor（普通枱同 temp 返結枱都鎖），方便返枱面時直接見到該枱
+    const targetFloor = floors.find((floor) => floor.tables.some((table) => table.id === order.tableId));
+    if (targetFloor) setActiveFloorId(targetFloor.id);
+    // 用 history.replaceState 清 query，唔用 router.replace —— 否則會觸發 Next 導航令 PosApp 重掛載、
+    // posMode 被重置做初始 "tables" 而彈返枱面介面。
+    //
+    // 🔴 2026-09-22 修：**唔可以寫死 `"/"`**。`/` 自 2026-09-17 起係「統一入口／選擇工作台」
+    // 頁（收銀台已搬去 `/pos`）⇒ 清 query 嗰刻會連**路徑**一齊改走：地址列變 `/`，
+    // 之後任何 reload / 返回 / 分享都會彈去「請選擇要進入嘅工作台」，
+    // 而收銀員明明只係撳咗列表嘅「查看」（商家 2026-09-22 回報）。
+    // 只清 query、保留當前 pathname，無論呢個 component 掛喺邊個路由都正確。
+    if (typeof window !== "undefined") {
+      window.history.replaceState(null, "", window.location.pathname);
+    }
+    // loadOrderIntoWorkspace 只用穩定 setter，無需入 deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orders, operatingMode]);
+
+  // 外部（面板 / 本頁「返結帳」）改完 orders 後，刷新本地 state，令 activeOrder 重算（settled→reopened 後變可編輯）
+  useEffect(() => {
+    const onChanged = () => setOrders(loadOrders());
+    window.addEventListener("pos-orders-changed", onChanged);
+    return () => window.removeEventListener("pos-orders-changed", onChanged);
+  }, []);
+
+  // PrintFlushWorker 每 2.5s 背景 flush，job 由 pending 轉 sent / failed 時會 dispatch
+  // "pos-print-jobs-changed"。主畫面一定要聽：以前得打印中心聽，即係收銀員喺落單畫面
+  // 完全唔會知道廚房機收唔到單（打印中心係 /prints 另一頁，冇人會特登去睇）。
+  // 同 print-center.tsx 一致：永遠重新讀 loadPrintJobs()，唔信 event detail。
+  // 事關 12 個 dispatch 位入面得 5 個有帶 printJobs，其餘 7 個係空 detail／淨係 {count}。
+  // 同 print-center 一齊做狀態標準化，避免舊 / 異常狀態導致 UI 同資料庫唔一致。
+  useEffect(() => {
+    const onPrintJobsChanged = () => setPrintJobs(loadPrintJobs().map(normalizePrintJobStatus));
+    window.addEventListener("pos-print-jobs-changed", onPrintJobsChanged);
+    return () => window.removeEventListener("pos-print-jobs-changed", onPrintJobsChanged);
+  }, []);
+
+  // 同步**永久**失敗（server 連續拒收 5 次）一定要喺落單畫面睇得到。
+  // 呢啲 event 之後會被 sync-flush 永久 skip，永遠唔會再重試，而全個 app 本來
+  // 零 UI 顯示佢哋（backoffice 同步頁讀嘅係 server 紀錄，傳唔到 server 嘅 event
+  // 當然唔會出現喺度）—— 收銀會以為單已經上咗 DB。
+  // 注意：唔好聽 POS_SYNC_QUEUE_CHANGED_EVENT，嗰個係 flush 自己嘅 trigger，
+  // 聽咗會每 30s 無謂 refresh。
+  useEffect(() => {
+    // 🔴 2026-09-21：改用 `replaceQueueFromStorage()`（內容冇變就唔換 array 身分）。
+    // 舊版係 `setQueue(loadQueue())` —— 每次都換身分，而 `queue` 係下面 1132 行
+    // effect 嘅 dependency ⇒ 會連鎖觸發一次 424 KB 全量拉取。詳見 `queueSignatureRef`。
+    const onSyncFailed = () => replaceQueueFromStorage();
+    window.addEventListener(POS_SYNC_FAILED_EVENT, onSyncFailed);
+    return () => window.removeEventListener(POS_SYNC_FAILED_EVENT, onSyncFailed);
+  }, []);
+
+  // 打印失敗一定要喺落單畫面睇得到：背景 flush 失敗時收銀員係零提示，
+  // 廚房就咁收唔到單。最新的排最前，等下面個提示卡顯示最近嗰個原因。
+  const failedPrintJobs = useMemo(
+    () =>
+      printJobs
+        .filter((job) => job.status === "failed")
+        .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt)),
+    [printJobs],
+  );
+
+  // 永久同步失敗嘅 event 數。由 queue state 計，所以重新載入頁面都仲喺度
+  // （queue 初始值就係 loadQueue()，failed 事件一直留喺 localStorage）。
+  const failedSyncCount = useMemo(
+    () => queue.filter((event) => event.status === "failed").length,
+    [queue],
+  );
+
+  /**
+   * docs/任務：列印失敗提示 3 秒自動消失，避免長期遮擋畫面。
+   * - 每次「出現」會啟動 3 秒 timer，3 秒後自動隱藏。
+   * - 有新嘅失敗單（job 數量變多、或最新一筆嘅 id 改變）會重置為「顯示」狀態。
+   * - 用戶主動撳提示去打印中心後亦視為「已處理」，清除計時。
+   */
+  const [printFailureDismissed, setPrintFailureDismissed] = useState(false);
+  const latestFailedJobId = failedPrintJobs[0]?.id ?? null;
+  useEffect(() => {
+    if (failedPrintJobs.length === 0) {
+      setPrintFailureDismissed(false);
+      return;
+    }
+    setPrintFailureDismissed(false);
+    const timer = window.setTimeout(() => setPrintFailureDismissed(true), 3000);
+    return () => window.clearTimeout(timer);
+    // 依賴最新一筆失敗單嘅 id，確保有新失敗時重新計時；數量變化亦包含在 id 變動內。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [latestFailedJobId, failedPrintJobs.length]);
+  const showPrintFailureToast = failedPrintJobs.length > 0 && !printFailureDismissed;
+
+  const [baseOrderItems, setBaseOrderItems] = useState<OrderItem[]>([]);
+  const [activeFloorId, setActiveFloorId] = useState("");
+  const [specModalOpen, setSpecModalOpen] = useState(false);
+  const [specModalItem, setSpecModalItem] = useState<MenuItem | null>(null);
+  const [specEditingKey, setSpecEditingKey] = useState<string | null>(null);
+  const [selectedSpecValues, setSelectedSpecValues] = useState<Record<string, string[]>>({});
+  const [marketPriceItem, setMarketPriceItem] = useState<MenuItem | null>(null);
+  const [marketPriceValue, setMarketPriceValue] = useState("");
+  const [marketPriceSpecs, setMarketPriceSpecs] = useState<NonNullable<OrderItem["selectedSpecs"]>>([]);
+  const [specThenMarketPrice, setSpecThenMarketPrice] = useState(false);
+  const [voidRequest, setVoidRequest] = useState<{ item: OrderItem; mode: "one" | "all"; isFullOrder?: boolean } | null>(null);
+  const [voidReason, setVoidReason] = useState("");
+  // 免單（comp）：結帳頁撳「免單」→ 彈窗揀備註（必填）→ confirmComp() 全額減免結帳。
+  // 備註來源 localSettings.compNotePresets（設置 → 備註 → 免單備註），可自由輸入補充。
+  const [compModalOpen, setCompModalOpen] = useState(false);
+  const [compNote, setCompNote] = useState("");
+  const [orderActionRequest, setOrderActionRequest] = useState<
+    | {
+        /**
+         * `cancel_order`：本地單「取消結帳」（只限未收款）。
+         * `void_platform_order`：外賣平台單「作廢（覆寫）」—— 任何階段都可以，
+         *   包括已結帳／已完成（2026-09-24 使用者要求，規則見 `@/lib/pos/platform-order`）。
+         * `refund_order`：退款。
+         */
+        type: "cancel_order" | "void_platform_order" | "refund_order";
+        orderId: string;
+      }
+    | null
+  >(null);
+  const [orderActionReason, setOrderActionReason] = useState("");
+  const [partialRefundOrderId, setPartialRefundOrderId] = useState<string | null>(null);
+  const [partialRefundReason, setPartialRefundReason] = useState("");
+  const [partialRefundQuantities, setPartialRefundQuantities] = useState<Record<string, number>>({});
+  const [voidTableRequest, setVoidTableRequest] = useState<string | null>(null);
+  const [voidTableReason, setVoidTableReason] = useState("");
+  const [refundSummaryExportOpen, setRefundSummaryExportOpen] = useState(false);
+  const [refundSummaryMode, setRefundSummaryMode] = useState<"date" | "employee">("date");
+  const [refundSummaryDateFrom, setRefundSummaryDateFrom] = useState("");
+  const [refundSummaryDateTo, setRefundSummaryDateTo] = useState("");
+  const [memberPhone, setMemberPhone] = useState("");
+  const [ledgerMember, setLedgerMember] = useState<LedgerCheckoutMember | null>(null);
+  const [memberSearchHint, setMemberSearchHint] = useState<string>("");
+  const [memberSearching, setMemberSearching] = useState(false);
+  const memberSearchTimerRef = useRef<number | null>(null);
+  const memberCheckoutIdempotencyRef = useRef<string | null>(null);
+  const [memberCheckoutRedeemDone, setMemberCheckoutRedeemDone] = useState(false);
+  const [memberCheckoutSubmitting, setMemberCheckoutSubmitting] = useState(false);
+  const [useMemberBalance, setUseMemberBalance] = useState(false);
+  const [selectedGrantIds, setSelectedGrantIds] = useState<string[]>([]);
+  const [selectedPaymentMethod, setSelectedPaymentMethod] = useState("");
+  const [orderSuccessFlash, setOrderSuccessFlash] = useState(false);
+  const [settlementFlash, setSettlementFlash] = useState(false);
+  const [orderSubmitting, setOrderSubmitting] = useState(false);
+  // 點餐介面兩個手動打印掣嘅忙碌旗標（防連點重複入隊）
+  const [kitchenPrintSubmitting, setKitchenPrintSubmitting] = useState(false);
+  const [receiptPrintSubmitting, setReceiptPrintSubmitting] = useState(false);
+  const [runtimeRefreshTick, setRuntimeRefreshTick] = useState(0);
+  // 追蹤 backfill 載入嘅 queue 簽名（id+status），避免 setQueue 建立新 array reference
+  // 觸發自身 effect 依賴造成無限輪詢。saveQueue 仍然每次寫 localStorage，保持磁碟同步。
+  //
+  // 2026-09-21：已同組件頂部嘅 `queueSignatureRef` 合併做**單一真源** ——
+  // 全部 `setQueue` 入口（含 `replaceQueueFromStorage()`）共用同一個 ref，
+  // 唔會再有「一邊以為內容冇變、另一邊照換身分」嘅口徑漂移。
+  /**
+   * 上一次**全量** state 拉取嘅時間（`loadRuntimeState()` 一開跑就記）。
+   *
+   * 用途：`onResubscribed` 嘅「最少間隔」守衛（見 `RESUBSCRIBE_BACKFILL_MIN_GAP_MS`）。
+   * 記喺 `loadRuntimeState()` 之內（而唔係某個呼叫點）係刻意嘅 —— 咁樣「mount 拉完 3 秒後
+   * channel 又訂上」都一樣會被擋，而唔係每個呼叫點各自維護一份時間。
+   */
+  const lastFullStatePullAtRef = useRef(0);
+  const [soldOutMap, setSoldOutMap] = useState(() => loadSoldOutState());
+  const [shift, setShift] = useState(() => loadShiftState());
+  /**
+   * 「今日未開工」彈窗嘅「收起」狀態（2026-09-14 需求）。
+   *
+   * 背景：打烊交班後 `closeShift()` 會清空 `openedAt` ⇒ 老闆返嚟對數時彈窗必現，
+   * 而舊寫法冇傳 `onClose`＝**完全關唔到**，逼住要先開一個新班次。
+   * 而家撳彈窗右上角 ✕ 就收起（唔會開工、亦唔會解鎖落單）。
+   *
+   * ⚠️ 只記喺 component state：重新載入頁面會再提示一次（唔想靜靜雞收埋「未開工」）。
+   */
+  const [startWorkPromptDismissed, setStartWorkPromptDismissed] = useState(false);
+  /** 彈窗「飛去頁首開工掣」嘅動畫參數（null = 冇動畫進行中）；此時彈窗保持掛載到動畫完為止。 */
+  const [startWorkFly, setStartWorkFly] = useState<{ dx: number; dy: number; scale: number } | null>(null);
+  /** 動畫落地後：頁首「開工」掣發光圈 ＋ 彈「開工喺呢度」提示泡泡。 */
+  const [startWorkHint, setStartWorkHint] = useState(false);
+  const startWorkButtonRef = useRef<HTMLButtonElement | null>(null);
+  const startWorkPanelRef = useRef<HTMLDivElement | null>(null);
+  const startWorkTimersRef = useRef<number[]>([]);
+  // 2026-09-07：連續開工逾時提醒（>10h）彈窗開關；shiftSyncBusyRef 防 reconcile 重入。
+  const [shiftOvertimeDue, setShiftOvertimeDue] = useState(false);
+  const [shiftAcking, setShiftAcking] = useState(false);
+  const shiftSyncBusyRef = useRef(false);
+  const [authSession] = useState(() => loadAuthSession());
+  const [orderNote, setOrderNote] = useState("");
+  const [noteModal, setNoteModal] = useState<{ type: "order" | "item"; itemKey?: string } | null>(null);
+  const [noteDraft, setNoteDraft] = useState("");
+  const [quickCompletedMinutes, setQuickCompletedMinutes] = useState(() => loadQuickCompletedMinutes());
+  const [quickOrderType, setQuickOrderType] = useState<"dine_in" | "pickup" | "delivery">("dine_in");
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  const [audioReady, setAudioReady] = useState(false);
+  const quickOrderProcessingRef = useRef<Set<string>>(new Set());
+
+  const isQuickMode = operatingMode === "quick";
+  const canRefundOrder = authSession?.permissions.refundOrder ?? true;
+  const canVoidItem = authSession?.permissions.voidItem ?? true;
+
+  function showPermissionDenied(actionLabel: string) {
+    setToast({ tone: "info", message: `目前帳號沒有${actionLabel}權限，請使用店長帳號操作。` });
+  }
+
+  function resetMemberCheckoutState() {
+    setMemberPhone("");
+    setLedgerMember(null);
+    setMemberSearchHint("");
+    setSelectedGrantIds([]);
+    setUseMemberBalance(false);
+    memberCheckoutIdempotencyRef.current = null;
+    setMemberCheckoutRedeemDone(false);
+    setMemberCheckoutSubmitting(false);
+  }
+
+  function exportRefundDetails(order: PosOrder) {
+    if (!order.refundRecords?.length || typeof window === "undefined") return;
+    const rows = [
+      ["訂單號", "退款時間", "退款金額", "退款原因", "菜品", "數量", "項目金額"].join(","),
+      ...order.refundRecords.flatMap((record) => {
+        if (!record.items?.length) {
+          return [[order.localOrderNo, record.createdAt, String(record.amount), record.reason, "", "", ""].map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(",")];
+        }
+        return record.items.map((item) =>
+          [order.localOrderNo, record.createdAt, String(record.amount), record.reason, item.name, String(item.quantity), String(item.amount)]
+            .map((cell) => `"${String(cell).replace(/"/g, '""')}"`)
+            .join(","),
+        );
+      }),
+    ];
+    const blob = new Blob([`\uFEFF${rows.join("\n")}`], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${order.localOrderNo}-退款明細.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+    setToast({ tone: "success", message: `${order.localOrderNo} 退款明細已導出。` });
+  }
+
+  function exportRefundSummary() {
+    const refundRows = orders.flatMap((order) =>
+      (order.refundRecords ?? []).map((record) => ({
+        orderNo: order.localOrderNo,
+        createdAt: record.createdAt,
+        date: record.createdAt.slice(0, 10),
+        employee: record.employeeName ?? record.employeeAccount ?? "未記錄",
+        amount: record.amount,
+      })),
+    );
+    const filtered = refundRows.filter((row) => {
+      if (refundSummaryDateFrom && row.date < refundSummaryDateFrom) return false;
+      if (refundSummaryDateTo && row.date > refundSummaryDateTo) return false;
+      return true;
+    });
+    if (filtered.length === 0 || typeof window === "undefined") {
+      setToast({ tone: "info", message: "目前沒有符合條件的退款資料可導出。" });
+      return;
+    }
+    const grouped = Array.from(
+      filtered.reduce(
+        (map, row) => {
+          const key = refundSummaryMode === "date" ? row.date : row.employee;
+          const current = map.get(key) ?? { key, count: 0, amount: 0, orders: new Set<string>() };
+          current.count += 1;
+          current.amount += row.amount;
+          current.orders.add(row.orderNo);
+          map.set(key, current);
+          return map;
+        },
+        new Map<string, { key: string; count: number; amount: number; orders: Set<string> }>(),
+      ).values(),
+    );
+    const rows = [
+      [refundSummaryMode === "date" ? "日期" : "員工", "退款次數", "退款總額", "涉及訂單數", "訂單"].join(","),
+      ...grouped.map((row) =>
+        [
+          row.key,
+          String(row.count),
+          String(row.amount),
+          String(row.orders.size),
+          Array.from(row.orders).join(" / "),
+        ]
+          .map((cell) => `"${String(cell).replace(/"/g, '""')}"`)
+          .join(","),
+      ),
+    ];
+    const blob = new Blob([`\uFEFF${rows.join("\n")}`], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `退款匯總-${refundSummaryMode === "date" ? "按日期" : "按員工"}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+    setRefundSummaryExportOpen(false);
+    setToast({ tone: "success", message: "退款匯總已導出。" });
+  }
+
+  useEffect(() => {
+    function onSoldOutChanged(event: Event) {
+      const detail = (event as CustomEvent<{ soldOutMap?: ReturnType<typeof loadSoldOutState> }>).detail;
+      if (detail?.soldOutMap) {
+        setSoldOutMap(detail.soldOutMap);
+      } else {
+        setSoldOutMap(loadSoldOutState());
+      }
+    }
+    window.addEventListener("pos-soldout-changed", onSoldOutChanged as EventListener);
+    return () => window.removeEventListener("pos-soldout-changed", onSoldOutChanged as EventListener);
+  }, []);
+
+  useEffect(() => {
+    function onShiftChanged(event: Event) {
+      const detail = (event as CustomEvent<{ shift?: ReturnType<typeof loadShiftState> }>).detail;
+      if (detail?.shift) {
+        setShift(detail.shift);
+      } else {
+        setShift(loadShiftState());
+      }
+    }
+    window.addEventListener("pos-shift-changed", onShiftChanged as EventListener);
+    return () => window.removeEventListener("pos-shift-changed", onShiftChanged as EventListener);
+  }, []);
+
+  // 2026-09-07：開工/收工狀態跨裝置同步 + 連續開工逾時提醒（問題一 + 問題二）。
+  // ⚠️ 2026-09-21：週期已由 60 秒改為 **180 秒**（見下面 `setInterval` 處註釋）。
+  // 每 180 秒、網絡恢復、window focus 時 reconcile server active 班次：
+  //   - server 已開工而本地未開 → adopt server（開工 gate 自動解鎖，唔使再撳開工）；
+  //   - server 冇而本地開工中 → 補上雲（離線開工事後同步）；
+  //   - 攞埋 server 時鐘計「連續開工 >10 小時」due 狀態（跨裝置一致，ack 以 server 為準）。
+  useEffect(() => {
+    const resolvedStoreId = resolveStoreId();
+    if (!resolvedStoreId) return;
+    const storeId: string = resolvedStoreId;
+    let cancelled = false;
+
+    async function syncOnce() {
+      if (shiftSyncBusyRef.current || !readNetworkOnline()) return;
+      shiftSyncBusyRef.current = true;
+      try {
+        const result = await reconcileLocalShift(storeId);
+        if (cancelled || !result.ok) return;
+        const current = loadShiftState();
+        // 內容有變（adopt server / 補 open 後 synced 旗標變化）先更新 React state。
+        if (
+          result.adoptedServer ||
+          result.shift.openedAt !== current.openedAt ||
+          result.shift.overtimeAckedAt !== current.overtimeAckedAt
+        ) {
+          setShift(result.shift);
+          window.dispatchEvent(
+            new CustomEvent("pos-shift-changed", { detail: { shift: result.shift } }),
+          );
+        }
+        // OT 提醒：只喺本機顯示開工中（openedAt 有、closedAt 冇）先計。
+        const openedIso = result.shift.openedAt;
+        const ackedIso = result.shift.overtimeAckedAt;
+        const serverNowIso = result.serverNow;
+        if (openedIso && !result.shift.closedAt && serverNowIso) {
+          setShiftOvertimeDue(isShiftOvertimeDue(openedIso, ackedIso, serverNowIso));
+        } else {
+          setShiftOvertimeDue(false);
+        }
+      } finally {
+        shiftSyncBusyRef.current = false;
+      }
+    }
+
+    void syncOnce();
+    // 2026-09-21 egress 優化：60 秒 → **180 秒**。
+    // 為咩：班次狀態（開工 / 收工 / 逾時）唔需要分鐘級新鮮度，而呢個 tick 每次打
+    // `/api/pos/shift`（實測 Supabase log：每約 48 秒一次 —— 即係仲有第二個來源
+    // 一齊打，見 `useStoreStatus`）。改 180 秒直接省 2/3 invocations。
+    // 唔影響：`focus` / `online` / 開工收工本身都會即刻觸發 `syncOnce()`（見下面兩個
+    // listener），所以「切返嚟就對齊」嘅保證完全不變。
+    // 要還原舊行為：改返 60_000。
+    // 🔴 2026-09-21 輪詢閘（`@/lib/pos/poll-gate`）：
+    //    · Realtime 通 → 兜底間隔放寬到 **5 分鐘**（push 優先）；
+    //    · 閒置 ≥5 分鐘／兩條接單通路都關／已收工 → **唔打**；
+    //    · 一切未知（null）→ 照跑（fail-open）。
+    //    interval 本身保留唔拆 —— tick 係本地零成本，request 才係成本。
+    //    要還原舊行為：刪走 `evaluatePollGate` 呢句。
+    const timer = window.setInterval(() => {
+      if (!evaluatePollGate({ tag: "pos/shift" }).poll) return;
+      void syncOnce();
+    }, 180_000);
+    function onReconnect() {
+      void syncOnce();
+    }
+    function onFocus() {
+      void syncOnce();
+    }
+    window.addEventListener(NETWORK_STATUS_EVENT, onReconnect);
+    window.addEventListener("focus", onFocus);
+    // 輪詢閘配套（2026-09-21）：安裝真人互動追蹤（單一 listener、refCount），
+    // 並喺「由閒置恢復」嗰一刻**即刻**補一次同步 —— 令「停咗輪詢」唔會令人覺得鈍。
+    const uninstallActivityTracking = ensureActivityTracking();
+    const unsubscribeIdleRecovery = subscribeIdleRecovery(() => {
+      if (cancelled) return;
+      void syncOnce();
+    });
+    /**
+     * 🔴 G3（2026-09-21）：server 話「店已關／未開工」→
+     *   ① 提示收銀員（否則佢只會見到「未同步」徽章，唔知係被規則拒收）
+     *   ② **即刻由雲端重新對齊班次**（`reconcileLocalShift` 會 adopt 伺服器嘅「已收工」）
+     *
+     * 冇 ② 嘅話，一部舊分頁（本機以為仲開工）會一路白試到 `failed` 為止，
+     * 而收銀員完全唔知發生咩事。
+     */
+    function onSyncBlocked(rawEvent: Event) {
+      const detail = (rawEvent as CustomEvent<{ reason?: string; count?: number }>).detail;
+      const reason = detail?.reason;
+      if (reason !== "store-closed" && reason !== "shift-closed" && reason !== "session-closed") return;
+      if (cancelled) return;
+
+      // 🔴 2026-09-22：管理員喺 admin 頁強制關閉咗**呢個分頁**。
+      // 同上面兩種「規則性拒收」嘅處理**唔同**：
+      //   · 唔可以 `syncOnce()` —— 由雲端重新對齊救唔到（問題係呢個分頁嘅身分被撤銷）；
+      //   · 要開「已被關閉」旗標 ⇒ 橫幅出現 + 輪詢閘即刻停（＝止住 egress，嗰個係原本目的）；
+      //   · 文案要叫店員「重新登入」，而唔係「恢復營業」（撳幾多次都冇用）。
+      if (reason === "session-closed") {
+        markPosSessionRevoked();
+        setToast({
+          tone: "error",
+          message: `此工作階段已被管理員關閉：${detail?.count ?? 0} 筆操作被拒收，請重新登入或開新視窗。`,
+        });
+        return;
+      }
+
+      const label = reason === "store-closed" ? "店內已暫停營業" : "本店未開工／已收工";
+      setToast({
+        tone: "error",
+        message: `${label}：${detail?.count ?? 0} 筆操作被 server 拒收，正在由雲端更正本機狀態。`,
+      });
+      void syncOnce();
+    }
+    window.addEventListener(POS_SYNC_BLOCKED_EVENT, onSyncBlocked as EventListener);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      window.removeEventListener(NETWORK_STATUS_EVENT, onReconnect);
+      window.removeEventListener("focus", onFocus);
+      window.removeEventListener(POS_SYNC_BLOCKED_EVENT, onSyncBlocked as EventListener);
+      unsubscribeIdleRecovery();
+      uninstallActivityTracking();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isQuickMode) return;
+    const timer = window.setInterval(() => setNowMs(Date.now()), 30_000);
+    return () => window.clearInterval(timer);
+  }, [isQuickMode]);
+
+  useEffect(() => {
+    function unlock() {
+      setAudioReady(true);
+      window.removeEventListener("pointerdown", unlock);
+      window.removeEventListener("keydown", unlock);
+    }
+    window.addEventListener("pointerdown", unlock, { once: true });
+    window.addEventListener("keydown", unlock, { once: true });
+    return () => {
+      window.removeEventListener("pointerdown", unlock);
+      window.removeEventListener("keydown", unlock);
+    };
+  }, []);
+
+  function isItemSoldOut(menuItemId: string) {
+    const state = soldOutMap[menuItemId];
+    if (!state) return false;
+    return state.remainingQty <= 0;
+  }
+
+  function isSpecOptionSoldOut(optionId: string) {
+    const state = soldOutMap[`specopt:${optionId}`];
+    if (!state) return false;
+    return state.remainingQty <= 0;
+  }
+
+  function consumeSoldOut(items: OrderItem[]) {
+    if (!bootstrap) return;
+    const next = { ...soldOutMap };
+    const soldOutTriggered: Array<{ id: string; name: string }> = [];
+
+    for (const row of items) {
+      const state = next[row.menuItemId];
+      if (!state) continue;
+      const remaining = Math.max(0, state.remainingQty - row.quantity);
+      next[row.menuItemId] = { ...state, remainingQty: remaining, updatedAt: new Date().toISOString() };
+      if (state.remainingQty > 0 && remaining === 0) {
+        soldOutTriggered.push({ id: row.menuItemId, name: row.name });
+      }
+    }
+
+    setSoldOutMap(next);
+    saveSoldOutState(next);
+    window.dispatchEvent(new CustomEvent("pos-soldout-changed", { detail: { soldOutMap: next } }));
+
+    if (!offlineMode) {
+      for (const item of soldOutTriggered) {
+        void fetch("/api/inventory/soldout", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            storeId: bootstrap.storeId,
+            menuItemId: item.id,
+            name: item.name,
+            soldOutAt: new Date().toISOString(),
+          }),
+        });
+      }
+    }
+  }
+
+  // ── 今日未開工：「落單閘」＋ 彈窗收起／飛行動畫（2026-09-14）──────────────
+
+  /**
+   * 🔴 未開工 → **禁止落單**（唯一閘門，而且**唔靠彈窗**）。
+   *
+   * 點解要獨立一道閘：彈窗加咗 ✕ 之後，「撳 ✕ 收起彈窗」唔可以順手解鎖落單 ——
+   * 收起彈窗只係「我要先睇返盤數」，唔等於「我要開始做生意」。
+   *
+   * 過閘（會產生／推進銷售）：開枱（`selectTable` 空閒枱 / `confirmOpenTable`）、
+   * 加菜（`addMenuItem`）、下單／加單（`sendToKitchen`）、結帳（`openSettlementModal`
+   * 同埋二次確認 `confirmPayment`）。
+   * 唔過閘（對數要用）：睇枱／睇單、報表、補打帳單、取消單、同步健康、手動更新。
+   */
+  function ensureShiftOpened(): boolean {
+    if (shift.openedAt) return true;
+    setToast({ tone: "info", message: "今日未開工，請先按頁首「開工」，然後才可以開枱落單。" });
+    return false;
+  }
+
+  /**
+   * 🔴 G2（2026-09-21）：**開新生意**時嘅「店內營業」閘。
+   *
+   * ── 為咩要有 ─────────────────────────────────────────────────────────────
+   * `ensureShiftOpened()` 只睇**本機** `shift.openedAt`，而 `pos_store_status.is_open`
+   * **完全冇檢查過** ⇒ 老闆撳「暫停營業」之後（未交班），收銀台照樣開枱落單。
+   * server 側嘅店內營業閘（`sync/route.ts` 2.55）**只擋匿名**，所以呢個係收銀台
+   * 唯一嘅本地防線（server 閘係第二道，見 `@/lib/pos/write-gate`）。
+   *
+   * ── ⚠️ 只可以喺「開新生意」入口呼叫 ──────────────────────────────────────
+   * 開枱／加菜／落單才叫。**結帳、睇單、對數、補打帳單一律唔可以擋** ——
+   * J 2026-09-21 拍板：**客人走唔到比「收到單」嚴重**。
+   *
+   * ── fail-open ────────────────────────────────────────────────────────────
+   * `isOpen === null`（未讀到 / 未接通）→ **放行**（同 server 嘅 fail-open 口徑一致）。
+   * 反過來「讀唔到就當已關」＝一斷網全店開唔到單。
+   *
+   * 註：`getStoreStatusSnapshot()` 之所以有值，係因為 pos-app 會 render `AppSidebar`
+   * → `useStoreOpenToggle()` → `useStoreStatus()`（模組層單例），所以唔需要另開 hook。
+   */
+  function ensureStoreOpenForNewBusiness(): boolean {
+    if (getStoreStatusSnapshot().isOpen !== false) return true;
+    setToast({
+      tone: "error",
+      message: "店內已暫停營業：暫時唔可以開新單或加菜。請到側欄商店名卡恢復營業。",
+    });
+    return false;
+  }
+
+  function pushStartWorkTimer(fn: () => void, ms: number) {
+    startWorkTimersRef.current.push(window.setTimeout(fn, ms));
+  }
+
+  /** 用戶喺系統層面關閉動畫 → 唔播飛航，直接收起彈窗（行為其餘完全一樣）。 */
+  function prefersReducedMotion(): boolean {
+    return (
+      typeof window !== "undefined" &&
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    );
+  }
+
+  /**
+   * 撳彈窗 ✕：播「彈窗飛去頁首『開工』掣」動畫（純視覺），動畫完先真正收起彈窗。
+   *
+   * ⚠️ 呢度**唔會**寫任何班次狀態 —— 動畫只係話畀用戶知「開工掣而家喺頁首」，
+   * 開工一定要人手撳（見 `startWork()`）。落單閘亦照舊擋住（`ensureShiftOpened()`）。
+   */
+  function dismissStartWorkPrompt() {
+    if (startWorkFly || startWorkPromptDismissed) return;
+    const reduce = prefersReducedMotion();
+    const button = startWorkButtonRef.current;
+    const panel = startWorkPanelRef.current;
+    const buttonBox = button?.getBoundingClientRect();
+    const panelBox = panel?.getBoundingClientRect();
+    const canFly = !reduce && !!buttonBox && !!panelBox && buttonBox.width > 0 && panelBox.width > 0;
+
+    if (canFly && buttonBox && panelBox) {
+      setStartWorkFly({
+        dx: Math.round(buttonBox.left + buttonBox.width / 2 - (panelBox.left + panelBox.width / 2)),
+        dy: Math.round(buttonBox.top + buttonBox.height / 2 - (panelBox.top + panelBox.height / 2)),
+        scale: Math.max(0.07, Math.min(1, buttonBox.width / panelBox.width)),
+      });
+      pushStartWorkTimer(() => setStartWorkHint(true), 640); // 落地 → 目標掣發光圈
+      pushStartWorkTimer(() => {
+        setStartWorkFly(null);
+        setStartWorkPromptDismissed(true);
+      }, 740);
+      pushStartWorkTimer(() => setStartWorkHint(false), 3400);
+      return;
+    }
+
+    // 冇目標掣（正常唔會）／關閉動畫 → 即刻收起。
+    setStartWorkPromptDismissed(true);
+    if (!reduce) {
+      setStartWorkHint(true);
+      pushStartWorkTimer(() => setStartWorkHint(false), 2600);
+    }
+  }
+
+  /** 開工之後「收起」狀態就冇意義 → 清返，令之後交班（openedAt 再清空）時彈窗照樣會彈。 */
+  useEffect(() => {
+    if (shift.openedAt) setStartWorkPromptDismissed(false);
+  }, [shift.openedAt]);
+
+  /** 卸載時清乾淨動畫 timer（避免 setState on unmounted）。 */
+  useEffect(
+    () => () => {
+      for (const id of startWorkTimersRef.current) window.clearTimeout(id);
+      startWorkTimersRef.current = [];
+    },
+    [],
+  );
+
+  function startWork() {
+    const session = loadAuthSession();
+    const next: ShiftState = {
+      ...shift,
+      openedAt: new Date().toISOString(),
+      closedAt: undefined,
+      // 2026-09-07：開工帶員工身份（跨裝置顯示「邊個開咗工」）。
+      employeeAccount: session?.account ?? shift.employeeAccount,
+      employeeName: session?.name ?? shift.employeeName,
+      overtimeAckedAt: undefined,
+      serverSynced: false,
+      lastCloseSummary: undefined, // 新班次唔好帶上一班嘅兜底統計
+    };
+    setShift(next);
+    saveShiftState(next);
+    window.dispatchEvent(new CustomEvent("pos-shift-changed", { detail: { shift: next } }));
+    setToast({ tone: "success", message: "已開工，開始今日營業。" });
+    setShiftOvertimeDue(false);
+
+    // 上雲（fire-and-forget）：撞到已有 active 班次 → 以 server 為準 merge，避免雙重班次。
+    const storeId = resolveStoreId();
+    if (storeId && readNetworkOnline()) {
+      void serverOpenShift({
+        storeId,
+        openedAt: next.openedAt,
+        employeeAccount: next.employeeAccount,
+        employeeName: next.employeeName,
+        openingNote: next.openingNote,
+      })
+        .then((result) => {
+          if (result.conflict && result.active) {
+            const merged = serverActiveToLocal(result.active, loadShiftState());
+            delete merged.closedAt;
+            delete merged.closingNote;
+            setShift(merged);
+            saveShiftState(merged);
+            window.dispatchEvent(new CustomEvent("pos-shift-changed", { detail: { shift: merged } }));
+            setToast({ tone: "info", message: "本店已有班次進行中，已同步該開工狀態。" });
+            return;
+          }
+          // 開工成功 → 標記已上雲。
+          saveShiftState({ ...loadShiftState(), serverSynced: true });
+        })
+        .catch(() => undefined); // 離線 / server 錯 → 留待 reconcile 自動補 open
+    }
+  }
+
+  // 2026-09-07：連續開工逾時提醒 → 撳「取消（繼續營業）」：server 記 ack，之後再滿 10h 先再彈。
+  async function acknowledgeShiftOvertime() {
+    if (shiftAcking) return;
+    const storeId = resolveStoreId();
+    if (!storeId || !readNetworkOnline()) {
+      setToast({ tone: "info", message: "目前離線，暫時無法處理。恢復網絡後會再次提醒。" });
+      return;
+    }
+    setShiftAcking(true);
+    try {
+      const active = await serverAckOvertime(storeId);
+      if (active) {
+        // 以 server 回傳嘅 overtimeAckedAt 為準（本地唔自己造時間，避免各機 clock 偏差）。
+        const merged = { ...loadShiftState(), overtimeAckedAt: active.overtimeAckedAt, serverSynced: true };
+        setShift(merged);
+        saveShiftState(merged);
+        window.dispatchEvent(new CustomEvent("pos-shift-changed", { detail: { shift: merged } }));
+      }
+      setShiftOvertimeDue(false);
+      setToast({ tone: "success", message: "已記錄。連續營業再滿 10 小時會再次提醒。" });
+    } catch {
+      setToast({ tone: "info", message: "未能連線伺服器，請稍後再試。" });
+    } finally {
+      setShiftAcking(false);
+    }
+  }
+
+  // 開機 mount 同「手動更新」掣共用嘅 bootstrap 拉取：
+  // GET /api/pos/bootstrap → normalize → 併入 Ledger 店名 → 以 server 為準合併本地 cache
+  // （tables 保留本地 per-terminal 枱編輯，同 docs/54 一致），寫入 localStorage + React state。
+  // 2026-09-09：由原本淨係 mount effect 內部嘅 bootstrapApp() 抽出，畀「手動更新」重複調用。
+  const refreshBootstrapFromServer = useCallback(async (options?: { quiet?: boolean }) => {
+    try {
+      const merchantId = loadAuthSession()?.merchantId;
+      const bootstrapUrl = merchantId
+        ? `/api/pos/bootstrap?storeId=${encodeURIComponent(merchantId)}`
+        : "/api/pos/bootstrap";
+      const response = await fetch(bootstrapUrl);
+      const raw = normalizeBootstrapPayload((await response.json()) as PosBootstrap);
+      const data = applyLedgerMerchantToBootstrap(raw, loadAuthSession());
+      // merge：本地 cache 優先（枱 area / name 等 per-terminal 編輯唔應該被 server 舊數據覆蓋）；
+      // server 獨有枱（其他 terminal / kiosk 新加）保留；本地獨有枱亦保留。
+      // 咁 server bootstrap 每次啟動載到最新之餘，唔會清走本地嘅枱樓層編輯。
+      const localCache = loadBootstrapCache();
+      const localTableMap = new Map((localCache?.tables ?? []).map((tbl) => [tbl.id, tbl]));
+      const mergedTables: StoreTable[] = data.tables.map((st) => localTableMap.get(st.id) ?? st);
+      for (const lt of localCache?.tables ?? []) {
+        if (!mergedTables.some((tbl) => tbl.id === lt.id)) mergedTables.push(lt);
+      }
+      const merged: PosBootstrap = { ...data, tables: mergedTables };
+      saveBootstrapCache(merged);
+      setBootstrap(merged);
+      setActiveTableId((current) => current || merged.tables[0]?.id || "");
+      return { ok: true as const };
+    } catch {
+      if (!options?.quiet && !initialHasBootstrapRef.current) {
+        setToast({ tone: "info", message: "未能連到設定來源，請稍後再試。" });
+      }
+      return { ok: false as const };
+    } finally {
+      setIsBootstrapping(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshBootstrapFromServer();
+  }, [refreshBootstrapFromServer]);
+
+  useEffect(() => {
+    if (!toast) return;
+
+    const timer = window.setTimeout(() => setToast(null), TOAST_AUTO_DISMISS_MS);
+    return () => window.clearTimeout(timer);
+  }, [toast]);
+
+  useEffect(() => {
+    if (!orderSuccessFlash) return;
+    const timer = window.setTimeout(() => setOrderSuccessFlash(false), 1000);
+    return () => window.clearTimeout(timer);
+  }, [orderSuccessFlash]);
+
+  useEffect(() => {
+    if (!settlementFlash) return;
+    const timer = window.setTimeout(() => setSettlementFlash(false), 1000);
+    return () => window.clearTimeout(timer);
+  }, [settlementFlash]);
+
+  // 撳「掃碼新單」提示之後嘅訂單卡高亮：時間到自動熄（唔會長期圈住）。
+  // 依賴 `noticeFocus` 嘅 seq → 連撳同一張會重新計時。
+  useEffect(() => {
+    if (!noticeFocus) return;
+    const timer = window.setTimeout(() => setNoticeFocus(null), NOTICE_FOCUS_MS);
+    return () => window.clearTimeout(timer);
+  }, [noticeFocus]);
+
+  useEffect(() => {
+    clearLegacyMembersCache();
+  }, []);
+
+  /**
+   * 一次性探測「客戶端 Realtime 目標專案有冇 pos_orders」（2026-09-10 P0）。
+   *
+   * 為何要（而唔係只靠 channel status）：Supabase 訂一張唔存在嘅表**唔會**報錯，
+   * channel 照樣 `SUBSCRIBED` → 收銀台會以為「連線正常」但永遠收唔到單（只有 reload 見到）。
+   * 呢個探測係唯一可以偵測到「訂錯專案」嘅方法，而且**只發一次請求**（唔係 polling）。
+   *
+   * 失敗時：① console.warn 出 host + 診斷；② 右上角顯示可摺嘅警示條，明確講
+   * 「訂單要重新載入先會出現」，避免收銀員以為系統正常而漏單。
+   */
+  useEffect(() => {
+    if (offlineMode) return;
+    let cancelled = false;
+    void probePosRealtimeTarget(getPosRealtimeConfig()).then((probe) => {
+      if (cancelled) return;
+      setRealtimeProbe(probe);
+      if (!isPosRealtimeHealthy(probe)) {
+        console.warn(
+          `[pos-realtime] 即時通知無法生效（probe=${probe.status}, host=${probe.host ?? "?"}, source=${probe.source ?? "?"}）：${describePosRealtimeProbe(probe)}`,
+          probe.detail ?? "",
+        );
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [offlineMode]);
+
+  /**
+   * 🚫🚫 2026-09-22 **一次性清走舊隔離區**（停用「隔離」概念）。
+   *
+   * 舊機制會把「雲端 payload 冇呢張單」嘅本機未結帳單**移出 localStorage** ⇒
+   * 枱面「閃一下變空閒」，並累積咗 111 張垃圾（`print-xxxxxxxx` ＝ PrintJob 漏入 orders）。
+   * 商家拍板：**訂單一律保留在本機，直到同步上雲為止**（offline 都保留）。
+   *
+   * 呢個 effect 只跑一次、只讀寫本機 localStorage ⇒ **零請求、零 egress**；
+   * 冇隔離記錄時係 no-op。`restoreAllQuarantinedOrders()` 內部會經 `saveOrders()`
+   * 派 `pos-orders-changed`，所以畫面會自動刷新，唔使喺度再 `setOrders`。
+   */
+  useEffect(() => {
+    const { restored, discarded } = restoreAllQuarantinedOrders();
+    if (restored > 0 || discarded > 0) {
+      setToast({
+        tone: "info",
+        message:
+          `已還原 ${restored} 張本機訂單` +
+          (discarded > 0 ? `、清走 ${discarded} 筆非訂單資料` : "") +
+          `。本機訂單以後唔會再被自動移走。`,
+      });
+    }
+    // 只喺 mount 跑一次（`setToast` 係穩定 setter，唔使入 deps）。
+  }, []);
+
+  // 收銀 mount / 重連 / queue 清空時一次過 pull 現有 state（event-driven，非 polling）
+  useEffect(() => {
+    if (offlineMode) return;
+    // 方案B：若本機仍有**真正未推**嘅事件（pending），先不要拉取後台狀態。
+    //
+    // 🔴 2026-09-15 修（穩定性，最重要一項）：以前條件係 `status !== "synced"`，
+    // 即 `failed` 同 `skipped` 都會閘住 backfill。但兩者都可以係**終態**：
+    //   - `skipped` + `user-discarded`：`discardFailedSyncEvent()` 寫入，**永遠唔會變 synced**；
+    //   - `skipped` + `server-newer`：雲端已有較新版本，改由對賬守護補推，都唔會變 synced。
+    // ⇒ 只要本機殘留**一筆**呢類事件，`loadRuntimeState()` 就**永遠唔會再執行**，
+    //   其他終端／Kiosk／掃碼客落嘅新單，喺 realtime 斷線期間漏掉嘅部分**永遠補唔返**
+    //   （＝商家最怕嘅「掉線後永久收唔到單」）。
+    //
+    // 為何只擋 `pending` 仍然安全：
+    //   ① `pending` 才真正代表「我哋仲打算推呢件事件」，先至有被後台舊值覆蓋嘅風險；
+    //   ② backfill 本身係 `mergeOrderLists(loadOrders(), current, payload.orders)`
+    //      = **以本機為底**（見下方 1141 行），再過 tombstone（`filterResurrectedOrders`）
+    //      同孤兒單隔離，**本來就唔會覆蓋本機即時狀態** —— 原註解擔心嘅情況已被下面兩道防線處理。
+    if (queue.some((event) => event.status === "pending")) return;
+    // 🔎 分辨「首次 mount」同「之後因為依賴變而重跑」——兩者喺 log 上要分得開：
+    //    首次 = mount（正常且必要）；之後每一次都代表有依賴變咗（＝循環嘅證據）。
+    const src = runtimeStateFirstRunRef.current ? "queue-dep" : "mount";
+    runtimeStateFirstRunRef.current = true;
+    // 🔴 2026-09-21 輪詢閘：呢個路徑係**事件驅動**（mount／queue 變化／手動），
+    //    唔係週期輪詢 ⇒ 用 `kind: "triggered"`（只受「冇 session」「分頁隱藏」限制）。
+    //    唔可以用週期閘，否則「未開工嘅收銀台」會連今日訂單都拉唔到。
+    if (!evaluatePollGate({ kind: "triggered", tag: `pos/state:${src}` }).poll) return;
+    void loadRuntimeState(src);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [offlineMode, runtimeRefreshTick, queue]);
+
+  // 一次過 backfill 現有 state（realtime 唔 backfill 舊 row；realtime (re)subscribe 時 call）。
+  // 以 localStorage 為底 merge，唔會 overwrite 本機即時狀態。component scope 定義俾 usePosRealtime onResubscribed 共用。
+  // @returns 本次全量拉取自動隔離咗幾多張孤兒單（2026-09-09 方案 A；0 = 冇／冇拉取）。
+  /**
+   * ## Single-flight 去重（2026-09-21 請求數優化，**零行為改動**）
+   *
+   * `loadRuntimeState()` 一次要打 **6 條 PostgREST 查詢**（見 `/api/pos/state`），
+   * 而佢有 **四個** 觸發入口：mount effect、realtime 重連補拉、`backToTables()`、
+   * 以及 `queue` 變化。呢四個入口**可以同一刻一齊開火**（例如：切返前景 → channel
+   * 重新訂上 → 同一秒 `queue` 又被 flush 改咗）⇒ 以前會連發 2~4 次同一個請求。
+   *
+   * 用既有資產 `createSingleFlight()`（`@/lib/pos/single-flight`，10 條單測）
+   * 令「**同一個 store、同一刻**」嘅呼叫共用同一個 promise。
+   *
+   * ### 為何零功能影響
+   *
+   * - 合併嘅係 **same-tick 並發**，唔係「X 秒內唔拉」時間窗 ⇒
+   *   「幾時會讀到新值」嘅語義完全冇變（時間窗會改變語義，所以刻意唔做）。
+   * - 每個呼叫端都仍然 `await` 到**同一次**讀取嘅完整結果（同 promise）⇒
+   *   `quarantined` 回傳值、`setOrders` / `setQueue` / `setPrintJobs` 副作用
+   *   全部照跑一次，只係由 N 次變 1 次。
+   * - `createSingleFlight` 失敗時 `.finally` **只清自己嗰條** flight
+   *   ⇒ 一次失敗唔會毒死之後嘅呼叫（已有單測鎖死）。
+   * - key 用 `resolveStoreId()` ⇒ 切店時 B 店唔會拿到 A 店 in-flight 嘅結果
+   *   （唔會餵錯店；同 `single-flight.ts` 頂部「死穴①」同一防線）。
+   *
+   * 要還原舊行為：把下面 `runLoadRuntimeState()` 呼叫改返直接呼叫。
+   */
+  const runtimeStateFlightRef = useRef<SingleFlight<number> | null>(null);
+  /**
+   * 全量拉取 effect 係咪已經跑過第一次（用嚟分辨 `mount` vs `queue-dep`）。
+   * 見下面 effect 內嘅 `src` —— 純診斷，唔影響任何行為。
+   */
+  const runtimeStateFirstRunRef = useRef(false);
+  /**
+   * @param src 呼叫來源標記（`mount` / `queue-dep` / `resubscribe` / `manual`）——
+   *   **只會經 `x-pos-state-src` 標頭送去 server 寫入 `[egress]` log**，
+   *   唔參與任何查詢／授權／回應內容（見 `state/route.ts` 嘅 `stateSrc` 說明）。
+   *   用途：2026-09-21 見到「每 4.49 秒一次、連續 435 秒」嘅全量拉取爆發，
+   *   但四個入口喺 log 入面長得一模一樣 ⇒ 冇辦法定位。加呢個標記之後，
+   *   Vercel log 一行就睇得出係邊個入口。
+   *
+   *   ⚠️ single-flight 只按 `storeId` 分 key ⇒ 若「手動更新」撞正一條 in-flight 嘅
+   *   `queue-dep`，兩者會共用同一個請求，log 出嘅係**先開火嗰個**嘅 `src`。
+   *   呢個係刻意嘅（分 key 就等於取消去重），診斷上仍然睇得出邊個入口最頻繁。
+   */
+  function loadRuntimeState(src: string = "other", opts?: { forceFull?: boolean }): Promise<number> {
+    // 🔴 手動「更新」＝用家明確要求**雲端真值**（2026-09-22 P1）：
+    //    唔可以同 in-flight 嘅增量拉取合併（合併之後「更新」掣只會攞到差量）。
+    //    所以 forceFull 直接繞過 single-flight —— 呢條路係人手觸發，唔可能形成迴圈。
+    if (opts?.forceFull) return runLoadRuntimeState(src, { forceFull: true });
+    if (!runtimeStateFlightRef.current) {
+      runtimeStateFlightRef.current = createSingleFlight<number>();
+    }
+    const flight = runtimeStateFlightRef.current;
+    return flight(resolveStoreId() ?? "", () => runLoadRuntimeState(src));
+  }
+
+  async function runLoadRuntimeState(src: string, opts?: { forceFull?: boolean }): Promise<number> {
+    try {
+      // 🛡️ 跨店隔離（2026-09-06 修）：改用 canonical resolveStoreId()（登入 merchant，
+      // 無登入時 kiosk 綁定店）。冇 store 一律唔拉 —— 以前會 fetch /api/pos/state
+      // 唔帶 storeId，server 返**全店** orders + queue，merge 落本地就係跨店污染入口。
+      const storeId = resolveStoreId();
+      if (!storeId) return 0;
+      // 記低「真正開始拉」嘅時間 —— 供 `onResubscribed` 嘅最少間隔守衛用
+      //（記喺呢度而唔係某個呼叫點，所有觸發路徑都會更新到；見 RESUBSCRIBE_BACKFILL_MIN_GAP_MS）。
+      lastFullStatePullAtRef.current = Date.now();
+      // 2026-09-10 P0-3：先確保 POS 終端憑證仍然有效（TTL 12h，收銀機全日開住）。
+      // 呢個係 fail-soft：拎唔到憑證都照行，之後 server 回 401 就當拉唔到（唔會爆）。
+      await refreshPosDeviceTokenIfNeeded();
+      // 2026-09-21 egress 優化：v2 outbox 之下 client **唔會** merge server queue
+      //（見下面 `if (Array.isArray(payload.queue) && !isOutboxV2Enabled())`），
+      // 但 server 每次都照查 300 條 `pos_queue_events`（每條 payload 係整張訂單快照，
+      // 合共 ≈500 KB／次）⇒ 純浪費。v2 時叫 server 跳過。
+      // v1（回溯）唔傳 = 舊行為，語義完全不變。
+      const skipQueue = isOutboxV2Enabled() ? "&skipQueue=1" : "";
+      /**
+       * 🆕 2026-09-22 **P1 增量拉取**：只有「上次成功同步」之後變更過嘅嘢才拉。
+       *
+       * 決策收喺**純函式** `resolveSince()`（12 條單測），呢度只負責：
+       *   ① 讀水位（store-scope localStorage）；
+       *   ② 傳 `since=`；
+       *   ③ 成功之後更新水位（撞 limit / 失敗就清水位，下次走全量）。
+       *
+       * ⚠️ 任何例外（冇水位、空機、水位太舊 / 壞 / 喺未來、`forceFull`）都**一定**
+       *    退回全量 —— 漏一次全量只係多流量；誤用增量而漏單就係收銀見到「少咗單」。
+       */
+      const sinceTicket = beginStateSince({ forceFull: Boolean(opts?.forceFull) });
+      const stateUrl = `/api/pos/state?storeId=${encodeURIComponent(storeId)}${skipQueue}${sinceTicket.param}`;
+      // 2026-09-10 P0-4：/api/pos/state 需要 POS 終端憑證（否則 401 未經授權）。
+      // 2026-09-21：另加 `x-pos-state-src` 標頭（純診斷，見 `loadRuntimeState` 嘅 @param src）。
+      const response = await fetch(stateUrl, {
+        headers: { ...posDeviceAuthHeaders(), "x-pos-state-src": src },
+      });
+      // 🔎 2026-09-22：記下伺服器嘅建置識別碼（設置頁會同「本機跑緊嘅版本」對照）。
+      //    純讀標頭 —— 讀唔到就係 null，唔影響任何流程。
+      //    2026-09-23：改用共用讀取器（標頭名嘅真源喺 `@/lib/pos/session-record`，
+      //    唔喺呢度寫死字串）；同一支亦掛喺 `sync-flush` / `shift-sync`
+      //    兩個**本來就會打**嘅週期請求上 ⇒ 零新增請求。
+      observeServerBuildFromResponse(response);
+      // 🔴 2026-09-22：管理員喺 admin 頁強制關閉咗**呢個分頁**？
+      //    server 唔可能關掉別人嘅分頁，只可以通知 —— 呢個標頭就係「軟踢」回傳路徑。
+      //    收到之後：出橫幅 + 輪詢閘即刻停（唔會自動 reload，結帳中途 reload 會出事）。
+      if (response.headers.get(POS_SESSION_CLOSED_HEADER) === "1") {
+        markPosSessionRevoked();
+      }
+      const payload = (await response.json()) as {
+        orders?: PosOrder[];
+        queue?: QueueEvent[];
+        printJobs?: PrintJob[];
+        localSettings?: PosLocalSettings;
+        deviceConfig?: DeviceConfig | null;
+        /** 0027 pos_print_templates 店級模板（新真源）；null = server 未設定過。 */
+        printTemplatesServer?: {
+          templates?: PrintTemplates | null;
+          /** 交班模板範本庫（0030，2026-09-10）；舊 server / 未跑 migration → undefined。 */
+          shiftPresets?: { presets?: ShiftTemplateVariant[]; activeId?: string } | null;
+          updatedAt?: string | null;
+        } | null;
+        /** 0028 pos_note_presets 店級備註真源；null = server 未設定過。 */
+        notePresetsServer?: {
+          presets?: {
+            notePresets?: string[];
+            cancelNotePresets?: string[];
+            compNotePresets?: string[];
+          } | null;
+          updatedAt?: string | null;
+        } | null;
+        /** 🆕 2026-09-22 P1：今次係增量拉取（只回差量）。 */
+        incremental?: boolean;
+        /** 🆕 2026-09-22 P1：增量結果唔完整（撞 limit／查詢失敗）⇒ 要清水位 + 重拉全量。 */
+        truncated?: boolean;
+      };
+
+      /**
+       * 🆕 2026-09-22 P1：更新／清理**增量同步水位**。
+       *
+       * · `truncated` → **清水位**（下次一定走全量）＋ 1 秒後補一次全量；
+       * · 正常（增量或全量、冇截斷、**而且真係收到 `orders` 陣列**）→ 記低「請求開始時間」做新水位；
+       * · 其餘（`orders` 唔係陣列：舊 server／降級回應／錯誤 JSON）→ 🔴 **唔郁水位**。
+       *
+       * ⚠️ 全量成功都要記水位：否則下一次又要全量（＝今次優化完全失效）。
+       *
+       * 🔴🔴 為何一定要 gate 住 `Array.isArray(payload.orders)`：
+       *    水位一旦被推過，之後每次拉取都只回 `updated_at > since` 嘅**差量**
+       *    ⇒ **今次冇收到嘅訂單永遠補唔返**（要等水位過期或人手「更新」）。
+       *    呢個正是「網絡唔穩／半死之後訂單靜默失蹤」嘅成因 —— 同隔離一樣，
+       *    都係「用一個唔完整嘅回應去當完整」嘅同一類錯誤。
+       */
+      const payloadHasOrders = Array.isArray(payload.orders);
+      if (payload.truncated) {
+        // commitStateSince(.., true) 會清水位（下次一定走全量）。
+        commitStateSince(sinceTicket, true);
+        console.warn("[pos-app] 增量拉取被截斷 → 已清水位，1 秒後補一次全量。");
+        // 延遲少少（唔可以 setTimeout 0）：single-flight 仲未釋放，即刻再叫會被合併返
+        // 同一個 in-flight 請求 ⇒ 補拉變成 no-op。呢條路極少發生（一個月可能幾次）。
+        window.setTimeout(() => {
+          void loadRuntimeState(`${src}:full`, { forceFull: true });
+        }, 1_000);
+      } else if (payloadHasOrders) {
+        commitStateSince(sinceTicket);
+      } else {
+        console.warn("[pos-app] 回應冇 orders 陣列 → 唔推進增量水位（避免永久漏單）。");
+      }
+
+      if (payloadHasOrders) {
+        // 以 localStorage 為底，再合併 React state 與後台，避免 async 競態把剛結帳的單洗掉。
+        // docs/52：合併後過濾本機已真刪（tombstone）+ 伺服器單邊終態單，防 backfill 復活。
+        // 2026-09-09 方案 A：隔離區 id 一併剔除（孤兒單唔可以經 merge / backfill 復活）。
+        setOrders((current) => {
+          const merged = mergeOrderLists(loadOrders(), current, payload.orders!);
+          const quarantineIds = loadQuarantinedOrders().map((r) => r.order.id);
+          const cleaned = filterResurrectedOrders(merged, loadDeletedOrderIds(), loadOrders(), quarantineIds);
+          // 🧹 孤兒單對賬（方案 A）：雲端冇 + outbox 冇 pending/failed ORDER_* 事件支持
+          // + 單齡 ≥ 10 分鐘嘅非終態本機單 → 移入隔離區（可喺「同步健康」還原）。
+          // 根治「手動更新不斷拉返雲端根本冇嘅未結帳枱」（2026-09-09 實案：6 張孤兒單）。
+          //
+          // 🔴🔴 2026-09-22 P1：**增量拉取之下一定唔可以跑呢段** ——
+          // 判準係「雲端 `payload.orders` 冇呢張單」，而增量回傳嘅只係**變更過嘅子集**
+          // ⇒ 全店未變更過嘅單都會被當成孤兒，一次過被移入隔離區（災難級誤判）。
+          // 呢個係本專案「partial payload 唔可以當全集用」嘅同一類陷阱。
+          // 🚫🚫 2026-09-22：**自動隔離已停用**（商家拍板：「不應存在隔離的概念」）。
+          //
+          // 原本呢度會把「本機非終態 ＋ 今次 payload 冇呢張單 ＋ 冇 pending 事件 ＋ 齡 ≥10 分鐘」
+          // 嘅訂單**移出 localStorage**（`quarantineOrders`）⇒ 枱面卡片即刻變「空閒」。
+          // 實案（同日）：
+          //   · A03（訂單25, MOP 41）連 A01（訂單29, MOP 98）喺桌台總覽「閃一下」就消失；
+          //   · 累積 111 張 `print-xxxxxxxx`（PrintJob 漏入 orders，本來就唔係訂單）。
+          //
+          // 根本問題：判準「payload 冇呢張單」**唔可靠** —— payload 可以係
+          // ① 空骨架（P0b 節流）② 增量差量（只回變更過嘅）③ 投影子集。
+          // 唔可以用一個 partial payload 去斷定「雲端冇呢張單」，更唔可以據此刪本機資料。
+          //
+          // ⇒ 而家本機訂單**一律保留**（offline 都保留），直到真正同步上雲為止。
+          //    要清走只有一個入口：「同步健康 → 永久刪除」（明確意圖 + tombstone）。
+          //    ⚠️ `orders` 本身唔會囤積垃圾：`loadOrders()` 有 id 命名空間守衛。
+          // @see `@/lib/pos/sync-reconcile`（restoreAllQuarantinedOrders / 停用原因）
+          saveOrders(cleaned);
+          // backfill 補建：收銀端恢復在線時，檢查有冇未出廚房單嘅自助單（docs/87 §11）
+          const selfOrdersNeedKitchen = cleaned.filter(
+            (o) =>
+              isSelfOrder(o) &&
+              o.status === "sent_to_kitchen" &&
+              !loadPrintJobs().some(
+                (job) =>
+                  job.orderId === o.id &&
+                  job.ticketType === "normal" &&
+                  job.printerGroup !== "receipt" &&
+                  (job.items?.length ?? 0) > 0,
+              ),
+          );
+          for (const o of selfOrdersNeedKitchen) {
+            const storeName = bootstrap?.storeName ?? "門店";
+            // 細粒度開關（2026-09-08）：kitchen + label + kiosk 各自獨立。
+            const kitchenOn = isPrintContentEnabled("kitchen");
+            const labelOn = isPrintContentEnabled("label");
+            const kioskOn = isPrintContentEnabled("kiosk");
+            const jobs: PrintJob[] = [];
+            if (kitchenOn) {
+              // 🔴 2026-09-24：補建嘅正常廚房單**一定要帶 onceKey**（見 pos-orders.ts 同源註釋）：
+              //    呢條路同線上單接單（`ledger-pos-bridge`）會為**同一張單**各出一張，
+              //    唔帶鍵就會繞過 DB 唯一索引 ⇒ 廚房重複出紙。
+              //    舊單（一次性 backfill）簽名一樣 ⇒ 就算真係重複被觸發亦只出一張。
+              jobs.push(
+                ...buildKitchenPrintJobs(o, {
+                  ticketType: "normal",
+                  storeName,
+                  onceKey: `kitchen:normal:${o.reopenCount ?? 0}`,
+                }),
+              );
+            }
+            if (labelOn) {
+              jobs.push(...buildLabelPrintJobs(o, { ticketType: "normal", storeName }));
+            }
+            if (o.source === "scan" && bootstrap && kioskOn) {
+              jobs.push(...buildKioskReceiptPrintJobs(o, bootstrap));
+            }
+            // 🔴 2026-09-22：backfill 補建嘅自助單廚房單／標籤單一定要**上雲**
+            //    （原本 `appendPrintJobs` ＝只寫本機 ⇒ 補建完全冇紙）。
+            appendPrintJobsWithSync(jobs);
+          }
+
+          /*
+           * 外賣平台單開機補印（2026-09-24 · 方案 A「分區式」）。
+           *
+           * POS 收機／斷線期間插件照樣推單 → 開機時本機未出過紙嘅平台單要補一張，
+           * 否則廚房永遠收唔到（＝靜默漏單）。呢條同上面自助單 backfill 同一道理。
+           *
+           * 🔴 一定要有時效（`decidePlatformKitchenBackfill`，預設 1 小時）：
+           *    冇就會一開機把**幾十張歷史單**一次過出紙（測試期已累積唔少），
+           *    洗版又浪費紙。舊單唔補 —— 要補就喺打印中心手動重打。
+           */
+          const platformBackfillNowMs = Date.now();
+          for (const o of cleaned) {
+            if (!isPlatformOrder(o)) continue;
+            if (
+              decidePlatformKitchenBackfill({
+                createdAt: o.createdAt,
+                nowMs: platformBackfillNowMs,
+              }) !== "print"
+            ) {
+              continue;
+            }
+            // 先篩走已經出過紙嘅（`ensurePlatformKitchenPrint()` 內部會再查一次，
+            // 呢度只係避免每張單都掃一次 job 帳本）。
+            const alreadyPrinted = loadPrintJobs().some(
+              (job) =>
+                job.orderId === o.id &&
+                job.ticketType === "normal" &&
+                job.printerGroup !== "receipt" &&
+                (job.items?.length ?? 0) > 0,
+            );
+            if (alreadyPrinted) continue;
+            ensurePlatformKitchenPrint(o);
+          }
+          return cleaned;
+        });
+      }
+      if (Array.isArray(payload.queue) && !isOutboxV2Enabled()) {
+        // docs/111：v2（outbox）**唔再 merge server queue 返落本地**。
+        // queue 係本機 outbox，事件推上雲之後就係 server 嘅事；結果狀態由 orders /
+        // printJobs 兩條獨立 pull 攞返（下面已經有）。以前 merge 返落嚟會造成：
+        //   ① 外店事件流入本地 queue（server 依 store_id 過濾，但同一 store 下可能
+        //      有第二部機嘅事件）；② 其他收銀機嘅舊事件喺呢部機「復活」做 pending
+        //      —— server 嗰張 pos_queue_events.status 寫死係 "pending"（client 推送時
+        //      就寫 pending，server 從來冇更新過），所以每次 pull state 都會復活一批
+        //      「未同步」。呢個就係「100 筆」另一半來源。
+        // 要還原舊行為：localStorage 設 macau-pos/sync-outbox-v2 = "0" 再 reload。
+        //
+        // 以 localStorage 為底 merge：保留本地（含未同步）事件，只補本機冇嘅 server 事件，
+        // 唔整份取代，避免清走本地 pending（R4）。
+        // 🛡️ 跨店隔離 L3（2026-09-06 修，兌現呢度以前嘅 follow-up 承諾）：
+        // server 返嚟嘅事件若 storeId 唔等於當前店（外店事件 / null legacy）直接 skip，
+        // 唔 merge 入本地 queue —— 外店事件入咗本地 queue 後，flush 會用當前登入
+        // merchantId 蓋章推上雲，正正係「切帳號後串單」嘅源頭。server 端 /api/pos/state
+        // 已加 eq("store_id") 過濾（L2），呢度係第二道閘。
+        const localQueue = loadQueue();
+        const localById = new Map(localQueue.map((e) => [e.id, e]));
+        const mergedQueue: QueueEvent[] = [];
+        const seen = new Set<string>();
+        for (const e of payload.queue) {
+          if (e.storeId !== storeId) continue; // 外店 / 無歸屬事件一律唔收（fail-safe）
+          seen.add(e.id);
+          mergedQueue.push(localById.get(e.id) ?? e); // 本機有就用本機（保留 pending 狀態）
+        }
+        for (const e of localQueue) {
+          if (!seen.has(e.id)) mergedQueue.push(e);
+        }
+        // 只有內容真正改變先 setQueue：避免 effect 依賴 queue 觸發自激迴圈
+        // （loadRuntimeState → setQueue(新 array ref) → effect 重跑 → loadRuntimeState → ...）。
+        // saveQueue 仍然每次寫 localStorage 保持磁碟同步。
+        //
+        // 2026-09-21：簽名計算同 ref 統一收歸 `queueSignature()` / `queueSignatureRef`
+        // ——以前呢度自己寫一份內聯版本、另外三處入口又各自 `setQueue(loadQueue())`，
+        // 兩邊口徑可以漂移（一邊以為「內容冇變」而漏更新、另一邊又換身分觸發循環）。
+        const signature = queueSignature(mergedQueue);
+        if (signature !== queueSignatureRef.current) {
+          queueSignatureRef.current = signature;
+          setQueue(mergedQueue);
+        }
+        saveQueue(mergedQueue);
+      }
+      if (Array.isArray(payload.printJobs)) {
+        // P0-1：以 localStorage 為底 merge（復用 persistPrintJobs 語義），保留本地 sent/failed 狀態、
+        // 絕不刪本地單、只補本機冇嘅 server 單。修正整份硬覆寫導致嘅清單 / 重印（R1/R5）。
+        persistPrintJobs(payload.printJobs);
+      }
+      if (payload.localSettings) {
+        // 枱（floors）係 per-terminal 編輯真源：枱名 / 區 / 座位數（capacity）都喺本地
+        // localSettings.floors（見 docs/54 樓層修復）。後台 device_config.local_settings 冇呢啲
+        // per-terminal 枱編輯，直接用 server 版會沖走本地改動（例如座位數變空白）。
+        // printTemplates 係 client-only 設計（docs/71 §8）：print-center 從未 POST 去後台，
+        // server 嘅 printTemplates 永遠係預設；直接用 server 版會令用家設嘅字型大小每逢同步
+        // 就彈返預設。故同步時保留本地 printTemplates，唔畀 server 預設蓋走。
+        // onlineOrderSettings（自動接單）係 per-terminal 設定，本機 localStorage 先係真源。
+        // 舊 bug：server 份 local_settings 係「全店最新一條（任何 terminal）」（見
+        // device-settings.tsx 既有警告註釋 + /api/pos/device-config GET 冇 terminal filter），
+        // 且 device-settings syncConfig() 會 POST 成份 localSettings 上去（含 autoAccept）。
+        // 結果只要曾經喺「自動接單 ON」時撳過任何儲存，server 就記低 autoAccept:true，
+        // 之後每次 loadRuntimeState() 同步都將本地「熄咗」嘅開關還原做 ON → 繼續自動接單。
+        // 故同 floors 一樣：本地優先，唔畀 server 蓋走。
+        // 其餘 field 用 server 版本（server 優先，確保後台改嘅全局設定生效）。
+        const local = loadPosLocalSettings();
+        // 新 device 初始化（2026-09-08 修）：本地 store-scope key 未建立時，
+        // normalizePosLocalSettings 會把 floors 補成 default（永遠有 2 層），
+        // 舊判斷 `local.floors?.length ?` 因此永遠 truthy → DB 已保存嘅樓層桌台
+        // 被本地 default 蓋走（新 iPad 登入後枱面同 DB 唔一致嘅根因）。
+        // 改為：本地真係未建立設定（hasPosLocalSettings() === false）→ floors 優先
+        // 用 DB 該店最新 device config 已保存嘅 floors（server 無先係 default）；
+        // 本地有 key（曾經編輯／已採納）先本地優先，保留 per-terminal 編輯真源語義。
+        const localHasSettings = hasPosLocalSettings();
+        // 模板雲端同步（0027 pos_print_templates，docs/71 push seam）：
+        // server 嘅 printTemplatesServer 係「店級新真源」（獨立表，唔再係 device_configs
+        // 預設值）。合併規則（LWW，避免 docs/71 §8「server 預設蓋走設計」舊 bug 重演）：
+        //   - server 有記錄 && server.updatedAt 比本機已知版本新（另一部機改咗 / 本機
+        //     未對過版）→ 採納 server 模板，令全店終端同步到同一份；
+        //   - 其餘情況（本機啱啱推完 / server 未設定）→ 保留本地模板。
+        // meta 只記 server updated_at（輕量、唔入 PosLocalSettings），讀寫同 local-settings
+        // 同一把 store-scope key。
+        const serverTpl = payload.printTemplatesServer?.templates ?? null;
+        const serverTplUpdatedAt = payload.printTemplatesServer?.updatedAt ?? null;
+        const serverTplTs = serverTplUpdatedAt ? Date.parse(serverTplUpdatedAt) || 0 : 0;
+        const tplMeta = loadPrintTemplateSyncMeta();
+        const localTplTs = tplMeta?.updatedAt ? Date.parse(tplMeta.updatedAt) || 0 : 0;
+        const serverIsNewer = serverTplTs > 0 && serverTplTs > localTplTs;
+        const adoptServerTemplates = !!serverTpl && serverIsNewer;
+        if (adoptServerTemplates && serverTpl) {
+          savePrintTemplateSyncMeta({ updatedAt: serverTplUpdatedAt });
+        }
+        // 備註預設雲端同步（0028 pos_note_presets，店級備註真源）：同 printTemplates 一樣，
+        // server 較新先採納。備註以前混喺 device_configs.local_settings（每台終端一行、
+        // 多機覆蓋），而家獨立表一店一行。呢度覆蓋 payload.localSettings 入面嘅舊殘留備註，
+        // 確保以 note-presets 真源為準（唔再被 device_configs 舊值回水）。
+        const serverNote = payload.notePresetsServer?.presets ?? null;
+        const serverNoteUpdatedAt = payload.notePresetsServer?.updatedAt ?? null;
+        const serverNoteTs = serverNoteUpdatedAt ? Date.parse(serverNoteUpdatedAt) || 0 : 0;
+        const noteMeta = loadNotePresetSyncMeta();
+        const localNoteTs = noteMeta?.updatedAt ? Date.parse(noteMeta.updatedAt) || 0 : 0;
+        const adoptServerNotes = !!serverNote && serverNoteTs > 0 && serverNoteTs > localNoteTs;
+        if (adoptServerNotes) {
+          saveNotePresetSyncMeta({ updatedAt: serverNoteUpdatedAt });
+        }
+        const merged: PosLocalSettings = {
+          ...payload.localSettings,
+          floors:
+            localHasSettings && local.floors?.length ? local.floors : payload.localSettings.floors,
+          printTemplates: serverTpl && serverIsNewer ? serverTpl : local.printTemplates,
+          // 交班模板範本庫（2026-09-10，0030）：server 較新就跟 server（另一部機新增／套用咗範本），
+          // 否則保留本機。
+          // ⚠️ 一定要明寫呢兩行 —— `payload.localSettings` 係 server `device_configs` 嘅值，
+          // 根本冇呢兩個新 key；唔寫嘅話 `merged` 入面會變 undefined，`savePosLocalSettings()`
+          // 嘅 normalize 就會當「未設定」而重置成出廠預設 → **商家建立嘅範本每次同步都會消失**
+          // （同 `qrUrl` / `standaloneSpecGroups` 一樣嘅歷史陷阱）。
+          ...(adoptServerTemplates && payload.printTemplatesServer?.shiftPresets
+            ? {
+                shiftTemplatePresets: payload.printTemplatesServer.shiftPresets.presets ?? local.shiftTemplatePresets,
+                activeShiftTemplateId:
+                  payload.printTemplatesServer.shiftPresets.activeId ?? local.activeShiftTemplateId,
+              }
+            : {
+                shiftTemplatePresets: local.shiftTemplatePresets,
+                activeShiftTemplateId: local.activeShiftTemplateId,
+              }),
+          // 備註預設：server 較新採納 server（店級真源）；否則保留本機備註。
+          notePresets: adoptServerNotes ? (serverNote!.notePresets ?? local.notePresets) : local.notePresets,
+          cancelNotePresets: adoptServerNotes
+            ? (serverNote!.cancelNotePresets ?? local.cancelNotePresets)
+            : local.cancelNotePresets,
+          compNotePresets: adoptServerNotes
+            ? (serverNote!.compNotePresets ?? local.compNotePresets)
+            : local.compNotePresets,
+          onlineOrderSettings: local.onlineOrderSettings,
+          // 2026-09-24：「平台打印機」（外賣平台單去邊個分區）同 `printContentToggles`
+          // 一樣係 per-terminal 出單行為（唔同終端有唔同打印機綁定）→ 一律保留本機，
+          // 唔畀 server 份（「全店最新一條 terminal」）蓋走。
+          platformPrinterZoneId: local.platformPrinterZoneId,
+          // 2026-09-08：細粒度打印開關同 `printTemplates` / `onlineOrderSettings` 一樣，
+          // 屬於 per-terminal 設定（呢部收銀機嘅出單行為），唔應該被 server 默認值蓋走。
+          // 見 PosLocalSettings.printContentToggles JSDoc。
+          printContentToggles: local.printContentToggles,
+        };
+        savePosLocalSettings(merged);
+      }
+      if (payload.deviceConfig) {
+        saveDeviceConfig(payload.deviceConfig);
+      }
+    } catch {
+      // ignore
+    }
+    // 🚫 2026-09-22：回傳值原本係「今次自動隔離咗幾多張孤兒單」。隔離機制已停用
+    //    （本機訂單一律保留到同步上雲），所以一律回 0；保留回傳型別唔改呼叫端。
+    return 0;
+  }
+
+  // ── 桌台總覽右上角「手動更新」（2026-09-09）────────────────────────────
+  // 背景：其他裝置經 macau-pos 改咗菜單／設定，server DB 已係最新，但店內 POS
+  // 嘅菜單淨係 mount 拉一次 + realtime 只補單筆 delta（斷線／未匯入過就直接漏），
+  // 所以一直停喺舊 cache。呢個掣係「強制全量拉取」：同 mount/realtime 機制唔同，
+  // 一撳就覆蓋三層嘢，套用完再 refresh 成個頁面，確保畫面 100% 係 server 最新。
+  async function handleManualUpdate() {
+    if (manualSyncing) return;
+    if (!readNetworkOnline()) {
+      setToast({ tone: "info", message: "目前離線，無法從伺服器更新。恢復網絡後再試。" });
+      return;
+    }
+    setManualSyncing(true);
+    const notes: string[] = [];
+    try {
+      // ① 菜單／分類／枱／rules：以 server 最新全量覆蓋本機 cache。
+      //    （tables merge 保留本地 per-terminal 枱編輯；menu/categories 直接採用 server 版。）
+      const bootstrapResult = await refreshBootstrapFromServer({ quiet: true });
+      notes.push(bootstrapResult.ok ? "菜單已更新" : "菜單拉取失敗");
+
+      // ② Ledger 線上菜單：全量 RPC 併合 —— 淨係當本機曾匯入過 Ledger 餐牌
+      //    （有 ledger- 前綴菜品）先行，避免意外塞入未用嘅線上菜單。realtime 漏咗嘅
+      //    改名／刪除／重排／改價由呢度一次過補返（docs/77：唔好亂全 re-fetch，但手動更新例外）。
+      try {
+        const current = loadBootstrapCache();
+        const hasLedgerMenu = (current?.menuItems ?? []).some((row) => row.id.startsWith("ledger-"));
+        if (current && hasLedgerMenu && getLedgerMerchantId()) {
+          const ledgerMenu = await fetchLedgerOrderMenu();
+          if (ledgerMenu.enabled && ledgerMenu.products.length > 0) {
+            const { bootstrap: mergedBootstrap, soldOut } = mergeLedgerMenuReference(
+              current,
+              ledgerMenu,
+              loadSoldOutState(),
+              { removeLocalMenu: false },
+            );
+            const normalized = normalizeBootstrapPayload(mergedBootstrap);
+            saveBootstrapCache(normalized);
+            saveSoldOutState(soldOut);
+            window.dispatchEvent(new CustomEvent("pos-bootstrap-changed"));
+            window.dispatchEvent(new CustomEvent("pos-soldout-changed", { detail: { soldOutMap: soldOut } }));
+            notes.push("線上菜單已併合");
+          } else if (ledgerMenu.enabled) {
+            // 守衛：server 返回空菜單（後台未設定）時唔好攞空併合冚走本機已匯入嘅線上菜單。
+            notes.push("線上菜單略過（server 空）");
+          }
+        }
+      } catch {
+        notes.push("線上菜單略過");
+      }
+
+      // ③ 設備／打印／其他設置：沿用現行 loadRuntimeState() 嘅 merge 語義 ——
+      //    floors／printTemplates／onlineOrderSettings／printContentToggles 保留本機
+      //    （per-terminal 真源），其餘 server 優先；orders／printJobs 亦一併補返。
+      //    2026-09-09 方案 A：全量拉取成功後自動隔離孤兒單（雲端冇、無 pending 事件支持）。
+      //    🔴 2026-09-22 P1：一定要 `forceFull` —— 呢粒掣嘅語義係「攞返雲端真值」，
+      //       而孤兒單對賬亦**只可以喺全量**之下跑（判準係「雲端冇呢張單」）。
+      //       呢條路係人手觸發 ⇒ 唔會形成流量迴圈。
+      const quarantined = await loadRuntimeState("manual", { forceFull: true });
+      notes.push("設定已同步");
+      if (quarantined > 0) {
+        notes.push(`已隔離 ${quarantined} 張孤兒單，詳情喺「同步健康」`);
+      }
+
+      // ④ 套用完成 → 強制 refresh 成個 web page：再 mount 一次以新 localStorage
+      //    為底，確保介面（含枱面／購物車 state）同 server 完全一致。
+      setManualSyncing(false);
+      setToast({
+        tone: bootstrapResult.ok ? "success" : "warning",
+        message: "手動更新完成，重新載入頁面…",
+      });
+      window.setTimeout(() => window.location.reload(), 1000);
+    } catch {
+      setToast({ tone: "error", message: "同步失敗，請檢查網絡後再試。" });
+      setManualSyncing(false);
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // 掃碼自助單「新訂單提示」—— 右上角持續提示（2026-09-10 需求）
+  // ─────────────────────────────────────────────────────────────
+  //
+  // 為何要有（而唔係只靠現有嘅 3 秒 toast）：掃碼單係客人自己落，收銀員可能正喺
+  // 處理別的事；3 秒 toast 一閃即逝 = 客人落咗單但冇人知（同 docs/87 §3.1 打印
+  // 失敗一樣嘅「靜默」病）。所以改為**持續提示**：唔撳唔走，一個台一個。
+
+  /** 收到掃碼新單 → 加一個提示（去重 / 上限規則喺 `addSelfOrderNotice()`，有單元測試）。 */
+  function pushSelfOrderNotice(order: PosOrder) {
+    setSelfOrderNotices((prev) => {
+      const next = addSelfOrderNotice(prev, order, new Date().toISOString());
+      if (next === prev) return prev; // 已有同一張單 → 唔重複、唔寫 localStorage
+      if (next.length === MAX_SELF_ORDER_NOTICES) {
+        console.warn(
+          `[pos-app] 掃碼新單提示已達上限 ${MAX_SELF_ORDER_NOTICES} 個（商家長期未處理），最舊嘅會被丟棄。`,
+        );
+      }
+      saveSelfOrderNotices(next);
+      return next;
+    });
+  }
+
+  /** 用戶處理完（撳去桌台）或向右滑 → 移除該提示。 */
+  function handleSelfOrderNoticeDismiss(orderId: string) {
+    setSelfOrderNotices((prev) => {
+      const next = dismissSelfOrderNotice(prev, orderId);
+      if (next === prev) return prev;
+      saveSelfOrderNotices(next);
+      return next;
+    });
+  }
+
+  /** 需求 5：撳嗰陣發現訂單已經結帳 → 標記為「已結帳」（提示本身仍然保留，由用戶滑走）。 */
+  function handleSelfOrderNoticeSettled(orderId: string) {
+    setSelfOrderNotices((prev) => {
+      const next = markSelfOrderNoticeSettled(prev, orderId, new Date().toISOString());
+      saveSelfOrderNotices(next);
+      return next;
+    });
+  }
+
+  /**
+   * 需求 2 / 5（docs/115 G5；2026-09-11 用戶修訂）：撳提示 —— **一律留在點餐頁面**。
+   *
+   * 用戶原文：「我想改一下彈窗按後，在點餐頁面內顯示即可，不需要去到訂單的頁面內顯示查看。」
+   *
+   *   - **有真枱**（堂食掃碼單）→ 載入該枱工作台（切返 dine-in + 鎖定樓層）。
+   *     呢個本身就係「點餐頁面」，收銀即刻見到該枱嘅菜同金額，唔使去訂單頁。
+   *   - **冇枱**（`counter`：自助點餐機 / 快餐掃碼）→ **唔再跳 `/orders`**，改為喺當前
+   *     點餐頁面把該張訂單卡圈住 + 捲入視線（快餐 = 底部「線下訂單」strip；
+   *     堂食模式 = 右欄「自取 / 掃碼訂單」面板）。
+   *   - 訂單已結帳 / 已經冇咗 → 唔跳頁，改為顯示「已結帳」訊息，提示轉為灰底等用戶滑走。
+   */
+  function openSelfOrderNotice(orderId: string) {
+    const notice = selfOrderNotices.find((n) => n.orderId === orderId);
+    const order = orders.find((o) => o.id === orderId) ?? null;
+    const label = order?.tableName || notice?.tableName || "本枱";
+
+    if (!order || isTerminalOrderStatus(order.status)) {
+      console.info(`[pos-app] 撳自助單提示但訂單已結帳／已失效（${orderId}）→ 只顯示訊息`);
+      handleSelfOrderNoticeSettled(orderId);
+      setToast({ tone: "info", message: `${label} 嘅訂單已經結帳，呢個提示可以向右滑走。` });
+      return;
+    }
+
+    // 有真枱先算「枱面單」；`counter`（自助機 / 快餐）唔係任何一張枱。
+    const hasRealTable = Boolean(order.tableId) && order.tableId !== "counter";
+
+    // ── 冇枱：留在點餐頁面，閃該張訂單卡（唔跳訂單頁、唔開詳情彈窗）──
+    if (!hasRealTable) {
+      setNoticeFocus({ orderId: order.id, seq: Date.now() });
+      handleSelfOrderNoticeDismiss(orderId); // 撳 = 已處理
+      // 保險：萬一該張單唔喺任何一個訂單列表（例如狀態唔屬 strip 兩個區段），
+      // 撳完會「冇反應」→ 至少出個文字指引，講明去邊度睇。
+      if (!quickListOrderIdSet.has(order.id)) {
+        setToast({
+          tone: "info",
+          message: `${label} 已下單，請喺「${isQuickMode ? "線下訂單" : "自取 / 掃碼訂單"}」查看。`,
+        });
+      }
+      return;
+    }
+
+    // 堂食單但機仲喺「快餐模式」→ 切返 dine-in，否則真枱載入唔到（同 deep-link 一致）。
+    if (operatingMode === "quick" && order.tableId) {
+      setOperatingModeState("dinein");
+      saveOperatingMode("dinein");
+    }
+    // 鎖定枱所屬樓層，之後返枱面部都直接見到該枱
+    const targetFloor = floors.find((floor) => floor.tables.some((table) => table.id === order.tableId));
+    if (targetFloor) setActiveFloorId(targetFloor.id);
+
+    // `selectTable()` = 桌台卡片 click 同一個入口（有單 → 載入工作台 + setPosMode("order")），
+    // 即係「喺點餐頁面顯示該枱嘅單」。
+    // 萬一枱面 map 未及更新（race）→ 2026-09-11 起**唔再**開訂單詳情彈窗（用戶明確唔想），
+    // 改為高亮枱面 + 出訊息；枱面一更新就自然見到該枱有單。
+    if (tableOrderMap.has(order.tableId)) {
+      selectTable(order.tableId);
+    } else {
+      setActiveTableId(order.tableId);
+      setToast({ tone: "info", message: `${label} 已下單，請喺枱面查看。` });
+    }
+    handleSelfOrderNoticeDismiss(orderId);
+  }
+
+  /** 渲染用：把提示併上「最新訂單狀態」（台名可能被改、訂單可能已結帳）。 */
+  const selfOrderNoticeItems: SelfOrderNoticeItem[] = useMemo(
+    () => toSelfOrderNoticeItems(selfOrderNotices, orders, (o) => isTerminalOrderStatus(o.status)),
+    [selfOrderNotices, orders],
+  );
+
+  /**
+   * 外賣平台單（澳覓 / MFOOD）廚房單：**realtime 新單** 同 **開機補印** 兩條路徑共用
+   * （2026-09-24 · 方案 A「分區式」）。
+   *
+   * 出紙去向＝`PosLocalSettings.platformPrinterZoneId`（設定頁「平台打印機」，
+   * 空 = 跟隨廚房分區），規則／空值語意喺 `@/lib/pos/platform-kitchen-print`（有單測）。
+   * ⚠️ 刻意唔存喺 `DeviceConfig`：嗰邊每次 `/api/pos/state` 同步都會被 server 回應整份覆蓋。
+   *
+   * 閘門＝**乘積**（同「線上訂單」一致）：`kitchen`（內容維度）**同** `platform`
+   * （來源維度）都要開。所以結帳區「自動打印」一鍵全關會令平台單一齊停 —— 符合
+   * 「唔想出任何紙」嘅直覺。
+   *
+   * ⚠️ 幂等：用「本機係咪已經有該單嘅 kitchen job」做守門（同自助單補建一樣嘅判準），
+   *    平台狀態更新（插件重推）唔會重複出紙。
+   */
+  function ensurePlatformKitchenPrint(order: PosOrder) {
+    if (!isPrintContentEnabled("kitchen") || !isPrintContentEnabled("platform")) return;
+    // 🔴 一律由 localStorage 即時讀（唔用 render 期嘅 state）：呢個函式喺 realtime
+    //    回呼同 loadRuntimeState 嘅 effect closure 入面跑，state 可能係舊 render 嘅值；
+    //    設定頁改完係即時寫 localStorage 嘅，所以即時讀先係最新。
+    const freshSettings = loadPosLocalSettings();
+    const deviceConfig = loadDeviceConfig() ?? defaultDeviceConfig;
+    const zone = normalizePlatformPrinterZone(freshSettings.platformPrinterZoneId);
+    // 🔴 揀咗一個冇啟用分區機嘅分區 = 平台單會**靜默零出紙**（本專案反覆中招嘅病）。
+    //    呢種情況一定要出聲，唔可以靜靜地當「商家自己決定唔印」。
+    if (zone && platformZonePrinterCount(zone, deviceConfig.printers) === 0) {
+      const zoneName = freshSettings.printZones.find((item) => item.id === zone)?.name ?? zone;
+      setToast({
+        tone: "error",
+        message: `平台單未出紙：打印分區「${zoneName}」冇啟用嘅分區打印機，請去「設置 → 打印機」綁一台。`,
+      });
+      return;
+    }
+    const hasKitchen = loadPrintJobs().some(
+      (job) =>
+        job.orderId === order.id &&
+        job.ticketType === "normal" &&
+        job.printerGroup !== "receipt" &&
+        (job.items?.length ?? 0) > 0,
+    );
+    if (hasKitchen) return;
+    const jobs = buildPlatformKitchenPrintJobs(order, {
+      ticketType: "normal",
+      storeName: bootstrap?.storeName ?? "門店",
+      // 自動路徑專用：同一張單同一件事同一代只出一張紙（內容簽名由 builder 附加）。
+      onceKey: `kitchen:normal:${order.reopenCount ?? 0}`,
+    });
+    if (jobs.length === 0) return;
+    appendPrintJobsWithSync(jobs);
+  }
+
+  // Kiosk 客人自點：即時訂閱 pos_orders / pos_print_jobs（Realtime，禁 polling）。
+  // 設計要求收銀「秒級」見單、出廚房單；此訂閱係即時來源，/api/pos/state 只喺 mount / (re)subscribe 一次過 backfill（event-driven，非週期）。
+  const kioskStoreId = useMemo(
+    () => (authSession as { merchantId?: string } | null)?.merchantId ?? null,
+    [authSession],
+  );
+  usePosRealtime(kioskStoreId, !offlineMode, {
+    onOrderUpsert: (order) => {
+      // docs/52：本機已真刪除（tombstone）嘅訂單唔可以經 realtime 復活
+      if (loadDeletedOrderIds().includes(order.id)) return;
+      // 2026-09-09 方案 A：已隔離嘅孤兒單同樣唔可以經 realtime 復活
+      //（除非用戶喺「同步健康」明確還原）。
+      if (loadQuarantinedOrders().some((r) => r.order.id === order.id)) return;
+
+      // 判斷是否新收到嘅自助單（realtime push 時本機未有）
+      const existing = loadOrders().find((o) => o.id === order.id);
+      const isNewSelfOrder = !existing && isSelfOrder(order);
+
+      /*
+       * 自助單新單 → 右上角「持續提示」（2026-09-10 需求；docs/115 擴充至 kiosk）。
+       *
+       * `isNewSelfOrder` = `!existing && isSelfOrder(order)`，而 `isSelfOrder` 已經涵蓋
+       * `source ∈ {kiosk, scan}` 三種入口：
+       *   - `scan`  客人掃碼（堂食 `/menu` 逐枱一碼、快餐 `/quick` 全店一碼）；
+       *   - `kiosk` 自助點餐機（平板 `/order`，堂食或快餐）。
+       * 2026-09-10 之前呢度額外寫死 `order.source === "scan"` —— 結果自助點餐機落單
+       * **完全冇提示**，收銀要自己掃列表（docs/115 G4）。而家一律出。
+       *
+       * 守門用 `isNewSelfOrder`（本機**未見過**呢張單）：
+       *   - realtime 重送同一張單 → 第二次 `existing` 已經有 → 唔會再 push；
+       *   - 客人**加單**（ORDER_UPDATED，本機已有）→ 唔會 push（加單會自動補印廚房單，
+       *     唔需要人為介入；亦避免「加幾次就彈幾個提示」）。
+       *   加上 `pushSelfOrderNotice()` 內部再按 orderId 去重，雙重保險。
+       *
+       * ⚠️ 刻意**唔喺** backfill / 手動更新路徑 push：嗰啲會喺每次載入時把全店所有
+       * 未結自助單當「新單」彈一次，包括用戶頭先已經滑走嘅（滑走 = 略過，唔應該復活）。
+       * 真實場景（收銀機開住）由 realtime 覆蓋。
+       */
+      if (isNewSelfOrder) {
+        pushSelfOrderNotice(order);
+      }
+
+      setOrders((current) => {
+        const merged = mergeOrderLists(loadOrders(), current, [order]);
+        const quarantineIds = loadQuarantinedOrders().map((r) => r.order.id);
+        const cleaned = filterResurrectedOrders(merged, loadDeletedOrderIds(), loadOrders(), quarantineIds);
+        saveOrders(cleaned);
+        return cleaned;
+      });
+
+      // 新收到嘅自助單（已自動確認 = sent_to_kitchen）→ 收銀端建廚房單 + 標籤單（docs/87 §3.1）
+      if (isNewSelfOrder && order.status === "sent_to_kitchen") {
+        // 用 print job 去重：若已經有該單嘅 kitchen job（normal ticket + 非 receipt + 有 items），就唔再建
+        const hasKitchen = loadPrintJobs().some(
+          (job) =>
+            job.orderId === order.id &&
+            job.ticketType === "normal" &&
+            job.printerGroup !== "receipt" &&
+            (job.items?.length ?? 0) > 0,
+        );
+        if (!hasKitchen) {
+          const storeName = bootstrap?.storeName ?? "門店";
+          // 細粒度開關（2026-09-08）：kitchen + label + kiosk 各自獨立。
+          const kitchenOn = isPrintContentEnabled("kitchen");
+          const labelOn = isPrintContentEnabled("label");
+          const kioskOn = isPrintContentEnabled("kiosk");
+          const jobs: PrintJob[] = [];
+          if (kitchenOn) {
+            // 🔴 2026-09-24：見上面 backfill 嘅同源註釋 —— realtime 首次見到自助單
+            //    呢條路同線上單接單會為同一張單各出一張，必須帶同一條 onceKey 才攔得住。
+            jobs.push(
+              ...buildKitchenPrintJobs(order, {
+                ticketType: "normal",
+                storeName,
+                onceKey: `kitchen:normal:${order.reopenCount ?? 0}`,
+              }),
+            );
+          }
+          if (labelOn) {
+            jobs.push(...buildLabelPrintJobs(order, { ticketType: "normal", storeName }));
+          }
+          // 掃碼單冇本機打印機 → 收銀端補印顧客小票
+          if (order.source === "scan" && bootstrap && kioskOn) {
+            jobs.push(...buildKioskReceiptPrintJobs(order, bootstrap));
+          }
+          // 🔴 2026-09-22：realtime 收到新自助單（掃碼／kiosk）嘅廚房單＋標籤單
+          //    一定要**上雲**（原本 `appendPrintJobs` ＝只寫本機 ⇒ 廚房永遠收唔到紙）。
+          appendPrintJobsWithSync(jobs);
+        }
+      }
+
+      /*
+       * 外賣平台單（澳覓 / MFOOD）新單 → 出廚房單（2026-09-24 · 方案 A「分區式」）。
+       *
+       * 守門用 `!existing`（本機未見過呢張單）—— 同自助單一致：插件重推同一張單
+       * （平台狀態變化會再推一次）／realtime 重送 → 第二次 `existing` 已經有 → 唔會再出紙。
+       * 再加 `ensurePlatformKitchenPrint()` 內部嘅「已有 kitchen job」守門做雙重保險
+       * （reload 之後 `existing` 靠 localStorage，job 帳本更可靠）。
+       *
+       * ⚠️ 平台單入庫即 `status = "paid"`（線上已付，見 `grabber-order.ts`），
+       *    **唔會**係 `sent_to_kitchen` ⇒ 唔可以照抄自助單嗰個 status 條件。
+       */
+      if (!existing && isPlatformOrder(order)) {
+        ensurePlatformKitchenPrint(order);
+      }
+
+      /**
+       * 加單補印（2026-09-10 掃碼加單修復）。
+       *
+       * 【問題】上面嘅新單出單分支用 `isNewSelfOrder`（本機**未見過**呢張單）做守門，
+       * 客人掃碼**加單**係對一張**已存在**嘅單發 ORDER_UPDATED → 永遠唔會行到 →
+       * 廚房由頭到尾收唔到新增嘅菜（客人以為落咗、廚房冇單）。
+       *
+       * 【設計】自助單（kiosk / 掃碼）收到更新、而且**菜品數量變多** → 攞差額出
+       * 一張 `ticketType: "addon"`（票種「加單」）嘅廚房／標籤單，只印新增嗰批。
+       * 同收銀台自己加單（`submitOrder()` 內 `treatAsAddOn` + `itemsOverride`）同一口徑，
+       * 亦對應 `print-toggles.ts`「加單屬自動流程，受 kitchen / label 開關管」嘅設計。
+       *
+       * 【唔會做嘅事】
+       *   - 唔重印整張單嘅顧客小票（小票只喺新單時出一次，避免重複收費感）。
+       *   - 唔喺 `loadRuntimeState()` 嘅 backfill 路徑觸發（同既有 new-order 邏輯一致；
+       *     收銀機關機期間嘅加單會經介面合併見到，需要手動「重印」）。
+       */
+      if (existing && isSelfOrder(order) && !isTerminalOrderStatus(order.status)) {
+        const addedItems = diffAddedItems(existing.items, order.items);
+        if (addedItems.length > 0) {
+          const signature = addedItemsSignature(addedItems);
+          const seen = printedAddonSignatures.get(order.id) ?? new Set<string>();
+          if (!seen.has(signature)) {
+            const storeName = bootstrap?.storeName ?? "門店";
+            const kitchenOn = isPrintContentEnabled("kitchen");
+            const labelOn = isPrintContentEnabled("label");
+            const jobs: PrintJob[] = [];
+            if (kitchenOn) {
+              jobs.push(
+                ...buildKitchenPrintJobs(order, { ticketType: "addon", storeName, itemsOverride: addedItems }),
+              );
+            }
+            if (labelOn) {
+              jobs.push(
+                ...buildLabelPrintJobs(order, { ticketType: "addon", storeName, itemsOverride: addedItems }),
+              );
+            }
+            seen.add(signature);
+            printedAddonSignatures.set(order.id, seen);
+            if (jobs.length > 0) {
+              // 🔴 2026-09-22：自助單加菜嘅廚房單／標籤單一定要**上雲**
+              //    （原本 `appendPrintJobs` ⇒ 客人加咗嘅菜廚房永遠收唔到紙）。
+              appendPrintJobsWithSync(jobs);
+              setToast({
+                tone: "info",
+                message: `${order.tableName || order.localOrderNo} 加單 ${addedItems.length} 項，已補出廚房單。`,
+              });
+            }
+          }
+        }
+      }
+
+      // 自助單 draft → 彈 toast 提示待確認（規格 6：開關熄咗時）
+      if (order.status === "draft" && isSelfOrder(order)) {
+        setToast({ tone: "info", message: `自助單 ${order.localOrderNo} 待確認` });
+      }
+      // 堂食 dine_in_confirm 單落 draft：彈「X 枱已落單請確認」，等員工確認才落廚房
+      if (order.status === "draft" && order.tableId && order.tableId !== "counter" && !isSelfOrder(order)) {
+        setToast({ tone: "info", message: `${order.tableName} 已落單，請確認` });
+      }
+    },
+    onPrintJobUpsert: (job) => {
+      // docs/52：本機已主動清除（tombstone）嘅 job 唔可以經 realtime 復活
+      if (loadClearedPrintJobIds().includes(job.id)) return;
+      setPrintJobs((current) => {
+        // 以 localStorage 為基底合併，唔用 React state current —
+        // 因為 bridgeLedgerOrderToPos / printKitchenForLedgerOrder 等
+        // 線上訂單打印路徑直接 savePrintJobs 寫 localStorage 但唔更新 React state，
+        // 用 current 做 savePrintJobs 會沖走呢啲線上訂單嘅 print jobs。
+        const fromStorage = loadPrintJobs();
+        const existing = fromStorage.find((p) => p.id === job.id);
+        if (existing) {
+          // 本地已有：默認保留本地版本（sent/failed），唔用後台 status 覆寫 → 防重印
+          // 2026-09-07 兩級狀態：容許「向上」覆寫到終態——
+          //   本地 sent → 伺服器 printed / failed（APK 真實出紙成功或印唔到）
+          // 唔容許向下（伺服器 pending / claimed 唔可以打回本地 sent，否則 flush 當佢未印 → 重印）。
+          const isTerminalUp =
+            existing.status === "sent" && (job.status === "printed" || job.status === "failed");
+          const merged = isTerminalUp
+            ? { ...existing, status: job.status, lastError: job.lastError ?? existing.lastError }
+            : existing;
+          const next = fromStorage.map((p) => (p.id === job.id ? merged : p));
+          savePrintJobs(next);
+          return next;
+        }
+        const next = [job, ...fromStorage];
+        savePrintJobs(next);
+        return next;
+      });
+    },
+    // realtime (re)subscribe 成功 → 一次過 backfill 現有 open 單（event-driven，非 polling）。
+    // 補返 realtime 唔 backfill 舊 row 嘅缺口；visibilitychange / CHANNEL_ERROR 重連都會觸發。
+    //
+    // 🔴🔴 2026-09-21 egress 守衛（**唔可以拆**，實測數據見 `RESUBSCRIBE_BACKFILL_MIN_GAP_MS`）：
+    //    Vercel log 見到「連續 9 分鐘、每 4.47 秒一次、每次 857 KB」嘅全量拉取，
+    //    單單嗰 9 分鐘就 80 MB（佔全部 egress 96%）—— 成因就係呢個 callback 被反覆觸發。
+    //    決策邏輯抽咗去 `@/lib/pos/resubscribe-guard`（純函式、有單測）：
+    //      ① offlineMode → 唔拉（原本已有）
+    //      ② 本機仲有 pending 事件 → 唔拉（原本已有，避免覆蓋未上雲嘅新單）
+    //      ③ **分頁隱藏 → 唔拉**（新增；背景分頁嘅循環主閘）
+    //      ④ **距上次全量拉取 <30 秒 → 唔拉**（新增）
+    //    ⚠️ 唔會漏事件：返前景 → visibilitychange → subscribe() → SUBSCRIBED → 呢個 callback
+    //       會再跑（此時 visible 且已隔足時間）⇒ 一定補到。
+    onResubscribed: () => {
+      const decision = shouldBackfillOnResubscribe({
+        offlineMode: Boolean(offlineMode),
+        hasPendingEvents: queue.some((event) => event.status === "pending"),
+        visibilityState: typeof document === "undefined" ? "visible" : document.visibilityState,
+        lastFullPullAtMs: lastFullStatePullAtRef.current,
+        nowMs: Date.now(),
+        minGapMs: RESUBSCRIBE_BACKFILL_MIN_GAP_MS,
+      });
+      if (!decision.ok) {
+        // 只喺「真係有機會拉但被擋」時留痕，方便日後診斷（唔想每次都嘈）。
+        if (decision.reason === "hidden" || decision.reason === "too-soon") {
+          console.debug(`[pos-app] 重連補拉已跳過（${decision.reason}）`);
+        }
+        return;
+      }
+      void loadRuntimeState("resubscribe");
+    },
+    /**
+     * Realtime 渠道狀態（2026-09-10 P0）：記落 state 俾警示條用，同時出 console。
+     *
+     * ⚠️ 注意 `SUBSCRIBED` **唔代表**真係收得到單 —— 訂錯專案時一樣係 SUBSCRIBED，
+     * 所以健康判斷以 mount 時嘅 `probePosRealtimeTarget()` 為準，唔可以單靠呢個 status。
+     * 只有 `CHANNEL_ERROR` / `TIMED_OUT` 係真正「連唔上」，呢兩種情況一定出警示。
+     */
+    onStatusChange: (status) => {
+      setRealtimeStatus(status);
+      /**
+       * 輪詢閘用（2026-09-21）：報告 Realtime 通唔通。
+       *
+       * 🔴 **唔可以單靠 `SUBSCRIBED`** —— 訂錯 Supabase 專案一樣會 `SUBSCRIBED`，
+       * 但**永遠收唔到事件**（見 `use-store-status.ts:38-43` 嘅完整記錄）。
+       * 所以一定要**同時**確認 config 指向 POS 專案（`source === "pos"`）才算「通」；
+       * 否則輪詢閘會以為有 push 而放慢到 5 分鐘 ⇒ 收唔到單。
+       */
+      reportRealtimeConnected(
+        status === "SUBSCRIBED" && getPosRealtimeConfig()?.source === "pos",
+      );
+      if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+        console.warn(`[pos-realtime] 渠道狀態 ${status}（host=${safeHost(getPosRealtimeConfig()?.url ?? null) ?? "?"}）`);
+      }
+    },
+  });
+
+  const activeTable = useMemo(() => {
+    if (!bootstrap) return null;
+    if (isQuickMode) {
+      return { id: "counter", name: "快餐", area: "" } as PosBootstrap["tables"][number];
+    }
+    const fromBootstrap = bootstrap.tables.find((table) => table.id === activeTableId);
+    if (fromBootstrap) return fromBootstrap;
+    // 返結 temp 枱只喺 localSettings.floors（唔喺 bootstrap.tables），呢度補回解析
+    const floors = loadPosLocalSettings().floors ?? [];
+    for (const floor of floors) {
+      const found = floor.tables.find((table) => table.id === activeTableId);
+      if (found) return found;
+    }
+    return null;
+  }, [bootstrap, activeTableId, isQuickMode]);
+
+  const totals = useMemo(
+    () => (bootstrap ? orderTotals(cartItems, bootstrap) : { subtotal: 0, serviceChargeAmount: 0, taxAmount: 0, total: 0 }),
+    [bootstrap, cartItems],
+  );
+
+  const deviceConfig = useMemo(() => loadDeviceConfig() ?? defaultDeviceConfig, []);
+  const displayStoreName = useMemo(
+    () => resolveStoreDisplayTitle(authSession, bootstrap),
+    [authSession, bootstrap],
+  );
+  const displayStoreSubtitle = useMemo(
+    () => resolveStoreDisplaySubtitle(authSession, deviceConfig.terminalName),
+    [authSession, deviceConfig.terminalName],
+  );
+  const [localSettings, setLocalSettings] = useState(() => loadPosLocalSettings());
+  // 枱檯 view 改讀 bootstrap.tables（共享真源）而非 localSettings.floors，確保 kiosk / 掃碼落單嘅枱一定 render；
+  // 本地獨有枱（返結 temp 枱等）經 buildDisplayFloors overlay 保留。
+  const floors = useMemo(
+    () => buildDisplayFloors(bootstrap?.tables ?? [], localSettings.floors),
+    [bootstrap, localSettings],
+  );
+
+  /**
+   * 「排位」彈窗可揀嘅枱（2026-09-12）。
+   *
+   * ⚠️ 一定要剔除**返結 temp 枱**（`reopenOrderId`）：嗰啲係返結流程臨時搬單用嘅假枱，
+   * 唔應該畀人排位揀中，否則會將線上單塞入一張唔存在嘅枱。
+   */
+  const assignableTables = useMemo(
+    () =>
+      floors.flatMap((floor) =>
+        floor.tables
+          .filter((table) => !isReopenTempTable(table))
+          .map((table) => ({ id: table.id, name: table.name, floorName: floor.name })),
+      ),
+    [floors],
+  );
+  const paymentMethods = localSettings.paymentMethods;
+  // 自動接單：**server 係真源、全店共用**，localStorage 只係離線快取（docs/92）。
+  // 唔好再讀 `localSettings.onlineOrderSettings.autoAccept` —— 嗰個已經降級做快取，
+  // 而且冇渠道知 Ledger / 其他收銀機改咗。
+  const {
+    autoAccept: autoAcceptOnlineOrders,
+    setAutoAccept: setAutoAcceptOnlineOrders,
+  } = useOnlineOrderSettings(kioskStoreId, !offlineMode);
+
+  useEffect(() => {
+    function onLocalSettingsChanged(event: Event) {
+      const detail = (event as CustomEvent<{ localSettings?: ReturnType<typeof loadPosLocalSettings> }>).detail;
+      if (detail?.localSettings) {
+        setLocalSettings(detail.localSettings);
+      } else {
+        setLocalSettings(loadPosLocalSettings());
+      }
+    }
+    window.addEventListener("pos-local-settings-changed", onLocalSettingsChanged as EventListener);
+    return () => window.removeEventListener("pos-local-settings-changed", onLocalSettingsChanged as EventListener);
+  }, []);
+
+  const effectiveCategoryId = useMemo(() => {
+    if (!bootstrap) return "";
+    // 搜尋時一律視為「全部」，避免找不到商品
+    if (searchKeyword.trim()) return "";
+    if (activeCategoryId === ALL_MENU_CATEGORY_ID) return "";
+    return activeCategoryId || bootstrap.categories[0]?.id || "";
+  }, [activeCategoryId, bootstrap, searchKeyword]);
+
+  const filteredMenuItems = useMemo(() => {
+    if (!bootstrap) return [];
+
+    const keyword = searchKeyword.trim();
+    const base = bootstrap.menuItems.filter((item) => (effectiveCategoryId ? item.categoryId === effectiveCategoryId : true));
+    if (!keyword) return base;
+
+    return base.filter((item) => item.name.includes(keyword));
+  }, [bootstrap, effectiveCategoryId, searchKeyword]);
+  // activeFloorId 可能係舊嘅本地 floor id（改讀 bootstrap.tables 後 display floor id 變 area:<area>），
+  // 若佢已唔存在於 display floors，fallback 去第一個 display floor，避免枱 grid 變空。
+  const effectiveFloorId =
+    activeFloorId && (activeFloorId === ALL_FLOOR_ID || floors.some((f) => f.id === activeFloorId))
+      ? activeFloorId
+      : floors[0]?.id ?? "";
+  const visibleTables = useMemo(() => {
+    if (effectiveFloorId === ALL_FLOOR_ID) return floors.flatMap((floor) => floor.tables);
+    return floors.find((floor) => floor.id === effectiveFloorId)?.tables ?? [];
+  }, [effectiveFloorId, floors]);
+
+  // 開桌彈窗：入座人數按鈕數 = 該枱座位數（capacity）；冇填座位數（缺失/≤0）→ fallback 12。
+  // 2026-09-09：由手動輸入改為數字按鈕（見開桌彈窗 render），商家只可以揀 1..座位數。
+  const openTableModalTable =
+    openTableModalTableId ? visibleTables.find((tbl) => tbl.id === openTableModalTableId) ?? null : null;
+  const openTableMaxSeats = (() => {
+    const capacity = openTableModalTable?.capacity;
+    return capacity && capacity > 0 ? Math.min(Math.floor(capacity), 99) : OPEN_TABLE_FALLBACK_MAX_SEATS;
+  })();
+
+  const pendingQueue = useMemo(() => queue.filter((event) => event.status !== "synced"), [queue]);
+  const openOrders = useMemo(
+    () =>
+      orders.filter(
+        (order) =>
+          order.status === "draft" ||
+          order.status === "sent_to_kitchen" ||
+          order.status === "paid" ||
+          order.status === "reopened",
+      ),
+    [orders],
+  );
+
+  /**
+   * 「返結帳」清單（2026-10-05，跨機返結失聯修復）。
+   *
+   * 🔴 背景：返結時訂單會被搬去 `temp-reopen-*` 枱，而**該枱只存在下單機本機**
+   *    （`device-settings` 推上 server 前會 `stripReopenTempTables()` 剝走）⇒
+   *    另一部機桌台總覽完全見唔到重結入口，商家喺該機冇辦法重結。
+   *
+   * ⚠️ 資料源係現成嘅 `openOrders`（已含 `reopened`）⇒ **零新增 API / 零新增 DB 查詢**，
+   *    egress 完全唔受影響。純函式喺 `@/lib/pos/reopen-account-rows`（有單元測試守衛）。
+   *
+   * 🔴 2026-10-05（J 拍板方案 C + 金額選項 1）：清單同枱格**共用同一個 6 欄網格**，
+   *    返結卡排喺全部枱之前 ⇒ 必須排除「本機已有對應 temp 枱」嘅單，
+   *    否則同一張單會喺 grid 出現**兩次**（temp 枱一次 + 返結卡一次），
+   *    收銀撳落去係同一張單但睇落似兩張 —— 商家會以為有兩張未結單。
+   *    判準用 `temp.reopenOrderId`（`createReopenTempTable` 寫入），係單一真源。
+   *    ⚠️ 跨機嗰部冇 temp 枱 ⇒ 全部返結單都會出現（呢個正正係修復目標）。
+   */
+  const reopenAccountList = useMemo(() => {
+    const tempOrderIds = floors
+      .flatMap((floor) => floor.tables)
+      .filter((table) => isReopenTempTable(table) && !!table.reopenOrderId)
+      .map((table) => table.reopenOrderId as string);
+    return excludeRowsWithLocalTempTable(reopenAccountRows(openOrders), tempOrderIds);
+  }, [openOrders, floors]);
+
+  // 30s 批量同步（只在在線 + 有 pending 時進行；成功/失敗不彈 toast，避免打擾收銀）
+  useEffect(() => {
+    if (offlineMode) return;
+    const timer = window.setInterval(() => {
+      const next = pendingQueue;
+      if (next.length === 0) return;
+      void syncNow(next, { silent: true });
+    }, 30_000);
+    return () => window.clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [offlineMode, pendingQueue]);
+
+  // ⚠️ 即時架構（用家要求：禁用 polling）：收銀見 kiosk 單唯一靠 Supabase Realtime 推。
+  // 冇任何 setInterval 輪詢。realtime (re)subscribe 成功後靠 onResubscribed 一次過 backfill
+  // 現有 open 單（event-driven，非週期性），之後新單全靠 postgres_changes 推入。
+  // → 前置條件：pos_orders 必須加落 supabase_realtime publication + anon read RLS（見 0011 / 下方 SQL）。
+  const recentCompletedOrders = useMemo(() => {
+    if (!isQuickMode) return [];
+    const threshold = nowMs - quickCompletedMinutes * 60 * 1000;
+    return orders
+      .filter((order) => order.tableId === "counter" && order.status === "settled")
+      .filter((order) => Date.parse(order.updatedAt || order.createdAt) >= threshold)
+      .sort((a, b) => Date.parse(b.updatedAt || b.createdAt) - Date.parse(a.updatedAt || a.createdAt));
+  }, [isQuickMode, orders, quickCompletedMinutes, nowMs]);
+  const actionBarLocalOrders = useMemo(
+    // 2026-09-12：唔再排除 `onlineOrderId` —— 快餐模式採納嘅線上單（counter）
+    // 要入快餐 strip 行「可取餐 → 完成」（`isQuickCounterOrder` 已同步放寬）。
+    () => filterQuickActionBarOrders(openOrders).filter((order) => order.tableId === "counter"),
+    [openOrders],
+  );
+  /**
+   * 快餐「線下訂單」strip 入面嘅訂單 id 集合。
+   *
+   * 用嚟回答：「撳掃碼提示之後，張單係咪真係會喺點餐頁面見到？」
+   * 唔喺集合（例如狀態唔屬 strip 兩個區段）→ 出 toast 指引，唔會撳完冇反應。
+   */
+  const quickListOrderIdSet = useMemo(
+    () => new Set(actionBarLocalOrders.map((order) => order.id)),
+    [actionBarLocalOrders],
+  );
+  // 桌台總覽（dine-in）模式：kiosk / 掃碼落嘅自取、外賣單（table_id=counter）唔喺枱 grid 入面，
+  // 必須有專屬面板先會見到，否則收銀喺預設 dine-in 模式永遠睇唔到呢啲單（之前只喺 quick mode bar 出）。
+  const counterKioskOrders = useMemo(
+    // 單號由小到大（compareOrderByLocalNo）：openOrders 本身係 updatedAt 新→舊，
+    // 一改狀態張單就移位；呢個面板有「接受 / 拒絕」掣，移位會令收銀撳錯單。
+    () =>
+      openOrders
+        // 2026-09-12：同上，唔再排除 `onlineOrderId`（快餐模式採納嘅線上單都要出喺呢個面板）。
+        .filter((order) => order.tableId === "counter")
+        .sort(compareOrderByLocalNo),
+    [openOrders],
+  );
+  const quickPreparingOrders = useMemo(
+    // 🔴 2026-09-12 修（用戶反映「撳可取餐狀態冇變、掣唔消失」）：
+    // 舊寫法將 `(paid && !ready) → 製作中`、`(paid && ready) → 待取餐`，令
+    // **未收款先出餐**（status 仲係 sent_to_kitchen、但 fulfillmentStatus 已寫 ready，
+    // docs/87 §6.3 放寬閘門嘅合法路徑）嘅單永遠卡死喺「製作中」區：撳完可取餐個掣照舊喺度，
+    // 睇落好似「狀態冇更新」（其實 ready 已經寫入本機 + 雲端）。
+    // 出餐階段嘅唯一真源係 `isQuickOrderReady()`，同訂單頁分頁口徑完全一致。
+    () => actionBarLocalOrders.filter((order) => !isQuickOrderReady(order)),
+    [actionBarLocalOrders],
+  );
+  const quickWaitingOrders = useMemo(
+    () => actionBarLocalOrders.filter((order) => isQuickOrderReady(order)),
+    [actionBarLocalOrders],
+  );
+
+  const viewingOrder = useMemo(() => {
+    if (!viewingOrderId) return null;
+    return orders.find((order) => order.id === viewingOrderId) ?? null;
+  }, [orders, viewingOrderId]);
+  /**
+   * 訂單紀錄（查看）嘅折扣備註（2026-09-11 需求 #2）。
+   * 免單喺下面有自己嘅「免單備註」區塊 → 呢度唔重複；其餘（全單折扣 / 單品折扣 / 系統抹零）
+   * 一律列出，令「點解收少咗」可追溯。推導邏輯同報表 / 交班明細共用 `buildOrderDetailNotes`。
+   */
+  const viewingOrderDiscountNotes = useMemo(
+    () => (viewingOrder ? buildOrderDetailNotes(viewingOrder).filter((note) => note.kind !== "comp") : []),
+    [viewingOrder],
+  );
+  const tableOrderMap = useMemo(
+    () =>
+      new Map(
+        openOrders
+          .slice()
+          .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
+          .map((order) => [order.tableId, order]),
+      ),
+    [openOrders],
+  );
+  const activeOrder = useMemo(() => {
+    if (activeOrderId) {
+      return (
+        orders.find(
+          (order) =>
+            order.id === activeOrderId &&
+            order.status !== "settled" &&
+            order.status !== "cancelled" &&
+            order.status !== "partially_refunded" &&
+            order.status !== "refunded",
+        ) ?? null
+      );
+    }
+    // 快餐模式：activeTableId 喺 boot 時會落到第一張真枱（bootstrap.tables[0]），
+    // 唔可以靠佢去 resolve activeOrder，否則會鬼鬼祟祟將張枱嘅堂食單載入 workspace
+    //（「跳去桌面模式」）。快餐模式嘅單靠 activeOrderId 追蹤（落單時 setActiveOrderId）。
+    return (!isQuickMode && activeTableId ? tableOrderMap.get(activeTableId) : null) ?? null;
+  }, [activeOrderId, activeTableId, orders, tableOrderMap, isQuickMode]);
+  // 唯讀鎖定：已結帳單經 deep-link 載入工作台（activeOrder 因 status=settled 被排除，但 activeOrderId/cartItems 已設）
+  const workspaceOrder = useMemo(
+    () => (activeOrderId ? orders.find((order) => order.id === activeOrderId) ?? null : null),
+    [activeOrderId, orders],
+  );
+  const isReadOnlySettled = workspaceOrder?.status === "settled";
+  // 全單備註鎖定（docs/84）：一送出（sent_to_kitchen）即固定。
+  // draft（未送出）同 reopened（返結帳）先改得；結完帳 setActiveOrderId(null) → 自動解鎖，唔影響下一張單。
+  const orderNoteLocked = isOrderNoteLocked(workspaceOrder);
+  // docs/87：結帳金額必須跟住用戶撳「結帳」嗰張單 —— 所有結帳入口（桌台圖／快餐／線上面板）
+  // 都會先 setPayingOrderId(target.id)，所以淨限 payingOrderId 或**當前枱自己**嘅未結單。
+  // ⚠️ 唔可以 fallback 全域「全店第一張待結單」：
+  // 咁樣進入一張空枱時，收銀面板會鬼祟帶入第張枱嘅小計（bug：空枱小計 112）。
+  // 結帳 handler（confirmPayment/comp/onlinePaid）自己保有全域 fallback，唔受影響。
+  //
+  // 🔴 2026-09-13：除咗 `sent_to_kitchen` / `reopened`，仲要認「已付款嘅線上堂食單」
+  // （`paid` + 帶 `onlineOrderId` + 真枱）。呢批單係「排位」寫入嘅（`assignLedgerOrderToTable`），
+  // 錢已經喺 Ledger 收咗，結帳只收加菜差額（`prepaidAmount`）→ 舊寫法認唔到 → 張單卡死。
+  // 判準收喺 `isSettleableOrder()`（純函式，有測試），本地堂食單完全唔會行到呢條路。
+  const currentSettlementOrder =
+    (payingOrderId && payingOrderId !== CART_PAYING_ID ? orders.find((order) => order.id === payingOrderId) ?? null : null) ??
+    (!isQuickMode && activeOrder && isSettleableOrder(activeOrder) ? activeOrder : null);
+  // docs/95 §14：base 總額必須 = subtotal + 服務費 + 稅，同 orderTotals() / 落單寫入（upsertCurrentOrder）一致。
+  // 之前呢度硬寫 `serviceChargeAmount: 0` 兼 `total = subtotal + taxAmount`，
+  // 只要 rules.serviceChargeRate > 0，結帳嗰刻服務費會靜默消失（落單收據有、結帳冇 → 收少咗錢）。
+  // 舊單（schema 升級前）冇 serviceChargeAmount field → `?? 0` 兜底。
+  const sumOrderBaseTotal = (order: PosOrder) => order.subtotal + (order.serviceChargeAmount ?? 0) + order.taxAmount;
+  const paymentBase = currentSettlementOrder
+    ? {
+        subtotal: currentSettlementOrder.subtotal,
+        serviceChargeAmount: currentSettlementOrder.serviceChargeAmount ?? 0,
+        taxAmount: currentSettlementOrder.taxAmount,
+        total: sumOrderBaseTotal(currentSettlementOrder),
+      }
+    : !isQuickMode && activeOrder && cartItems.length === 0
+      ? {
+          subtotal: activeOrder.subtotal,
+          serviceChargeAmount: activeOrder.serviceChargeAmount ?? 0,
+          taxAmount: activeOrder.taxAmount,
+          total: sumOrderBaseTotal(activeOrder),
+        }
+      : totals;
+  const discountAmount = useMemo(() => {
+    const preset = localSettings.discounts.find((d) => d.id === discountValue);
+    if (!preset) return 0;
+    return discountAmountFromRate(paymentBase.total, preset.rate);
+  }, [discountValue, localSettings.discounts, paymentBase.total]);
+  const prepaidAmount = (currentSettlementOrder?.prepaidAmount ?? activeOrder?.prepaidAmount ?? 0) || 0;
+  const payableBeforeMember = Math.max(0, paymentBase.total - discountAmount - prepaidAmount);
+  const selectedMoneyVoucherAvos = useMemo(
+    () => (ledgerMember ? sumMoneyVoucherAvos(ledgerMember.redeemableGrants, selectedGrantIds) : 0),
+    [ledgerMember, selectedGrantIds],
+  );
+  const memberAvailableAvos = useMemo(() => {
+    if (!ledgerMember) return 0;
+    return ledgerMember.balanceAvos + selectedMoneyVoucherAvos;
+  }, [ledgerMember, selectedMoneyVoucherAvos]);
+  const memberDeduction = useMemo(() => {
+    if (!useMemberBalance || !ledgerMember) return 0;
+    return Math.min(avosToMop(memberAvailableAvos), payableBeforeMember);
+  }, [ledgerMember, memberAvailableAvos, payableBeforeMember, useMemberBalance]);
+  const memberLedgerOpsNeeded = Boolean(
+    ledgerMember && (selectedGrantIds.length > 0 || (useMemberBalance && memberDeduction > 0)),
+  );
+
+  function scheduleMemberLookup(phone: string) {
+    if (memberSearchTimerRef.current) {
+      window.clearTimeout(memberSearchTimerRef.current);
+      memberSearchTimerRef.current = null;
+    }
+    memberSearchTimerRef.current = window.setTimeout(() => {
+      void (async () => {
+        if (offlineMode) {
+          setLedgerMember(null);
+          setMemberSearchHint("會員查詢須連線，請恢復網絡後再試。");
+          return;
+        }
+        const merchantId = getLedgerMerchantId();
+        if (!merchantId) {
+          setLedgerMember(null);
+          setMemberSearchHint("無法取得商家 ID，請重新登入。");
+          return;
+        }
+        setMemberSearching(true);
+        try {
+          const wallet = await lookupCustomerWallet(merchantId, phone);
+          if (!wallet.registered || !wallet.customerId) {
+            setLedgerMember(null);
+            setMemberSearchHint("此電話尚未註冊會員通。");
+            return;
+          }
+          const redeemableGrants = await listRedeemableGrantsForCustomer(merchantId, wallet.customerId);
+          setLedgerMember({ ...wallet, redeemableGrants });
+          setMemberSearchHint("");
+          setSelectedGrantIds([]);
+          memberCheckoutIdempotencyRef.current = null;
+          setMemberCheckoutRedeemDone(false);
+        } catch (error) {
+          setLedgerMember(null);
+          setMemberSearchHint(
+            friendlyLedgerMemberError(error instanceof Error ? error.message : String(error)),
+          );
+        } finally {
+          setMemberSearching(false);
+        }
+      })();
+    }, 300);
+  }
+
+  function handleMemberPhoneChange(input: string) {
+    const normalized = input.replace(/\D/g, "").slice(0, 8);
+    setMemberPhone(normalized);
+    setMemberSearchHint("");
+    memberCheckoutIdempotencyRef.current = null;
+    setMemberCheckoutRedeemDone(false);
+
+    if (memberSearchTimerRef.current) {
+      window.clearTimeout(memberSearchTimerRef.current);
+      memberSearchTimerRef.current = null;
+    }
+
+    if (normalized.length !== 8) {
+      setMemberSearching(false);
+      setLedgerMember(null);
+      setSelectedGrantIds([]);
+      setUseMemberBalance(false);
+      return;
+    }
+
+    scheduleMemberLookup(normalized);
+  }
+
+  useEffect(() => {
+    if (!payingOrderId && memberSearchTimerRef.current) {
+      window.clearTimeout(memberSearchTimerRef.current);
+      memberSearchTimerRef.current = null;
+    }
+  }, [payingOrderId]);
+  const paymentSummary = {
+    subtotal: paymentBase.subtotal,
+    // docs/95 §14：之前硬寫 0，同 paymentBase 對唔上；跟返 paymentBase 實際計出嘅服務費。
+    serviceChargeAmount: paymentBase.serviceChargeAmount,
+    taxAmount: paymentBase.taxAmount,
+    discountAmount,
+    prepaidAmount,
+    memberDeduction,
+    total: Math.max(0, payableBeforeMember - memberDeduction),
+  };
+  /**
+   * 「線上已付齊、收銀台只需完成」—— 即 `completeOnlinePaidOrder()` 適用嘅場景
+   * （客人喺 Ledger／掃碼端已經付咗**全款**，`paymentMethod: "線上已支付"`，唔再扣款）。
+   *
+   * 🔴🔴 必須排除「用會員餘額付清全單」嘅情況（2026-09-14 走數實案）：
+   *    `paymentSummary.total` 已經**減咗** `memberDeduction`（店員填嘅**計劃**扣款），
+   *    所以「小計 160、已預付 75、會員扣 85」時 `total` 一樣係 0 →
+   *    舊寫法誤判成「客人已付齊」→ 直接 `completeOnlinePaidOrder()`、**完全冇扣會員餘額**。
+   *    ⇒ 只要 `memberDeduction > 0`，就一定要落 `confirmPayment()` 行真扣款。
+   */
+  const isOnlinePaidComplete =
+    !(useMemberBalance && memberDeduction > 0) &&
+    paymentSummary.total <= 0 &&
+    paymentSummary.prepaidAmount > 0;
+
+  const changeDue = useMemo(() => {
+    const received = Number(receivedAmount);
+    const rounding = roundingInput ? Math.max(0, round2(Number(roundingInput) || 0)) : 0;
+    const due = Math.max(0, paymentSummary.total - rounding);
+    if (!Number.isFinite(received) || received <= 0) return 0;
+    return Math.max(0, received - due);
+  }, [receivedAmount, roundingInput, paymentSummary.total]);
+  const selectedTableStatus = activeTableId ? tableOrderMap.get(activeTableId)?.status ?? "idle" : "idle";
+  const isAddOnOrder = activeOrder?.status === "sent_to_kitchen";
+  const orderedItemQtyMap = (() => {
+    const map = new Map<string, number>();
+    for (const row of baseOrderItems) {
+      const key = itemIdentity(row);
+      map.set(key, (map.get(key) ?? 0) + row.quantity);
+    }
+    return map;
+  })();
+
+  /**
+   * 結帳目標解析 —— 🔴 2026-09-14 修：**唔可以再「全店掃第一張可結帳單」**。
+   *
+   * 【實案】A03 嘅掃碼堂食單係 `paid` ＋ 真枱 ＋ `prepaidAmount`，但舊
+   * `isSettleableOrder()` 要求 `onlineOrderId`（掃碼單冇）→ 判佢唔可結帳 →
+   * 結帳入口最後一重 fallback `orders.find((order) => isSettleableOrder(order))`
+   * 就喺**全店**揀咗另一張單 → 收銀以為結 A03，實際錢／狀態寫咗落**第二張枱**。
+   *
+   * 規則本體收喺**純函式** `@/lib/pos/settle-target`（有回歸測試鎖住「永不跨枱」），
+   * 呢度只負責餵 component state（快餐哨兵 `__cart__` 一律當「冇指定」）。
+   */
+  function resolveSettleTargetOrder(explicitId?: string | null): PosOrder | null {
+    return resolveSettleTargetOrderCore({
+      orders,
+      explicitId: explicitId && explicitId !== CART_PAYING_ID ? explicitId : null,
+      activeOrder,
+      workspaceOrder,
+      activeTableId,
+    });
+  }
+
+  /**
+   * 結帳失敗提示用：列出**本枱**所有單嘅狀態（冇單 → 「冇單」）。
+   *
+   * 目的：唔靠 devtools 都可以一眼睇到「枱上有單但解析唔到目標」嘅真因
+   * （實案：A03 明明有 `paid` 單，舊版 `isSettleableOrder()` 唔認 → 彈
+   * 「目前沒有待結帳訂單」，但完全冇線索指向邊張單出咗事）。
+   */
+  function describeTableOrderStates(): string {
+    const rows = activeTableId ? orders.filter((order) => order.tableId === activeTableId) : [];
+    if (rows.length === 0) return "冇單";
+    return rows.map((order) => order.status).join("／");
+  }
+
+  /** 揀唔到結帳目標時嘅提示（帶本枱狀態，方便即場判斷係「真係冇單」定「判準唔認」）。 */
+  function noSettleTargetMessage(): string {
+    return `目前沒有待結帳訂單（${activeTable?.name ?? "本枱"}：${describeTableOrderStates()}）。`;
+  }
+
+  function persistOrders(nextOrders: PosOrder[]) {
+    setOrders(nextOrders);
+    saveOrders(nextOrders);
+  }
+
+  function persistQueue(nextQueue: QueueEvent[]) {
+    setQueue(nextQueue);
+    saveQueue(nextQueue);
+  }
+
+  function persistPrintJobs(nextPrintJobs: PrintJob[]) {
+    // 以 localStorage 為真源合併，保留已派發（sent / failed）狀態。
+    // 否則 stale React state（flush worker 改咗 localStorage 但冇 update state）會將已打印嘅
+    // job 復活成 pending，下一次 flush 又印一次 → 無限重複打印同一張單（見 2026-08-25 修復）。
+    // 合併邏輯抽出做純函式 mergePrintJobs（src/lib/pos/print-job-merge.ts），backfill 同處重用。
+    const merged = mergePrintJobs(loadPrintJobs(), nextPrintJobs, loadClearedPrintJobIds());
+    setPrintJobs(merged);
+    savePrintJobs(merged);
+    // Dispatch event 令 Print Center UI 即時刷新（唔靠下次 route 切換先 reload）
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("pos-print-jobs-changed"));
+    }
+  }
+
+  function loadOrderIntoWorkspace(order: PosOrder | null, tableId: string) {
+    setActiveTableId(tableId);
+    setActiveOrderId(order?.id ?? null);
+    setPayingOrderId(null);
+    setCartItems(order?.items ?? []);
+    setSelectedItemId("");
+    // 由已存 discountAmount 反向配對折扣預設（金額吻合先用 preset，否則重置為冇折扣）。
+    setDiscountValue(
+      matchDiscountId(localSettings.discounts, order?.total ?? 0, order?.discountAmount ?? 0),
+    );
+    // 折扣備註跟住訂單還原：返結 / 重開舊單時，之前填嘅原因要跟返嚟（唔使重新揀）。
+    // 舊單（功能上線前）冇呢個值 → ""，重新結帳時會被結帳閘要求補填。
+    setDiscountNote(order?.discountNote ?? "");
+    setReceivedAmount("");
+    setRoundingInput("");
+    setVoidedItems(order?.voidedItems ?? []);
+    setBaseOrderItems(order?.status === "sent_to_kitchen" ? order.items : []);
+    setOrderNote(order?.orderNote ?? "");
+    resetMemberCheckoutState();
+    setSelectedPaymentMethod("");
+  }
+
+  /**
+   * 桌台卡片 click 入口：空閒枱 → 彈開桌窗揀入座人數；有單枱 → 載入工作台。
+   */
+  function selectTable(tableId: string) {
+    const existing = tableOrderMap.get(tableId);
+    if (!existing) {
+      // 🔴 未開工：空閒枱 = 開新枱落單 → 擋。有單枱照樣可以入去睇
+      //    （加菜／下單／結帳各自有閘），即「先睇數」唔會被擋。
+      // 🔴 G2（2026-09-21）：店已暫停營業一樣要擋（呢個係「開新生意」）。
+      if (!ensureStoreOpenForNewBusiness() || !ensureShiftOpened()) return;
+      // 空閒枱 → 彈開桌窗揀入座人數，唔直接入點餐
+      setOpenTablePartySize(1);
+      setOpenTableModalTableId(tableId);
+      return;
+    }
+    loadOrderIntoWorkspace(existing, tableId);
+    setPosMode("order");
+  }
+
+  function confirmOpenTable(resolvedSize?: number) {
+    const tableId = openTableModalTableId;
+    if (!tableId) return;
+    // 🔴 未開工禁止開枱落單（落單閘：ensureShiftOpened）。
+    // 🔴 G2（2026-09-21）：店已暫停營業一樣要擋。
+    if (!ensureStoreOpenForNewBusiness() || !ensureShiftOpened()) return;
+    // 按鈕本身已限制 1..座位數；呢度再 clamp 一次（座位數中途被改細 / fallback 枱）防超座。
+    const capacity = visibleTables.find((tbl) => tbl.id === tableId)?.capacity;
+    const maxSeats = capacity && capacity > 0 ? capacity : OPEN_TABLE_FALLBACK_MAX_SEATS;
+    const size = Math.min(resolvedSize ?? (openTablePartySize > 0 ? openTablePartySize : 1), maxSeats);
+    setSeatedPartySizes((current) => ({ ...current, [tableId]: size }));
+    setOpenTableModalTableId(null);
+    loadOrderIntoWorkspace(null, tableId);
+    setPosMode("order");
+  }
+
+  function resolveExistingOrderForUpsert(options?: { forceNewOrder?: boolean }) {
+    if (!activeTable) return null;
+    if (options?.forceNewOrder && isQuickMode && activeTable.id === "counter") {
+      return null;
+    }
+    if (activeOrderId) {
+      const byId = orders.find(
+        (order) =>
+          order.id === activeOrderId &&
+          order.status !== "settled" &&
+          order.status !== "cancelled" &&
+          order.status !== "partially_refunded" &&
+          order.status !== "refunded",
+      );
+      if (byId) {
+        /**
+         * 🛡️ 快餐 counter：**已收款單唔可以做 upsert 目標**（2026-09-12）。
+         *
+         * 實案（用戶反映「已結帳」閃一下變返「未結帳」）：快餐流程可以
+         *   落單 → 結帳（`status: "paid"`）→ 喺 strip 撳返張卡載入點餐頁 → 再撳「下單」。
+         * 此時 `activeOrderId` 指向嗰張 paid 單，`upsertCurrentOrder()` 會寫
+         * `status: "sent_to_kitchen"` —— **整個付款維度被打返未收款**，UI 就由「已結帳」
+         * 跳返「未結帳」，雲端 `paid` 亦被覆蓋。
+         *
+         * 口徑同堂食單一致（下面 `mapped?.status === "paid" → return null`，即開新單）：
+         * 已收款單再加菜 = 另一張要再收錢嘅單，唔可以偷改原本嗰張。
+         *
+         * ⚠️ 一定要 `return null`，**唔可以**就咁放行落下面嘅「快餐 counter 可並存多張
+         * 已收款單」分支 —— 嗰個分支會搵任意一張未送廚嘅 counter 單嚟合併，
+         * 結果就係「加菜落咗隔籬張單」。
+         */
+        const quickCounterPaid =
+          isQuickMode && activeTable.id === "counter" && byId.status === "paid";
+        if (quickCounterPaid) return null;
+        return byId;
+      }
+    }
+    // 快餐 counter 可並存多張已收款單；僅合併未送廚的 draft / sent_to_kitchen
+    if (isQuickMode && activeTable.id === "counter") {
+      return (
+        orders.find(
+          (order) =>
+            order.tableId === "counter" &&
+            !order.onlineOrderId &&
+            (order.status === "draft" || order.status === "sent_to_kitchen"),
+        ) ?? null
+      );
+    }
+    const mapped = tableOrderMap.get(activeTable.id) ?? null;
+    if (mapped?.status === "paid") return null;
+    return mapped;
+  }
+
+  function upsertCurrentOrder(
+    nextStatus: "draft" | "sent_to_kitchen",
+    allowEmpty = false,
+    newLocalOrderNo?: string,
+    options?: { forceNewOrder?: boolean },
+  ) {
+    if (!bootstrap || !activeTable) return null;
+    if (!allowEmpty && cartItems.length === 0) return null;
+
+    const timestamp = new Date().toISOString();
+    const baseTotals = orderTotals(cartItems, bootstrap);
+    const existingOrder = resolveExistingOrderForUpsert(options);
+
+    const sequenceKind = isQuickMode ? quickTypeKind() : "pos";
+    const sequencePrefix = isQuickMode ? quickTypeTableName() : "訂單";
+    // B1（docs/56）：fallback 唔再用隨機時戳末兩位（會出「訂單84」呢類非順序號），
+    // 改用本地按 日期+kind 遞增嘅每日序號，保證 fallback 都單調易讀、同 server 序號對齊。
+    //
+    // 2026-09-10 修（同一單號出現兩次，實例 `訂單03` 一 cancelled 一 settled）：
+    //   1. **只喺真正要派新號時才消耗本地序號** —— 以前每次 upsert（包括改單）都燒一個，
+    //      令本機計數器跑贏 server 計數器，之後任何 fallback 都容易撞號。
+    //   2. 傳入「眼前已用過嘅最大序號」做下限（連 server 派嘅號一齊計）——
+    //      即使 localStorage 被 iOS 清走、計數器歸零，fallback 都唔會重用已出現過嘅號。
+    const fallbackNo = existingOrder
+      ? ""
+      : nextLocalDailyOrderNo(
+          sequenceKind,
+          sequencePrefix,
+          maxUsedDailyOrderSeq([...loadOrders(), ...orders], sequencePrefix),
+        );
+
+    /**
+     * 🔴🔴 2026-09-14 加菜修復：**已收款單（`paid`）加菜唔可以將狀態打返
+     * `sent_to_kitchen`**（未收款 open 狀態）。
+     *
+     * 實案（J：「商家加菜後 `order.items` 冇更新，金額欄有更新」）：
+     * 掃碼／線上堂食單喺 Ledger 已收錢 → 排位後本地係 `paid`（`prepaidAmount` = 已收）。
+     * 商家加菜時舊寫法無條件寫 `status: nextStatus`（＝`sent_to_kitchen`）：
+     *   1. **雲端拒收**：`/api/pos/sync` 嘅「付款階段單向閘」（`paid` 唔可以被未收款
+     *      open snapshot 覆蓋，2026-09-12）→ 整條 `ORDER_UPDATED` 被 skip
+     *      （`applied:false, reason:"paid-downgrade"`）→ **`items` 永遠上唔到雲**，
+     *      只有之後 `ORDER_SETTLED` 嘅**金額 patch** 入到去（佢按設計唔重寫 `items`，
+     *      見 docs/83 §ORDER_SETTLED）→ 雲端/其他端出現「1 項但總額 160」嘅矛盾單，
+     *      一旦經 realtime / backfill merge 返本機（`mergeOrderLists` 係整張 LWW 覆蓋），
+     *      連本機啱嘅 `items` 都被蓋走 → 收據／訂單詳情少一項。
+     *   2. **本地狀態倒退**：`paid` 變返未收款 → 桌台卡由綠色「已結帳 / 待收尾」
+     *      彈返橙色「已下單」，同 `prepaidAmount` 語義自相矛盾。
+     *
+     * 語義上保留 `paid` 係正確嘅：加菜只係**加內容**，錢已經收咗（差額另外結帳），
+     * 同 `resolveExistingOrderForUpsert()` 對快餐 counter 已收款單「唔可以偷改原本嗰張」、
+     * 同 sync route 對匿名加菜「沿用 DB 現有 `status`」係**同一口徑**。
+     *
+     * ⚠️ 打印行為唔變：`isAddOnOrder`（決定票種 `addon`）本來就只認
+     * `sent_to_kitchen`，`paid` 單一向行「normal」全單票 —— 呢個改動只係將
+     * 本地狀態寫返同雲端一致。
+     *
+     * ⚠️ 亦唔可以順手清 `fulfillmentStatus`：線上單排位後係 `preparing`，
+     * 舊寫法喺非快餐分支硬寫 `undefined` 會連出餐狀態一齊抹走。
+     */
+    /**
+     * 🔴🔴 2026-09-18 返結修復：**`reopened` 同 `paid` 一樣，唔可以被打返
+     * `sent_to_kitchen`**。
+     *
+     * 上面（2026-09-14）只認 `paid`，漏咗 `reopened`（返結單）。實案（表嫂美食 09-18）：
+     *   訂單02 結帳 44 → 撳返結（`status: "reopened"`，帶 temp 枱）→ 加 2 個菜
+     *   → 重結。重結前會先 `upsertCurrentOrder("sent_to_kitchen")` 落加菜，
+     *   而 `reopened` 唔喺豁免名單 → 寫成 `sent_to_kitchen`（未收款 open snapshot）
+     *   → 雲端「付款階段單向閘」判 `paid-downgrade` 拒收整條 `ORDER_UPDATED`
+     *   → 加嘅菜（盒×4/袋×4）**永遠上唔到雲**，只剩 `ORDER_SETTLED` 嘅金額 patch
+     *   → 雲端停留「舊數量（盒×3/袋×3）+ 新金額」，報表／交班讀雲端就出 42，
+     *     而實體收據（本機印）係 44 → 商家永遠見到對唔上嘅數。
+     *
+     * 語義上保留 `reopened` 係正確嘅：
+     *   - `reopened` 本身就係「終態 → open」嘅**合法反轉**（見 `pos-order-filters.ts`
+     *     嘅返結守門、`sync/route.ts` 嘅 `reopened` 例外），佢唔係「未收款」，
+     *     而係「已收過錢、但被退回編輯」→ 唔應該被當成全新未收款單；
+     *   - 加菜只係**加內容**，唔改變「呢張單已經收過錢／曾結帳」嘅事實；
+     *   - 保留 `reopened` 之後，重結嗰刻 `confirmPayment` 會正式寫 `settled`
+     *     （見 `applyPaymentToOrder`）→ 狀態機仍然係 reopened → settled 正常前進。
+     *
+     * ⚠️ 唔可以順手清 `reopenedAt` / `reopenCount` / `reopenReason`：
+     *   嗰三個係**返結審計欄**，重結時由 `applyPaymentToOrder` 原樣承襲
+     *   （「重結不重置」）→ 「已返結」標籤要靠佢哋才顯示得返。
+     */
+    const keepPaidStatus =
+      existingOrder?.status === "paid" || existingOrder?.status === "reopened";
+
+    const order: PosOrder = existingOrder
+      ? {
+          ...existingOrder,
+          tableId: activeTable.id,
+          tableName: isQuickMode ? quickTypeTableName() : activeTable.name,
+          partySize: existingOrder.partySize ?? seatedPartySizes[activeTable.id],
+          status: keepPaidStatus ? existingOrder.status : nextStatus,
+          sentToKitchenAt:
+            nextStatus === "sent_to_kitchen"
+              ? existingOrder.sentToKitchenAt ?? timestamp
+              : existingOrder.sentToKitchenAt,
+          fulfillmentStatus: keepPaidStatus
+            ? existingOrder.fulfillmentStatus
+            : isQuickMode && activeTable.id === "counter"
+              ? nextStatus === "sent_to_kitchen"
+                ? "preparing"
+                : existingOrder.fulfillmentStatus
+              : undefined,
+          items: cartItems,
+          orderNote,
+          subtotal: baseTotals.subtotal,
+          serviceChargeAmount: baseTotals.serviceChargeAmount,
+          taxAmount: baseTotals.taxAmount,
+          discountAmount,
+          total: Math.max(0, baseTotals.total - discountAmount),
+          voidedItems,
+          updatedAt: timestamp,
+        }
+      : {
+          id: uid("order"),
+          localOrderNo: newLocalOrderNo ?? fallbackNo,
+          tableId: activeTable.id,
+          tableName: isQuickMode ? quickTypeTableName() : activeTable.name,
+          partySize: seatedPartySizes[activeTable.id],
+          status: nextStatus,
+          sentToKitchenAt: nextStatus === "sent_to_kitchen" ? timestamp : undefined,
+          fulfillmentStatus: isQuickMode && activeTable.id === "counter" ? "preparing" : undefined,
+          items: cartItems,
+          orderNote,
+          subtotal: baseTotals.subtotal,
+          serviceChargeAmount: baseTotals.serviceChargeAmount,
+          taxAmount: baseTotals.taxAmount,
+          discountAmount,
+          total: Math.max(0, baseTotals.total - discountAmount),
+          voidedItems: [],
+          source: "pos",
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        };
+
+    const baseline = mergeOrderLists(loadOrders(), orders);
+    const nextOrders = existingOrder
+      ? baseline.map((current) => (current.id === order.id ? order : current))
+      : [order, ...baseline.filter((current) => current.id !== order.id)];
+
+    persistOrders(nextOrders);
+    setActiveOrderId(order.id);
+    return order;
+  }
+
+  // 開台：本輪需求中不再在點餐界面提供入口（桌台點入即可開始操作）
+
+  function backToTables() {
+    if (isQuickMode) return;
+    setPosMode("tables");
+    setCartItems([]);
+    setSelectedItemId("");
+    setDiscountValue("0");
+    setDiscountNote("");
+    setReceivedAmount("");
+    setRoundingInput("");
+    setPayingOrderId(null);
+    setActiveOrderId(null);
+    setBaseOrderItems([]);
+    setVoidedItems([]);
+    setOrderNote("");
+    resetMemberCheckoutState();
+    setSelectedPaymentMethod("");
+    setRuntimeRefreshTick((current) => current + 1);
+  }
+
+  function serializeSpecs(item: OrderItem) {
+    return (item.selectedSpecs ?? [])
+      .map((spec) => `${spec.groupId}:${spec.optionId}`)
+      .sort()
+      .join("|");
+  }
+
+  function specText(item: OrderItem) {
+    return (item.selectedSpecs ?? []).map((spec) => spec.optionLabel).join(" / ");
+  }
+
+  function priceWithSpecs(item: MenuItem, selectedSpecs: OrderItem["selectedSpecs"] = []) {
+    // 若菜品層有折扣，揀菜價 (`item.price`) 已經係折後；OrderItem.price 改寫原價 +
+    // 單獨保存 discountRate（落單 §菜品折扣 v1 §B 方案），令收據 / 對帳可以分得出
+    // 「原價合計」與「折後價」。spec delta 一律加落原價 base — 規格加錢屬菜品本身，
+    // 唔再二次打折。
+    const specDelta = selectedSpecs.reduce((sum, spec) => sum + spec.priceDelta, 0);
+    if (item.discountRate != null && item.discountRate > 0 && item.discountRate < 100) {
+      const basePrice = item.originalPrice ?? item.price;
+      return basePrice + specDelta;
+    }
+    return item.price + specDelta;
+  }
+
+  /**
+   * 揀菜時由菜品層折扣推到 OrderItem 折扣率。已下單菜（cart 中嘅 baseOrderItems）由
+   * `isOrderNoteLocked` 守住，呢個 helper 只用嚟 commit 新 cart line。
+   */
+  function menuItemDiscountRate(item: MenuItem): number | undefined {
+    if (item.discountRate != null && item.discountRate > 0 && item.discountRate < 100) {
+      return item.discountRate;
+    }
+    return undefined;
+  }
+
+  function buildSelectedSpecs(
+    specGroups: MenuSpecGroup[],
+    selectedMap: Record<string, string[]>,
+  ): OrderItem["selectedSpecs"] {
+    return specGroups
+      .flatMap((group) => {
+        const selectedIds = selectedMap[group.id] ?? [];
+        return group.options
+          .filter((candidate) => selectedIds.includes(candidate.id))
+          .map((option) => ({
+            groupId: group.id,
+            groupName: group.name,
+            optionId: option.id,
+            optionLabel: option.label,
+            priceDelta: option.priceDelta,
+          }));
+      })
+      .filter((item): item is NonNullable<OrderItem["selectedSpecs"]>[number] => Boolean(item));
+  }
+
+  function itemIdentity(item: OrderItem) {
+    return `${item.menuItemId}|${serializeSpecs(item)}|${item.price}|${item.note ?? ""}`;
+  }
+
+  function refundedItemQtyMap(order: PosOrder) {
+    const result = new Map<string, number>();
+    for (const record of order.refundRecords ?? []) {
+      for (const item of record.items ?? []) {
+        result.set(item.itemKey, (result.get(item.itemKey) ?? 0) + item.quantity);
+      }
+    }
+    return result;
+  }
+
+  function commitMenuItem(
+    item: MenuItem,
+    selectedSpecs: OrderItem["selectedSpecs"] = [],
+    overridePrice?: number,
+  ) {
+    const isMarket = typeof overridePrice === "number";
+    const finalPrice = isMarket ? overridePrice : priceWithSpecs(item, selectedSpecs);
+    const targetPrinterGroup = localSettings.menuPrinterOverrides[item.id] ?? item.printerGroup;
+    setCartItems((current) => {
+      const remaining = soldOutMap[item.id]?.remainingQty;
+      if (typeof remaining === "number" && remaining >= 0) {
+        const totalInCart = current.filter((row) => row.menuItemId === item.id).reduce((sum, row) => sum + row.quantity, 0);
+        if (totalInCart + 1 > remaining) {
+          setToast({ tone: "info", message: `只剩 ${remaining} 份，不能再加。` });
+          return current;
+        }
+      }
+
+      // 時價菜：每次落單都係獨立一行，唔可以同其他價錢合併
+      if (isMarket) {
+        return [
+          ...current,
+          {
+            menuItemId: item.id,
+            name: item.name,
+            quantity: 1,
+            price: finalPrice,
+            printerGroup: targetPrinterGroup,
+            selectedSpecs,
+          },
+        ];
+      }
+
+      const discountRate = menuItemDiscountRate(item);
+      const existing = current.find(
+        (cartItem) => cartItem.menuItemId === item.id && serializeSpecs(cartItem) === serializeSpecs({
+          menuItemId: item.id,
+          name: item.name,
+          quantity: 1,
+          price: finalPrice,
+          printerGroup: targetPrinterGroup,
+          selectedSpecs,
+        }) && (orderedItemQtyMap.get(itemIdentity(cartItem)) ?? 0) <= 0,
+      );
+      if (existing) {
+        return current.map((cartItem) =>
+          cartItem.menuItemId === item.id && serializeSpecs(cartItem) === serializeSpecs({
+            menuItemId: item.id,
+            name: item.name,
+            quantity: 1,
+            price: finalPrice,
+            printerGroup: targetPrinterGroup,
+            selectedSpecs,
+          })
+            ? {
+                ...cartItem,
+                quantity: cartItem.quantity + 1,
+                // 菜品層折扣由 menu 加返嘅情況：補返 discountRate 落 existing line（單向 upgrade），
+                // 已下單菜嘅折扣被 §84 鎖（isOrderNoteLocked）守住，呢個 cart line 唔受影響。
+                ...(discountRate != null && cartItem.discountRate == null ? { discountRate } : {}),
+              }
+            : cartItem,
+        );
+      }
+
+      return [
+        ...current,
+        {
+          menuItemId: item.id,
+          name: item.name,
+          quantity: 1,
+          price: finalPrice,
+          printerGroup: targetPrinterGroup,
+          selectedSpecs,
+          // 菜品層折扣自動帶落 OrderItem；已下單菜嘅折扣係 §84 鎖定範圍，
+          // 但呢度 commitMenuItem 只產生新 cart line，舊 line 由 `isOrderNoteLocked` 守住。
+          ...(discountRate != null ? { discountRate } : {}),
+        },
+      ];
+    });
+    setSelectedItemId(item.id);
+  }
+
+  function openSpecPicker(
+    item: MenuItem,
+    editingKey?: string,
+    currentSpecs?: Record<string, string[]>,
+  ) {
+    setSpecModalItem(item);
+    setSpecEditingKey(editingKey ?? null);
+    setSelectedSpecValues(currentSpecs ?? {});
+    setSpecModalOpen(true);
+  }
+
+  function applySpecSelection(specMap: Record<string, string[]>) {
+    if (!specModalItem) return;
+    const selectedSpecs = buildSelectedSpecs(specModalItem.specGroups ?? [], specMap);
+    const nextPrice = priceWithSpecs(specModalItem, selectedSpecs);
+
+    if (specEditingKey) {
+      // 資料層防線：已下單嘅菜唔准改規格。規格同 note 一樣係 itemIdentity 一部分，
+      // 改咗會令「已下單」標記失效、退菜彈「尚未正式下單」，而且廚房單唔會補印。
+      if ((orderedItemQtyMap.get(specEditingKey) ?? 0) > 0) {
+        setToast({ tone: "info", message: ITEM_SPEC_LOCKED_MESSAGE });
+      } else {
+        setCartItems((current) =>
+          current.map((row) =>
+            itemIdentity(row) === specEditingKey ? { ...row, selectedSpecs, price: nextPrice } : row,
+          ),
+        );
+      }
+    } else if (specThenMarketPrice) {
+      setMarketPriceSpecs(selectedSpecs ?? []);
+      setMarketPriceValue("");
+      setMarketPriceItem(specModalItem);
+    } else {
+      commitMenuItem(specModalItem, selectedSpecs);
+    }
+
+    setSpecModalOpen(false);
+    setSpecModalItem(null);
+    setSpecEditingKey(null);
+    setSelectedSpecValues({});
+    setSpecThenMarketPrice(false);
+  }
+
+  function openItemNoteEditor(item: OrderItem) {
+    if (isReadOnlySettled) return;
+    // 已下單（送咗廚房）嘅菜：備註喺送出嗰刻已固定，唔可以再改。
+    if ((orderedItemQtyMap.get(itemIdentity(item)) ?? 0) > 0) {
+      setToast({ tone: "info", message: ORDER_NOTE_LOCKED_MESSAGE });
+      return;
+    }
+    setNoteDraft(item.note ?? "");
+    setNoteModal({ type: "item", itemKey: itemIdentity(item) });
+  }
+
+  /**
+   * 資料層防線：就算 UI 入口被繞過（日後新增入口 / 深層呼叫），已下單嘅菜都唔准改備註。
+   * 否則改咗會寫入 order.items 同步去後台同收據，但廚房單唔會補印 → 廚房同帳目對唔上；
+   * 而且 note 係 itemIdentity 一部分，改咗會令「已下單」標記消失、退菜失敗。
+   * @returns 係咪成功寫入（false = 被鎖定擋咗）
+   */
+  function applyItemNote(itemKey: string, note: string): boolean {
+    if ((orderedItemQtyMap.get(itemKey) ?? 0) > 0) {
+      setToast({ tone: "info", message: ORDER_NOTE_LOCKED_MESSAGE });
+      return false;
+    }
+    setCartItems((current) =>
+      current.map((item) => (itemIdentity(item) === itemKey ? { ...item, note: note.trim() } : item)),
+    );
+    return true;
+  }
+
+  /**
+   * 單品折扣：rate = 百分比（80 = 8 折）；undefined = 移除折扣。
+   * discountRate 唔係 itemIdentity 一部分，已下單菜品都改得。
+   *
+   * `note` = 折扣備註原因（2026-09-11）。移除折扣時**必須**連原因一齊清，
+   * 否則會留低一個「冇折扣但有原因」嘅孤兒備註，報表會顯示錯誤嘅折扣來源。
+   */
+  function applyItemDiscount(itemKey: string, rate: number | undefined, note?: string) {
+    setCartItems((current) =>
+      current.map((item) =>
+        itemIdentity(item) === itemKey
+          ? {
+              ...item,
+              discountRate: rate == null || !Number.isFinite(rate) ? undefined : rate,
+              discountNote:
+                rate == null || !Number.isFinite(rate)
+                  ? undefined
+                  : note?.trim() || item.discountNote,
+            }
+          : item,
+      ),
+    );
+  }
+
+  /** 開「折扣備註」彈窗（未落實折扣；確認之後才真正套用）。 */
+  function requestDiscountNote(
+    request: { kind: "whole"; presetId: string } | { kind: "item"; itemKey: string; rate: number },
+    initialNote: string,
+  ) {
+    setDiscountNoteDraft(initialNote);
+    setDiscountNoteRequest(request);
+  }
+
+  /** 確認折扣備註 → 真正落實折扣（全單 / 單品）。原因必填，空白掣係 disabled，呢度再守一次。 */
+  function confirmDiscountNote() {
+    const reason = discountNoteDraft.trim();
+    if (!reason || !discountNoteRequest) return;
+    if (discountNoteRequest.kind === "whole") {
+      setDiscountValue(discountNoteRequest.presetId);
+      setDiscountNote(reason);
+    } else {
+      applyItemDiscount(discountNoteRequest.itemKey, discountNoteRequest.rate, reason);
+    }
+    setDiscountNoteRequest(null);
+    setDiscountNoteDraft("");
+  }
+
+  /** 取消折扣備註 = 當作冇折過（折扣復原，維持原值）。 */
+  function cancelDiscountNote() {
+    setDiscountNoteRequest(null);
+    setDiscountNoteDraft("");
+  }
+
+  /**
+   * 揀「全單折扣」下拉：有折扣就一定要原因 → 開彈窗（呢一刻**唔落實**折扣）。
+   * 揀「冇折扣」/ 100%（冇折扣）→ 直接清折扣同原因，唔使彈窗。
+   */
+  function selectWholeOrderDiscount(nextId: string) {
+    const preset = findDiscountPreset(localSettings.discounts, nextId);
+    if (!preset || !Number.isFinite(preset.rate) || preset.rate >= 100) {
+      setDiscountValue("");
+      setDiscountNote("");
+      return;
+    }
+    requestDiscountNote({ kind: "whole", presetId: nextId }, discountNote);
+  }
+
+  /**
+   * 單品折扣彈窗「保存」：有折扣 → 先關編輯器再彈原因彈窗（取消 = 唔改）。
+   * 揀「冇折扣」→ 直接移除（唔需要原因）。
+   */
+  function saveItemDiscount(itemKey: string, draftId: string) {
+    const preset = findDiscountPreset(localSettings.discounts, draftId);
+    const existingNote = cartItems.find((item) => itemIdentity(item) === itemKey)?.discountNote ?? "";
+    if (!preset || !Number.isFinite(preset.rate) || preset.rate >= 100) {
+      applyItemDiscount(itemKey, undefined, undefined);
+      setItemDiscountEditor(null);
+      return;
+    }
+    setItemDiscountEditor(null);
+    requestDiscountNote({ kind: "item", itemKey, rate: preset.rate }, existingNote);
+  }
+
+  function addMenuItem(item: MenuItem) {
+    if (isReadOnlySettled) return;
+    // 🔴 未開工禁止加菜／落單（落單閘：ensureShiftOpened）。
+    // 🔴 G2（2026-09-21）：店已暫停營業一樣要擋（加菜＝新生意）。
+    if (!ensureStoreOpenForNewBusiness() || !ensureShiftOpened()) return;
+    if (isItemSoldOut(item.id)) {
+      setToast({ tone: "info", message: `${item.name} 已售罄。` });
+      return;
+    }
+    if (item.isMarketPrice) {
+      if (item.specGroups?.length) {
+        setSpecThenMarketPrice(true);
+        openSpecPicker(item);
+        return;
+      }
+      setMarketPriceSpecs([]);
+      setMarketPriceValue("");
+      setMarketPriceItem(item);
+      return;
+    }
+    setSpecThenMarketPrice(false);
+    if (item.specGroups?.length) {
+      openSpecPicker(item);
+      return;
+    }
+
+    commitMenuItem(item);
+  }
+
+  function confirmMarketPrice() {
+    if (!marketPriceItem) return;
+    const parsed = Number(marketPriceValue);
+    if (!marketPriceValue || Number.isNaN(parsed) || parsed <= 0) {
+      setToast({ tone: "info", message: "請輸入有效的時價金額。" });
+      return;
+    }
+    commitMenuItem(marketPriceItem, marketPriceSpecs, parsed);
+    setMarketPriceItem(null);
+    setMarketPriceValue("");
+    setMarketPriceSpecs([]);
+  }
+
+  function updateQuantity(itemKey: string, delta: number) {
+    if (isReadOnlySettled) return;
+    setCartItems((current) => {
+      const target = current.find((row) => itemIdentity(row) === itemKey);
+      if (!target) return current;
+      if ((orderedItemQtyMap.get(itemKey) ?? 0) > 0) return current;
+
+      if (delta > 0) {
+        const remaining = soldOutMap[target.menuItemId]?.remainingQty;
+        if (typeof remaining === "number" && remaining >= 0) {
+          const totalInCart = current
+            .filter((row) => row.menuItemId === target.menuItemId)
+            .reduce((sum, row) => sum + row.quantity, 0);
+          if (totalInCart + delta > remaining) {
+            setToast({ tone: "info", message: `只剩 ${remaining} 份，不能再加。` });
+            return current;
+          }
+        }
+      }
+
+      return current
+        .map((row) =>
+          itemIdentity(row) === itemKey ? { ...row, quantity: Math.max(0, row.quantity + delta) } : row,
+        )
+        .filter((row) => row.quantity > 0);
+    });
+  }
+
+  function voidOrderedItem(target: OrderItem, mode: "one" | "all", reason: string) {
+    if (!canVoidItem) {
+      showPermissionDenied("退菜");
+      return;
+    }
+    if (!bootstrap || !activeOrder || activeOrder.status !== "sent_to_kitchen") return;
+
+    const key = itemIdentity(target);
+    const orderedQty = orderedItemQtyMap.get(key) ?? 0;
+    if (orderedQty <= 0) {
+      setToast({ tone: "info", message: "這個菜品尚未正式下單，不能退菜。" });
+      return;
+    }
+
+    const voidQty = mode === "one" ? 1 : orderedQty;
+    // 只減「未退菜」嘅線；退菜記錄會另存一份，唔會喺購物車入面消失
+    const reduceQty = (list: OrderItem[]) =>
+      list
+        .map((row) => {
+          if (row.voided || itemIdentity(row) !== key) return row;
+          const nextQty = row.quantity - voidQty;
+          return nextQty > 0 ? { ...row, quantity: nextQty } : null;
+        })
+        .filter((row): row is OrderItem => Boolean(row));
+
+    const nextCartItems = reduceQty(cartItems);
+    const nextBaseItems = reduceQty(baseOrderItems);
+    const session = loadAuthSession();
+    const operator = session?.name ?? session?.account ?? "收銀";
+    const voidedAt = new Date().toISOString();
+    const voidedLine: OrderItem = {
+      ...target,
+      quantity: voidQty,
+      voided: true,
+      voidedAt,
+      voidedReason: reason || "未填寫原因",
+      voidedBy: operator,
+    };
+    const nextVoided = [...voidedItems, voidedLine];
+
+    const nextTotals = orderTotals(nextCartItems, bootstrap);
+    const updatedOrder: PosOrder = {
+      ...activeOrder,
+      items: nextCartItems,
+      voidedItems: nextVoided,
+      subtotal: nextTotals.subtotal,
+      serviceChargeAmount: nextTotals.serviceChargeAmount,
+      taxAmount: nextTotals.taxAmount,
+      total: Math.max(0, nextTotals.total - activeOrder.discountAmount),
+      updatedAt: voidedAt,
+    };
+
+    persistOrders(orders.map((order) => (order.id === activeOrder.id ? updatedOrder : order)));
+    setCartItems(nextCartItems);
+    setBaseOrderItems(nextBaseItems);
+    setVoidedItems(nextVoided);
+
+    // B2/B3（docs/56）：建印 job 前由 localStorage re-fetch 最新 order，取本地真值 localOrderNo，
+    // 唔好直接讀 in-memory activeOrder（state 同 localStorage 唔同步會印錯號，見 8/84 bug）。
+    const authoritativeOrder = loadOrders().find((row) => row.id === activeOrder.id) ?? activeOrder;
+
+    const voidEvent: QueueEvent = {
+      id: uid("evt"),
+      type: "ORDER_ITEM_VOIDED",
+      entityId: activeOrder.id,
+      payload: {
+        orderId: activeOrder.id,
+        menuItemId: target.menuItemId,
+        itemName: target.name,
+        note: target.note ?? null,
+        voidQuantity: voidQty,
+        mode,
+        reason: reason || "未填寫原因",
+      },
+      status: "pending",
+      createdAt: updatedOrder.updatedAt,
+    };
+
+    // 退菜單總開關（2026-09-08）：設備設置 → 打印開關設置可獨立關閉。關閉後退菜唔出廚房
+    // 退菜單，只推事件（報表／庫存仍會記錄）。手動掣（重打整單）唔受影響。
+    const voidJobs = isPrintContentEnabled("void")
+      ? buildVoidPrintJobsForOrder(authoritativeOrder, reason, {
+          itemsOverride: [{ ...target, quantity: voidQty }],
+        })
+      : [];
+    const voidPrintJobs = voidJobs;
+
+    persistPrintJobs([...voidPrintJobs, ...printJobs]);
+    // A3（docs/56）：有啟用打印機但退菜 0 張 job 入隊 → 廚房退菜單唔會打印，提示用家。
+    const voidPrinted = voidPrintJobs.length > 0;
+    const voidConfiguredPrinters = (loadDeviceConfig() ?? defaultDeviceConfig).printers.filter((printer) => printer.enabled);
+    const voidHasZonePrinter = voidConfiguredPrinters.some((p) => p.role === "zone" || p.role === "label");
+    const voidPrintEvents = voidPrintJobs.map<QueueEvent>((printJob) => ({
+      id: uid("evt"),
+      type: "PRINT_JOB_CREATED",
+      entityId: printJob.id,
+      payload: printJob,
+      status: "pending",
+      createdAt: updatedOrder.updatedAt,
+    }));
+
+    pushEvents([voidEvent, ...voidPrintEvents]);
+    setToast({
+      tone: voidPrinted ? "success" : "warning",
+      message: voidPrinted
+        ? mode === "one"
+          ? `已退 1 份 ${target.name}`
+          : `已退掉 ${target.name}`
+        : `${mode === "one" ? `已退 1 份 ${target.name}` : `已退掉 ${target.name}`}，但廚房退菜單未打印（${voidHasZonePrinter ? "菜品分區對唔中打印機" : "未配置分區打印機"}）`,
+    });
+  }
+
+  function updateQuickFulfillment(orderId: string) {
+    const target = orders.find((order) => order.id === orderId) ?? null;
+    if (!target) return;
+    if (target.tableId !== "counter") return;
+    // 幂等防呆（2026-09-12）：`ready` 係單向閘，重複撳唔應該再推事件落 outbox；
+    // 但**一定要出提示**，唔可以靜默 return —— 靜默就係用戶口中「撳完冇反應」。
+    if (isQuickOrderReady(target)) {
+      setToast({ tone: "info", message: `${target.localOrderNo} 已經標記可取餐。` });
+      return;
+    }
+    // docs/87 §6.3：放寬閘門，容許 sent_to_kitchen（自助單先出餐後付款）標記 ready
+    const allowed = new Set<PosOrder["status"]>(["paid", "sent_to_kitchen"]);
+    if (!allowed.has(target.status)) {
+      setToast({
+        tone: "info",
+        message: `${target.localOrderNo}（${localOrderStatusLabel(target)}）唔可以標記可取餐。`,
+      });
+      return;
+    }
+    const updatedAt = new Date().toISOString();
+    const updatedOrder: PosOrder = {
+      ...target,
+      fulfillmentStatus: "ready",
+      servedAt: target.servedAt ?? updatedAt,
+      updatedAt,
+    };
+    persistOrders(orders.map((order) => (order.id === updatedOrder.id ? updatedOrder : order)));
+    pushEvents([
+      {
+        id: uid("evt"),
+        type: "ORDER_UPDATED",
+        entityId: updatedOrder.id,
+        payload: {
+          order: updatedOrder,
+          action: "ready_pickup",
+        },
+        status: "pending",
+        createdAt: updatedAt,
+      },
+    ]);
+    setToast({
+      tone: "success",
+      message: `${updatedOrder.localOrderNo} 已標記可取餐。`,
+    });
+    // 快餐模式採納嘅線上單（帶 onlineOrderId）→ 回寫 Ledger ready，
+    // 否則線上訂單列表永遠停留「製作中」（雙狀態機）。
+    syncOnlineQuickFulfillmentInBackground(updatedOrder, "ready", (message) =>
+      setToast({ tone: "error", message: `已標記可取餐，但會員通狀態未同步：${message}` }),
+    );
+  }
+
+  function voidEntireOrder(reason: string) {
+    if (!canVoidItem) {
+      showPermissionDenied("退菜");
+      return;
+    }
+    if (!bootstrap || !activeOrder || activeOrder.status !== "sent_to_kitchen") return;
+    const uniqueOrderedItems = cartItems.filter((item) => (orderedItemQtyMap.get(itemIdentity(item)) ?? 0) > 0);
+    if (uniqueOrderedItems.length === 0) {
+      setToast({ tone: "info", message: "目前沒有已下單菜品可退。" });
+      return;
+    }
+    const nextCartItems = cartItems.filter((item) => (orderedItemQtyMap.get(itemIdentity(item)) ?? 0) <= 0);
+    const nextBaseItems = baseOrderItems.filter(() => false);
+    const updatedAt = new Date().toISOString();
+    const fullVoidBehavior = localSettings.fullVoidBehavior;
+    const isRefundedRule = fullVoidBehavior === "refunded";
+    const updatedOrder: PosOrder = {
+      ...activeOrder,
+      status: isRefundedRule ? "refunded" : "cancelled",
+      items: nextCartItems,
+      subtotal: 0,
+      serviceChargeAmount: 0,
+      taxAmount: 0,
+      total: 0,
+      cancelledAt: isRefundedRule ? undefined : updatedAt,
+      cancelledReason: isRefundedRule ? undefined : reason || "全部退菜",
+      refundedAt: isRefundedRule ? updatedAt : undefined,
+      refundedAmount: isRefundedRule ? activeOrder.total : activeOrder.refundedAmount,
+      refundedReason: isRefundedRule ? reason || "全部退菜" : activeOrder.refundedReason,
+      updatedAt,
+    };
+    persistOrders(orders.map((order) => (order.id === activeOrder.id ? updatedOrder : order)));
+    // 全部退菜後整單完結，清掉該枱入座人數，避免桌台總覽「空閒」狀態仍顯示舊人數
+    setSeatedPartySizes((current) => {
+      const next = { ...current };
+      delete next[activeOrder.tableId];
+      return next;
+    });
+    setActiveOrderId(null);
+    setCartItems(nextCartItems);
+    setBaseOrderItems(nextBaseItems);
+    setOrderNote("");
+    const voidEvents: QueueEvent[] = [];
+    uniqueOrderedItems.forEach((item) => {
+      const orderedQty = orderedItemQtyMap.get(itemIdentity(item)) ?? 0;
+      if (orderedQty <= 0) return;
+      voidEvents.push({
+        id: uid("evt"),
+        type: "ORDER_ITEM_VOIDED",
+        entityId: activeOrder.id,
+        payload: {
+          orderId: activeOrder.id,
+          menuItemId: item.menuItemId,
+          itemName: item.name,
+          note: item.note ?? null,
+          voidQuantity: orderedQty,
+          mode: "all",
+          reason: reason || "未填寫原因",
+        },
+        status: "pending",
+        createdAt: updatedAt,
+      });
+    });
+    // 退菜單總開關（2026-09-08）：同 voidItem，全單退菜亦跟同一粒掣。
+    const voidPrintJobs = isPrintContentEnabled("void")
+      ? buildVoidPrintJobsForOrder(activeOrder, reason)
+      : [];
+    persistPrintJobs([...voidPrintJobs, ...printJobs]);
+    pushEvents([
+      {
+        id: uid("evt"),
+        type: "ORDER_UPDATED",
+        entityId: updatedOrder.id,
+        payload: {
+          order: updatedOrder,
+          action: isRefundedRule ? "refunded" : "cancelled",
+          reason: reason || "全部退菜",
+          amount: isRefundedRule ? activeOrder.total : undefined,
+        },
+        status: "pending",
+        createdAt: updatedAt,
+      },
+      ...voidEvents,
+      ...voidPrintJobs.map<QueueEvent>((printJob) => ({
+        id: uid("evt"),
+        type: "PRINT_JOB_CREATED",
+        entityId: printJob.id,
+        payload: printJob,
+        status: "pending",
+        createdAt: updatedAt,
+      })),
+    ]);
+    setToast({ tone: "success", message: isRefundedRule ? "已全部退菜，整單已退完。" : "已全部退菜，整單已取消。" });
+  }
+
+  // 退桌：堂食枱客人離場，枱上所有菜作廢並釋放枱位。只接 draft / sent_to_kitchen 且非線上訂單。
+  function findVoidableTableOrder(tableId: string): PosOrder | null {
+    return (
+      orders.find(
+        (order) =>
+          order.tableId === tableId &&
+          order.tableId !== "counter" &&
+          !order.onlineOrderId &&
+          (order.status === "draft" || order.status === "sent_to_kitchen"),
+      ) ?? null
+    );
+  }
+
+  function voidTable(tableId: string, reason: string) {
+    if (!canVoidItem) {
+      showPermissionDenied("退桌");
+      return;
+    }
+    if (!bootstrap) return;
+    const order = findVoidableTableOrder(tableId);
+    if (!order) {
+      setToast({ tone: "info", message: "呢張枱冇可退桌嘅單。" });
+      return;
+    }
+    const updatedAt = new Date().toISOString();
+    const reasonText = reason?.trim() || "退桌";
+    const voidEvents: QueueEvent[] = [];
+    // 只有已送廚房（sent_to_kitchen）嘅菜需要廚房退菜單 + 推單項作廢事件；未下單（draft）嘅菜安靜放棄
+    const sentItems = order.status === "sent_to_kitchen" ? (order.items ?? []) : [];
+    sentItems.forEach((item) => {
+      const orderedQty = item.quantity;
+      if (orderedQty <= 0) return;
+      voidEvents.push({
+        id: uid("evt"),
+        type: "ORDER_ITEM_VOIDED",
+        entityId: order.id,
+        payload: {
+          orderId: order.id,
+          menuItemId: item.menuItemId,
+          itemName: item.name,
+          note: item.note ?? null,
+          voidQuantity: orderedQty,
+          mode: "all",
+          reason: reasonText,
+        },
+        status: "pending",
+        createdAt: updatedAt,
+      });
+    });
+    // 退菜單總開關（2026-09-08）：退桌同樣跟 void toggle。
+    const voidPrintJobs = isPrintContentEnabled("void")
+      ? buildVoidPrintJobsForOrder(order, reasonText, { itemsOverride: sentItems })
+      : [];
+    // 推整單取消事件，server 標為已退/已取消；隨後由本地 orders 移除該單，枱位自動回落空閒
+    const cancelEvent: QueueEvent = {
+      id: uid("evt"),
+      type: "ORDER_UPDATED",
+      entityId: order.id,
+      payload: {
+        order: {
+          ...order,
+          status: "cancelled",
+          items: sentItems,
+          subtotal: 0,
+          serviceChargeAmount: 0,
+          taxAmount: 0,
+          total: 0,
+          cancelledAt: updatedAt,
+          cancelledReason: reasonText,
+          updatedAt,
+        },
+        action: "cancelled",
+        reason: reasonText,
+      },
+      status: "pending",
+      createdAt: updatedAt,
+    };
+    persistPrintJobs([...voidPrintJobs, ...printJobs]);
+    pushEvents([
+      cancelEvent,
+      ...voidEvents,
+      ...voidPrintJobs.map<QueueEvent>((printJob) => ({
+        id: uid("evt"),
+        type: "PRINT_JOB_CREATED",
+        entityId: printJob.id,
+        payload: printJob,
+        status: "pending",
+        createdAt: updatedAt,
+      })),
+    ]);
+    // 本地移除這張單（退桌：直接刪除記錄），枱位因 cancelled 不再計入 openOrders 而變空閒
+    persistOrders(orders.filter((o) => o.id !== order.id));
+    backToTables();
+    setToast({ tone: "success", message: `${order.tableName ?? tableId} 已退桌，枱位已釋放。` });
+  }
+
+  /**
+   * 觸發同步（結帳 / 刪單 / 落單 / 30s 兜底）。
+   *
+   * ## 2026-09-10 重寫（docs/112 M7）——由「第二條推送路徑」改為「叫 flush worker 跑」
+   *
+   * 舊版本質上係一條**同 flush worker 並行嘅第二推送路徑**，而且係壞嘅：
+   *   1. 用 React state 嘅 `queue`（同一 handler 內係 stale 快照）；
+   *   2. 傳入嘅**新事件未經 `withStoreScope()` stamp storeId** → 一入到
+   *      `filterEventsForCurrentStore()` 就被剔走；
+   *   3. 冇先 `refreshPosDeviceTokenIfNeeded()`（憑證 TTL 12h，過期即全部結帳事件被拒）。
+   *
+   * 結果：**註解寫「即時同步結帳狀態」，實際上永遠推唔到啱啱嗰單** —— 真正推上去嘅
+   * 係 `pushEvents()` 觸發嘅 flush worker。更差嘅係兩條路徑都用自己嗰份 stale
+   * queue 快照去 `persistQueue()`，可以將對方啱啱成功剷走嘅事件「復活」再推一次。
+   *
+   * 而家改為：**只負責叫 flush worker 即刻跑**。佢會由 localStorage 讀最新 queue、
+   * 先續期憑證、帶 storeId、處理 per-event 回執（`applied` 語義）、失敗退避。
+   * 單一推送路徑 = 單一事實，亦順手消滅 M7。
+   *
+   * @param nextQueue 可選：caller 啱啱產生嘅事件。若佢哋仲未入隊（例如新加嘅呼叫點
+   *   忘記先 `pushEvents()`），呢度會補做 stamp + 入隊，確保唔會「叫咗同步但冇嘢推」。
+   *   經正常 `pushEvents()` 流程嘅話呢個參數係 no-op。
+   */
+  function syncNow(nextQueue?: QueueEvent[], options?: { silent?: boolean }): Promise<void> {
+    if (nextQueue && nextQueue.length > 0) {
+      const stored = loadQueue();
+      const storedIds = new Set(stored.map((e) => e.id));
+      const missing = nextQueue.filter((e) => !storedIds.has(e.id));
+      if (missing.length > 0) {
+        // 只補未入隊嘅（唔可以成條 queue reset，否則會令 flush 啱啱剷走嘅事件復活）。
+        persistQueue(enqueueEvents(stored, withStoreScope(missing)));
+      }
+    }
+    return flushPosSyncQueue({ silent: options?.silent ?? true });
+  }
+
+  function pushEvents(events: QueueEvent[]) {
+    // 🛡️ 跨店隔離 L1：新建事件 stamp 當前店（只 stamp 新事件，舊 queue 唔掂 ——
+    // 舊事件可能係 server merge 落嚟嘅外店事件，覆寫佢哋嘅 storeId 就係「改姓」）。
+    const stamped = withStoreScope(events);
+    // docs/111：入隊時按 coalesceKey 合併（同 type + 同目標嘅舊 pending 會被取代），
+    // 取代舊版「flush 時同 entityId 淨推最新一條」嘅去重（會留低永久 pending 嘅輸家，
+    // 仲可以令 ORDER_SETTLED 贏過 ORDER_CREATED → 離線單喺雲端消失）。
+    //
+    // 🔴🔴 2026-09-22 修（結帳「有單冇錢」）：base **一定要用 `loadQueue()`**，
+    //    唔可以用 React state `queue`。
+    //
+    // 病徵（生產證據見 tools/_probe-order19*-20260922.out.txt）：
+    //   結帳 handler 同一個 tick 內 `pushEvents()` 會被呼叫**兩次** ——
+    //     ① `pushEvents([paymentEvent])`（ORDER_SETTLED，見 `confirmPayment`）
+    //     ② `printReceipt()` → `enqueuePrintJobs()` → `pushEvents([...printJobEvents])`
+    //   兩次都讀**同一個 render 嘅 `queue` 快照**（`setQueue` 要等 handler 完結先 flush）。
+    //   第 ② 次以「舊快照 + 自己嗰批」重建整條隊列再 `saveQueue()` ⇒
+    //   **第 ① 次啱啱入隊嘅 `ORDER_SETTLED` 被靜默冚走**（事件由未上雲變成唔存在）。
+    //   後果：雲端 `pos_orders` 永遠停留喺 `sent_to_kitchen` ⇒ 報表／交班（純雲端）
+    //   搵唔到嗰張單，收銀端卻顯示「已完成」。
+    //
+    // 同 3602 行 `syncNow()` 嘅註釋係**同一個病根**（當年已修過一次：唔可以攞
+    // stale 嘅 React state queue 做推送根據）—— 呢度係漏咗嘅第二處。
+    // `loadQueue()` 係唯一真源（`persistQueue` 每次都寫落去），以佢做 base 之後
+    // 同一 tick 多次 `pushEvents()` 會正確累加，跨 handler 亦唔會互相覆蓋。
+    const nextQueue = enqueueEvents(loadQueue(), stamped);
+    persistQueue(nextQueue);
+    // 觸發 sync flush worker（見 src/lib/pos/sync-flush.ts）。
+    // 唔 await —— 唔阻 render / 唔阻下一個 handler；flush 係 fire-and-forget。
+    notifyQueueChanged();
+  }
+
+  function quickTypeKind() {
+    if (quickOrderType === "pickup") return "pickup" as const;
+    if (quickOrderType === "delivery") return "delivery" as const;
+    return "counter" as const;
+  }
+
+  function quickTypeTableName() {
+    if (quickOrderType === "pickup") return "自取";
+    if (quickOrderType === "delivery") return "外賣";
+    return "堂食";
+  }
+
+  function reprintOrder(order: PosOrder) {
+    if (!bootstrap) return;
+    // B2/B3（docs/56）：同打印中心「重打整單」一致 —— 由 localStorage re-fetch 最新 order，
+    // 唔好直接印 in-memory order（state 同 localStorage 唔同步會印錯單號）。
+    const authoritativeOrder = loadOrders().find((row) => row.id === order.id) ?? order;
+    const storeName = bootstrap.storeName ?? "門店";
+    const nextPrintJobs = [
+      ...buildKitchenPrintJobs(authoritativeOrder, { ticketType: "normal", storeName, orderNoSuffix: " (重打)" }),
+      ...buildLabelPrintJobs(authoritativeOrder, { ticketType: "normal", storeName, orderNoSuffix: " (重打)" }),
+    ];
+
+    if (nextPrintJobs.length === 0) {
+      // A3（docs/56）：診斷點解 0 張單 → 冇 zone/label 機 vs 分區對唔中。
+      setToast({ tone: "error", message: describeNoKitchenPrinterError() });
+      return;
+    }
+
+    enqueuePrintJobs(nextPrintJobs);
+    setToast({ tone: "success", message: "已加入重打單打印隊列。" });
+  }
+
+  /** 呢啲狀態先有收據可補打（未收款 / 已取消單冇原始單據）。 */
+  function canReprintBill(status: PosOrder["status"]): boolean {
+    return status === "settled" || status === "paid" || status === "partially_refunded" || status === "refunded";
+  }
+
+  /**
+   * 補打帳單（收據）：對已結帳／已付款訂單重新印返張帳單畀客人。
+   *
+   * 同「重打單」唔同：呢度係收據（`buildReceiptPrintJobs` 重建，內容同原單一致），
+   * 唔係廚房／標籤單。手動語義 → 唔受「自動打印」開關影響。
+   */
+  function reprintBillForOrder(order: PosOrder) {
+    const count = reprintReceiptForOrder(order);
+    if (count > 0) {
+      setToast({ tone: "success", message: "已加入補打帳單打印隊列。" });
+      return;
+    }
+    const hasReceiptPrinter = (loadDeviceConfig() ?? defaultDeviceConfig).printers.some(
+      (printer) => printer.enabled && printer.role === "receipt",
+    );
+    setToast({
+      tone: "error",
+      message: hasReceiptPrinter
+        ? "找不到可用的收據打印機，請檢查設備設置。"
+        : "未配置收據打印機，請到設備設置添加。",
+    });
+  }
+
+  // ── 點餐介面 · 打印操作（堂食／外賣模式）──────────────────────────────
+  //
+  // 三件事（2026-09-05）：
+  //   1. 「打印廚房單」：補打一張廚房單，行為等同打印中心「重打整單」。
+  //   2. 「打印收據」：客人要提早拎單據時，即時印一張含當前所有已點項目嘅收據。
+  //   3. 「自動打印」開關：關閉時落單／結帳完全唔出單（手動掣依然照印）。
+
+  /** A3（docs/56）診斷：0 張單嘅兩種成因要分開講，否則用家無從入手。 */
+  function describeNoKitchenPrinterError(): string {
+    const configuredPrinters = (loadDeviceConfig() ?? defaultDeviceConfig).printers.filter(
+      (printer) => printer.enabled,
+    );
+    const hasZonePrinter = configuredPrinters.some((p) => p.role === "zone" || p.role === "label");
+    return hasZonePrinter
+      ? "菜品分區對唔中打印機，廚房單不會打印，請檢查設備設置嘅打印機分區。"
+      : "未配置廚房（分區/標籤）打印機，請到設備設置添加。";
+  }
+
+  /** 把 print jobs 落本機隊列 + 推上雲（PRINT_JOB_CREATED）。回傳入隊張數。
+   *
+   * 🔴 2026-09-22 收口：本函式由「自己再實作一次」改為**委派
+   * `appendPrintJobsWithSync()`**（`@/lib/pos/print-job-enqueue`）—— 全店只准一條
+   * 「落本機 + 上雲」路徑。
+   *
+   * 【病徵】收據（結帳自動 / 「打印收據」掣 / 補打）行呢條自製路徑，
+   * 廚房單（落單）行 `appendPrintJobsWithSync()`。實測（2026-09-22 生產
+   * `pos_print_jobs`）：今日 38 張 job 之中 **35 張 kitchen 全部 `printed`**，
+   * 而 receipt **只有 3 張**（且 `once_key` 全為 NULL ⇒ 全部係人手補打），
+   * 對比 28 張已結帳單 ⇒ 自動結帳收據**一張都冇上過雲**，
+   * 但打印中心照樣顯示綠色「已發送」（本機樂觀狀態）⇒ 客人永遠冇紙、店員零線索。
+   *
+   * 【舊寫法兩個實質差異】
+   *   ① base 用 React state `queue`（同一個 tick 內可能係 stale 快照）——
+   *      同上面 `pushEvents()`／`syncNow()` 嘅病根一樣；
+   *   ② `persistPrintJobs([...kept, ...printJobs])` 帶住一份 stale 嘅 state 陣列，
+   *      同 `persistMergedPrintJobs()`（以 localStorage 為真源 + tombstone 過濾）
+   *      係兩套語義，日後加欄位極容易只改一邊（同「加 pos_orders 欄位要改四條
+   *      讀取路徑」同一類陷阱）。
+   *
+   * 【委派之後仍然做齊】內容唯一鍵去重（`receipt:${reopenCount}` 世代）、
+   * merge 落 localStorage、推 `PRINT_JOB_CREATED`、dispatch
+   * `pos-print-jobs-changed`（打印中心即時刷新）。
+   * 呢度只補一步：同步返 React state，令同一個 tick 嘅畫面即刻一致。 */
+  function enqueuePrintJobs(jobs: PrintJob[]): number {
+    if (jobs.length === 0) return 0;
+    const count = appendPrintJobsWithSync(jobs);
+    setPrintJobs(loadPrintJobs());
+    return count;
+  }
+
+  /** 當前工作台嘅訂單（已落單 / 已結帳都算；冇就 null）。 */
+  function currentWorkspaceTargetOrder(): PosOrder | null {
+    return workspaceOrder ?? activeOrder;
+  }
+
+  /**
+   * 「打印廚房單」掣：訂單已提交後補打一張廚房單（+ 飲品標籤單）。
+   *
+   * 行為對齊打印中心（/prints）嘅「重打整單」：由 localStorage 重新讀最新 order、
+   * 帶 ` (重打)` 後綴、入本機隊列再由 PrintFlushWorker 派出。
+   *
+   * ⚠️ **唔受「自動打印」開關影響** —— 呢粒掣係用家當下嘅明確意圖（用戶確認「手動優先」）。
+   */
+  function printKitchenTicketNow() {
+    if (kitchenPrintSubmitting) return;
+    if (!bootstrap) {
+      setToast({ tone: "error", message: "尚未載入店鋪資料，無法打印。" });
+      return;
+    }
+    // 只補打「工作台入面已提交嘅嗰張單」，語意同打印中心「重打整單」完全一致。
+    // 結完帳嘅單工作台會清空（confirmPayment → setActiveOrderId(null)），
+    // 嗰啲單要去訂單列撳「查看」→「重打整單」，提示要講清楚條路。
+    const target = currentWorkspaceTargetOrder();
+    if (!target) {
+      setToast({
+        tone: "info",
+        message: "目前沒有待處理訂單。請先落單；已結帳嘅單請喺訂單列撳「查看」→「重打整單」。",
+      });
+      return;
+    }
+    if (target.status === "draft") {
+      // 未提交（枱面「未下單」）：廚房根本未收到過單，補打冇意義，要先落單。
+      setToast({ tone: "info", message: "此單尚未落單，請先撳「下單」再補打廚房單。" });
+      return;
+    }
+    if (target.items.length === 0) {
+      setToast({ tone: "info", message: "訂單沒有菜品，無需打印廚房單。" });
+      return;
+    }
+
+    setKitchenPrintSubmitting(true);
+    try {
+      const authoritativeOrder = loadOrders().find((row) => row.id === target.id) ?? target;
+      const storeName = bootstrap.storeName ?? "門店";
+      const jobs = [
+        ...buildKitchenPrintJobs(authoritativeOrder, { ticketType: "normal", storeName, orderNoSuffix: " (重打)" }),
+        ...buildLabelPrintJobs(authoritativeOrder, { ticketType: "normal", storeName, orderNoSuffix: " (重打)" }),
+      ];
+      if (jobs.length === 0) {
+        setToast({ tone: "error", message: describeNoKitchenPrinterError() });
+        return;
+      }
+      enqueuePrintJobs(jobs);
+      setToast({ tone: "success", message: `已補打廚房單（${authoritativeOrder.localOrderNo}）。` });
+    } catch {
+      // 寫唔到 localStorage（quota / 私隱模式）→ 一定要出聲，唔可以靜默吞掉。
+      setToast({ tone: "error", message: "加入打印隊列失敗，請檢查瀏覽器儲存空間後再試。" });
+    } finally {
+      setKitchenPrintSubmitting(false);
+    }
+  }
+
+  /**
+   * 「打印收據」掣：客人想提早拎單據時，即時印一張含**當前所有已點項目**嘅收據。
+   *
+   * 同結帳收據（`printReceipt`）嘅差別：結帳收據印嘅係**已落單**嘅 `order.items`；
+   * 呢粒掣要印「購物車當下嘅全部項目」，包括仲未送出廚房嘅加菜 —— 所以由
+   * `cartItems` 現場砌一張**純打印用**嘅訂單快照，**唔寫入 orders、唔產生單號**。
+   *
+   * ⚠️ **唔受「自動打印」開關影響**（同上，手動優先）。
+   */
+  function printReceiptNow() {
+    if (receiptPrintSubmitting) return;
+    if (!bootstrap) {
+      setToast({ tone: "error", message: "尚未載入店鋪資料，無法打印。" });
+      return;
+    }
+    if (cartItems.length === 0) {
+      setToast({ tone: "info", message: "購物車沒有菜品，無法打印收據。" });
+      return;
+    }
+
+    setReceiptPrintSubmitting(true);
+    try {
+      const target = currentWorkspaceTargetOrder();
+      const timestamp = new Date().toISOString();
+      const baseTotals = orderTotals(cartItems, bootstrap);
+      // 純打印快照：id / localOrderNo 沿用張單（有嘅話），方便收銀對單；
+      // 未落單就用臨時值，收據上會印「未落單」，唔會預先消耗一個真單號。
+      const tableId = target?.tableId ?? activeTable?.id ?? "counter";
+      const tableName =
+        target?.tableName ??
+        (isQuickMode ? quickTypeTableName() : activeTable?.name ?? "堂食");
+      const snapshotOrder: PosOrder = {
+        id: target?.id ?? uid("order"),
+        localOrderNo: target?.localOrderNo ?? "未落單",
+        tableId,
+        tableName,
+        status: target?.status ?? "draft",
+        items: cartItems,
+        orderNote,
+        subtotal: baseTotals.subtotal,
+        serviceChargeAmount: baseTotals.serviceChargeAmount,
+        taxAmount: baseTotals.taxAmount,
+        discountAmount,
+        total: Math.max(0, baseTotals.total - discountAmount),
+        source: target?.source ?? "pos",
+        createdAt: target?.createdAt ?? timestamp,
+        updatedAt: timestamp,
+      };
+
+      const jobs = buildReceiptPrintJobs(snapshotOrder, bootstrap);
+      if (jobs.length === 0) {
+        const hasReceiptPrinter = (loadDeviceConfig() ?? defaultDeviceConfig).printers.some(
+          (printer) => printer.enabled && printer.role === "receipt",
+        );
+        setToast({
+          tone: "error",
+          message: hasReceiptPrinter
+            ? "找不到可用的收據打印機，請檢查設備設置。"
+            : "未配置收據打印機，請到設備設置添加。",
+        });
+        return;
+      }
+      enqueuePrintJobs(jobs);
+      setToast({ tone: "success", message: "已打印收據。" });
+    } catch {
+      setToast({ tone: "error", message: "加入打印隊列失敗，請檢查瀏覽器儲存空間後再試。" });
+    } finally {
+      setReceiptPrintSubmitting(false);
+    }
+  }
+
+  /** 「自動打印」開關：即刻寫入本機設定並更新 state（切換後即時生效）。
+   * 2026-09-08 改：呢個掣係結帳區一鍵全開／全關嘅快捷，會同時翻 kitchen + label + receipt
+   * 三個細粒度開關，唔再直接寫死 `autoPrint`（衍生值）。要逐項控制請去設備設置 →
+   * 打印開關設置。 */
+  function setAutoPrint(next: boolean) {
+    const nextSettings = {
+      ...localSettings,
+      printContentToggles: {
+        ...localSettings.printContentToggles,
+        kitchen: next,
+        label: next,
+        receipt: next,
+      },
+    };
+    // savePosLocalSettings 會 dispatch "pos-local-settings-changed"，
+    // 本頁 useEffect 收到會 setLocalSettings；下面再樂觀更新一次等掣即刻有反應。
+    savePosLocalSettings(nextSettings);
+    setLocalSettings(nextSettings);
+    setToast({
+      tone: next ? "success" : "info",
+      message: next
+        ? "自動打印已開啟：落單會自動出廚房單，結帳會自動出收據。"
+        : "自動打印已關閉：落單／結帳不會自動打印任何單據（手動掣仍可使用）。",
+    });
+  }
+
+  /**
+   * 「自動打印」開關嘅即時值（`PosLocalSettings.autoPrint`，預設 true）。
+   *
+   * 2026-09-08 改：**真正嘅閘門**已下沉到 `printContentToggles` 嘅逐 kind 細粒度開關，
+   * 呢個 `autoPrint` 變成「廚房單 + 標籤單 + 結帳收據」三種嘅**衍生聚合**，主要服務結帳區
+   * 嘅 `AutoAcceptPill`（一鍵全開／全關快捷）。細粒度開關由設備設置頁獨立控制。
+   *
+   * 由 `localSettings` state 推導而唔係每次 `loadPosLocalSettings()`：state 喺
+   * `savePosLocalSettings()` dispatch 嘅 "pos-local-settings-changed" 之後即刻更新，
+   * 所以開關一撳，`sendToKitchen()` / `printReceipt()` 下一刻就用新值（即時生效）。
+   */
+  const autoPrintEnabled =
+    localSettings.printContentToggles.kitchen &&
+    localSettings.printContentToggles.label &&
+    localSettings.printContentToggles.receipt;
+
+  async function sendToKitchen(options?: { silent?: boolean; forceNewOrder?: boolean }) {
+    if (isReadOnlySettled) return null;
+    // 🔴 未開工禁止下單／加單（落單閘：ensureShiftOpened）。
+    //    注意：`silent: true` 嘅內部呼叫（結帳前自動落單）同樣要擋 —— 未開工連結帳都做唔到。
+    // 🔴 G2（2026-09-21）：店已暫停營業一樣要擋（此處係「開新單／加單」）。
+    if (!ensureStoreOpenForNewBusiness() || !ensureShiftOpened()) return null;
+    if (!bootstrap || !activeTable || cartItems.length === 0) return null;
+    if (orderSubmitting) return null;
+    setOrderSubmitting(true);
+
+    try {
+      const timestamp = new Date().toISOString();
+      let nextOrderNo: string | undefined;
+      let sequenceFetchFailed = false;
+      const counterHasOpenOrder =
+        !options?.forceNewOrder &&
+        (activeOrderId
+          ? orders.some(
+              (order) =>
+                order.id === activeOrderId &&
+                order.tableId === activeTable.id &&
+                (order.status === "draft" || order.status === "sent_to_kitchen"),
+            )
+          : orders.some(
+              (order) =>
+                order.tableId === activeTable.id &&
+                (order.status === "draft" || order.status === "sent_to_kitchen"),
+            ));
+      if (!offlineMode && !counterHasOpenOrder) {
+        try {
+          const response = await fetch("/api/pos/sequence", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ kind: isQuickMode ? quickTypeKind() : "pos", storeId: bootstrap.storeId }),
+          });
+          const payload = (await response.json()) as { display?: string };
+          nextOrderNo = payload.display;
+        } catch {
+          // 連線失敗 → nextOrderNo 保持 undefined，upsertCurrentOrder 會用本地每日序號 fallback
+          sequenceFetchFailed = true;
+        }
+      }
+
+      const order = upsertCurrentOrder("sent_to_kitchen", false, nextOrderNo, {
+        forceNewOrder: options?.forceNewOrder,
+      });
+      if (!order) return null;
+
+      // B1（docs/56）：連網取得店內序號失敗，落咗本地序號，提示用家連網後會對齊。
+      if (sequenceFetchFailed && !nextOrderNo && !options?.silent) {
+        setToast({
+          tone: "warning",
+          message: "單號使用本地序號（連線取得店內序號失敗），連網後會自動對齊。",
+        });
+      }
+
+      const baseMap = new Map<string, number>();
+      for (const row of baseOrderItems) {
+        const key = itemIdentity(row);
+        baseMap.set(key, (baseMap.get(key) ?? 0) + row.quantity);
+      }
+      const addedItems = cartItems
+        .map((row) => {
+          const key = itemIdentity(row);
+          const baseQty = baseMap.get(key) ?? 0;
+          const delta = row.quantity - baseQty;
+          return delta > 0 ? { ...row, quantity: delta } : null;
+        })
+        .filter((row): row is OrderItem => Boolean(row));
+
+      const treatAsAddOn = !options?.forceNewOrder && isAddOnOrder;
+      if (treatAsAddOn && addedItems.length === 0) {
+        if (!options?.silent) {
+          setToast({ tone: "info", message: "沒有新增菜品，無需加單。" });
+        }
+        return null;
+      }
+
+      const printTargetItems = treatAsAddOn ? addedItems : cartItems;
+
+    const configuredPrinters = (loadDeviceConfig() ?? defaultDeviceConfig).printers.filter((printer) => printer.enabled);
+    const ticketType: "normal" | "addon" = treatAsAddOn ? "addon" : "normal";
+    // 「自動打印」開關（點餐介面 · 堂食／外賣模式）：關閉時落單／加單**一張都唔出**，
+    // 只落 ORDER_CREATED／ORDER_UPDATED 事件 —— 廚房單靠「打印廚房單」掣手動補打。
+    // 2026-09-08 改：拆成 kitchen + label 兩個細粒度開關，由設備設置獨立控制。
+    // 任何一邊熄咗都唔出對應類型嘅單。
+    const kitchenOn = isPrintContentEnabled("kitchen");
+    const labelOn = isPrintContentEnabled("label");
+    const nextPrintJobs = kitchenOn || labelOn
+      ? [
+          ...(kitchenOn
+            ? buildKitchenPrintJobs(order, {
+                ticketType,
+                storeName: bootstrap.storeName ?? "門店",
+                itemsOverride: printTargetItems,
+                // 🔴 只有「落單 / 接單」呢件事帶內容唯一鍵（同一張單同一件事只出一張紙）。
+                // 加菜（addon）**唔可以**帶：每一輪加單都係一件新事，要照出紙。
+                onceKey: treatAsAddOn ? undefined : `kitchen:normal:${order.reopenCount ?? 0}`,
+              })
+            : []),
+          ...(labelOn
+            ? buildLabelPrintJobs(order, {
+                ticketType,
+                storeName: bootstrap.storeName ?? "門店",
+                itemsOverride: printTargetItems,
+              })
+            : []),
+        ]
+      : [];
+
+    // 🔴 2026-09-21：落單／加單嘅 job **唔行** `appendPrintJobsWithSync`（要用 React state +
+    //    `pushEvents` 保持一致），所以呢度一定要自己過一次 `claimOncePrintJobs()` ——
+    //    否則內容唯一鍵只會寫上雲，本機帳本漏記 → 第二個視窗仍然會建 job。
+    //    （加菜冇 `onceKey`，唔會被攔。）
+    const enqueuedPrintJobs = claimOncePrintJobs(nextPrintJobs);
+    persistPrintJobs([...enqueuedPrintJobs, ...printJobs]);
+
+      // A3（docs/56）：有啟用打印機但呢張單 0 張 job 入隊 → 單據唔會打印，彈警告提示。
+      // 兩種成因：① 冇任何 zone/label 打印機；② 菜品 printerGroup 對唔中任何 printer.zoneId。
+      // 細粒度開關關閉（kitchen && label 都熄咗）係**預期**唔出單，唔好彈警告騷擾收銀。
+      // ⚠️ 只認「builder 產生唔到 job」；被內容去重攔落唔算設定問題（唔可以彈誤導警告）。
+      if ((kitchenOn || labelOn) && nextPrintJobs.length === 0 && !options?.silent) {
+        const hasZonePrinter = configuredPrinters.some((p) => p.role === "zone" || p.role === "label");
+        setToast({
+          tone: "warning",
+          message: hasZonePrinter
+            ? "菜品分區對唔中打印機，廚房單不會打印，請檢查設備設置嘅打印機分區。"
+            : "未配置廚房（分區/標籤）打印機，落單唔會打印，請到設備設置添加。",
+        });
+      }
+
+    const orderEvent: QueueEvent = {
+      id: uid("evt"),
+      type: treatAsAddOn ? "ORDER_UPDATED" : "ORDER_CREATED",
+      entityId: order.id,
+      payload: treatAsAddOn ? { order, addedItems } : order,
+      status: "pending",
+      createdAt: timestamp,
+    };
+
+    const printEvents = enqueuedPrintJobs.map<QueueEvent>((printJob) => ({
+      id: uid("evt"),
+      type: "PRINT_JOB_CREATED",
+      entityId: printJob.id,
+      payload: printJob,
+      status: "pending",
+      createdAt: timestamp,
+    }));
+
+      pushEvents([orderEvent, ...printEvents]);
+      consumeSoldOut(printTargetItems);
+      setActiveOrderId(order.id);
+      // discountValue（全單折扣 preset id）已經反映喺 order.discountAmount，唔使重設。
+      setReceivedAmount("");
+    setRoundingInput("");
+      setBaseOrderItems(order.items);
+      setOrderSuccessFlash(true);
+      if (!options?.silent) {
+        setToast({
+          tone: "success",
+          message: networkOnline
+            ? treatAsAddOn
+              ? `已加單成功，單號 ${order.localOrderNo}。`
+              : `已下單成功，單號 ${order.localOrderNo}。`
+            : treatAsAddOn
+              ? `已離線加單 ${order.localOrderNo}，待恢復網絡後補傳。`
+              : `已離線下單 ${order.localOrderNo}，待恢復網絡後補傳。`,
+        });
+      }
+      return order;
+    } finally {
+      setOrderSubmitting(false);
+    }
+  }
+
+  function markOrderCompleted(orderId: string, options?: { label?: string }) {
+    const targetOrder = orders.find((order) => order.id === orderId);
+    if (!targetOrder) return;
+
+    const updatedOrder: PosOrder = {
+      ...targetOrder,
+      status: "settled",
+      fulfillmentStatus: targetOrder.tableId === "counter" ? "ready" : targetOrder.fulfillmentStatus,
+      servedAt: targetOrder.servedAt ?? new Date().toISOString(),
+      // ── 結帳審計：快餐標記完成（= 結帳）都記錄操作人 ──
+      settledBy: authSession?.account ?? targetOrder.settledBy,
+      settledByName: authSession?.name ?? targetOrder.settledByName,
+      // ── 不可變業務時間（0057）：快餐單嘅「收錢嗰刻」喺 confirmPayment 已寫入，
+      //    呢度係出餐完成、**唔可以覆寫**；舊單（冇值）先用而家兜底。──
+      settledAt: targetOrder.settledAt ?? new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    const nextOrders = orders.map((order) => (order.id === orderId ? updatedOrder : order));
+    persistOrders(nextOrders);
+    pushEvents([
+      {
+        id: uid("evt"),
+        type: "ORDER_UPDATED",
+        entityId: updatedOrder.id,
+        payload: { order: updatedOrder, action: "completed", label: options?.label ?? "已完成" },
+        status: "pending",
+        createdAt: updatedOrder.updatedAt,
+      },
+    ]);
+    setViewingOrderId(null);
+    setToast({ tone: "success", message: `${updatedOrder.localOrderNo} ${options?.label ?? "已完成"}。` });
+    // 同上：帶 onlineOrderId 嘅快餐單要回寫 Ledger completed
+    //（客人端／線上訂單列表先會見到「已完成」，亦避免本地 settled 同 Ledger 脫節）。
+    syncOnlineQuickFulfillmentInBackground(updatedOrder, "completed", (message) =>
+      setToast({ tone: "error", message: `已標記完成，但會員通狀態未同步：${message}` }),
+    );
+  }
+
+  function cancelOrder(orderId: string, reason: string) {
+    const targetOrder = orders.find((order) => order.id === orderId);
+    if (!targetOrder) return;
+    const updatedAt = new Date().toISOString();
+    /**
+     * 外賣平台單（澳覓 / MFOOD）行「作廢（覆寫）」語意 —— 冇填原因時要有**可辨識**嘅
+     * 預設文字，唔可以同本地單嘅「未填寫原因」撈埋（事後審計／對數要靠佢分辨）。
+     * 見 `@/lib/pos/platform-order`。
+     */
+    const fallbackReason = isPlatformOrder(targetOrder)
+      ? PLATFORM_VOID_DEFAULT_REASON
+      : "未填寫原因";
+    const updatedOrder: PosOrder = {
+      ...targetOrder,
+      status: "cancelled",
+      cancelledAt: updatedAt,
+      cancelledReason: reason || fallbackReason,
+      updatedAt,
+    };
+    persistOrders(orders.map((order) => (order.id === orderId ? updatedOrder : order)));
+    removeReopenTempTable(orderId);
+    // 取消單後清掉該枱入座人數，避免桌台總覽「空閒」狀態仍顯示舊人數
+    setSeatedPartySizes((current) => {
+      const next = { ...current };
+      delete next[targetOrder.tableId];
+      return next;
+    });
+    pushEvents([
+      {
+        id: uid("evt"),
+        type: "ORDER_UPDATED",
+        entityId: updatedOrder.id,
+        payload: { order: updatedOrder, action: "cancelled", reason: updatedOrder.cancelledReason },
+        status: "pending",
+        createdAt: updatedAt,
+      },
+    ]);
+    if (activeOrderId === orderId) {
+      setActiveOrderId(null);
+      setCartItems([]);
+      setBaseOrderItems([]);
+      setOrderNote("");
+      setDiscountValue("0");
+      setDiscountNote("");
+      setReceivedAmount("");
+    setRoundingInput("");
+    }
+    setViewingOrderId(null);
+    setOrderActionRequest(null);
+    setOrderActionReason("");
+    setToast({ tone: "success", message: `${updatedOrder.localOrderNo} 已取消結帳。` });
+  }
+
+  /**
+   * 真刪除訂單（docs/52）：本機移除 + 記 deletedOrderIds tombstone（防 backfill / realtime 復活）
+   * + 推 ORDER_DELETED 事件入 queue，syncNow 成功 POST 去 /api/pos/sync 真刪伺服器 `pos_orders` 行。
+   * 離線：事件 status=pending，重連後 syncNow 補傳；tombstone 已經擋住本地復活。
+   */
+  function deleteOrderPermanently(orderId: string) {
+    const targetOrder = orders.find((order) => order.id === orderId);
+    if (!targetOrder) return;
+    const deleteEvent: QueueEvent = {
+      id: uid("evt"),
+      type: "ORDER_DELETED",
+      entityId: orderId,
+      payload: { orderId },
+      status: "pending",
+      createdAt: new Date().toISOString(),
+    };
+    addDeletedOrderIds([orderId]);
+    persistOrders(orders.filter((o) => o.id !== orderId));
+    // 真刪單後清掉該枱入座人數，避免桌台總覽「空閒」狀態仍顯示舊人數
+    setSeatedPartySizes((current) => {
+      const next = { ...current };
+      delete next[targetOrder.tableId];
+      return next;
+    });
+    pushEvents([deleteEvent]);
+    // 在線即 push 去伺服器真刪；離線則留 pending，重連後 syncNow 補傳（tombstone 已擋本地復活）
+    if (!offlineMode) {
+      void syncNow([...queue, deleteEvent], { silent: true });
+    }
+    if (activeOrderId === orderId) {
+      setActiveOrderId(null);
+      setCartItems([]);
+      setBaseOrderItems([]);
+      setOrderNote("");
+      setDiscountValue("0");
+      setDiscountNote("");
+      setReceivedAmount("");
+      setRoundingInput("");
+    }
+    setViewingOrderId(null);
+    setToast({ tone: "success", message: `${targetOrder.localOrderNo} 已刪除。` });
+  }
+
+  function buildRefundReceiptJobs(
+    order: PosOrder,
+    amount: number,
+    reason: string,
+    timestamp: string,
+    title = "退款單號",
+  ) {
+    if (!bootstrap) return [] as PrintJob[];
+    return (loadDeviceConfig() ?? defaultDeviceConfig).printers
+      .filter((printer) => printer.enabled && printer.role === "receipt")
+      .map<PrintJob>((printer) => ({
+        id: uid("print"),
+        orderId: order.id,
+        orderNo: `${order.localOrderNo} 退款`,
+        tableName: order.tableName,
+        ticketType: "void",
+        printerGroup: "receipt",
+        printerId: printer.id,
+        printerName: printer.name,
+        items: [
+          { name: title, quantity: 1, note: order.localOrderNo },
+          { name: "退款金額", quantity: 1, note: formatMoney(amount, bootstrap.currency) },
+          { name: "退款原因", quantity: 1, note: reason },
+        ],
+        status: resolvePrintJobStatus(networkOnline),
+        createdAt: timestamp,
+      }));
+  }
+
+  function refundOrder(orderId: string, reason: string) {
+    if (!canRefundOrder) {
+      showPermissionDenied("退款");
+      return;
+    }
+    const targetOrder = orders.find((order) => order.id === orderId);
+    if (!targetOrder || !bootstrap) return;
+    const updatedAt = new Date().toISOString();
+    const alreadyRefunded = targetOrder.refundedAmount ?? 0;
+    const remainingAmount = Math.max(0, targetOrder.total - alreadyRefunded);
+    const updatedOrder: PosOrder = {
+      ...targetOrder,
+      status: "refunded",
+      refundedAt: updatedAt,
+      refundedAmount: targetOrder.total,
+      refundedReason: reason || "未填寫原因",
+      refundRecords: [
+        ...(targetOrder.refundRecords ?? []),
+        {
+          id: uid("refund"),
+          amount: remainingAmount,
+          reason: reason || "未填寫原因",
+          employeeAccount: authSession?.account,
+          employeeName: authSession?.name,
+          createdAt: updatedAt,
+        },
+      ],
+      updatedAt,
+    };
+    persistOrders(orders.map((order) => (order.id === orderId ? updatedOrder : order)));
+    // B2/B3（docs/56）：建退款印 job 前由 localStorage re-fetch 最新 order 取本地真值 localOrderNo，
+    // 唔好直接用 in-memory targetOrder（見 8/84 bug）。
+    const authoritativeOrder = loadOrders().find((row) => row.id === orderId) ?? updatedOrder;
+    removeReopenTempTable(orderId);
+    const refundEvent: QueueEvent = {
+      id: uid("evt"),
+      type: "ORDER_UPDATED",
+      entityId: updatedOrder.id,
+      payload: {
+        order: updatedOrder,
+        action: "refunded",
+        amount: updatedOrder.refundedAmount,
+        reason: updatedOrder.refundedReason,
+      },
+      status: "pending",
+      createdAt: updatedAt,
+    };
+    const refundPrintJobs = buildRefundReceiptJobs(
+      authoritativeOrder,
+      remainingAmount,
+      updatedOrder.refundedReason ?? "未填寫原因",
+      updatedAt,
+    );
+    persistPrintJobs([...refundPrintJobs, ...printJobs]);
+    pushEvents([
+      refundEvent,
+      ...refundPrintJobs.map<QueueEvent>((job) => ({
+        id: uid("evt"),
+        type: "PRINT_JOB_CREATED",
+        entityId: job.id,
+        payload: job,
+        status: "pending",
+        createdAt: updatedAt,
+      })),
+    ]);
+    setViewingOrderId(null);
+    setOrderActionRequest(null);
+    setOrderActionReason("");
+    setToast({ tone: "success", message: `${updatedOrder.localOrderNo} 已退款。` });
+  }
+
+  function partialRefundOrder(orderId: string, reason: string, quantities: Record<string, number>) {
+    if (!canRefundOrder) {
+      showPermissionDenied("退款");
+      return;
+    }
+    const targetOrder = orders.find((order) => order.id === orderId);
+    if (!targetOrder || !bootstrap) return;
+    const refundedMap = refundedItemQtyMap(targetOrder);
+    type RefundLine = NonNullable<NonNullable<PosOrder["refundRecords"]>[number]["items"]>[number];
+    const refundItems = targetOrder.items
+      .map((item) => {
+        const key = itemIdentity(item);
+        const alreadyRefunded = refundedMap.get(key) ?? 0;
+        const available = Math.max(0, item.quantity - alreadyRefunded);
+        const requested = Math.max(0, Math.min(available, quantities[key] ?? 0));
+        if (requested <= 0) return null;
+        const unitAmount = item.quantity > 0 ? item.price : 0;
+        return {
+          itemKey: key,
+          name: item.name,
+          quantity: requested,
+          amount: unitAmount * requested,
+        };
+      })
+      .filter((item): item is RefundLine => Boolean(item));
+
+    if (refundItems.length === 0) {
+      setToast({ tone: "info", message: "請先選擇要退款的菜品數量。" });
+      return;
+    }
+
+    const refundSubtotal = refundItems.reduce((sum, item) => sum + item.amount, 0);
+    const subtotalBase = targetOrder.subtotal || 1;
+    const proportionalRatio = Math.min(1, refundSubtotal / subtotalBase);
+    const refundAmount = Math.max(
+      0,
+      Number((targetOrder.total * proportionalRatio).toFixed(0)),
+    );
+    const updatedAt = new Date().toISOString();
+    const totalRefundedAmount = Math.min(targetOrder.total, (targetOrder.refundedAmount ?? 0) + refundAmount);
+    const fullyRefunded = totalRefundedAmount >= targetOrder.total;
+    const updatedOrder: PosOrder = {
+      ...targetOrder,
+      status: fullyRefunded ? "refunded" : "partially_refunded",
+      refundedAt: updatedAt,
+      refundedAmount: totalRefundedAmount,
+      refundedReason: reason || "未填寫原因",
+      refundRecords: [
+        ...(targetOrder.refundRecords ?? []),
+        {
+          id: uid("refund"),
+          amount: refundAmount,
+          reason: reason || "未填寫原因",
+          employeeAccount: authSession?.account,
+          employeeName: authSession?.name,
+          items: refundItems,
+          createdAt: updatedAt,
+        },
+      ],
+      updatedAt,
+    };
+    persistOrders(orders.map((order) => (order.id === orderId ? updatedOrder : order)));
+    removeReopenTempTable(orderId);
+    const refundEvent: QueueEvent = {
+      id: uid("evt"),
+      type: "ORDER_UPDATED",
+      entityId: updatedOrder.id,
+      payload: {
+        order: updatedOrder,
+        action: "refunded",
+        amount: refundAmount,
+        reason: reason || "未填寫原因",
+        items: refundItems,
+      },
+      status: "pending",
+      createdAt: updatedAt,
+    };
+    // B2/B3（docs/56）：partial refund 同樣 re-fetch 本地真值 localOrderNo。
+    const partialAuthoritativeOrder = loadOrders().find((row) => row.id === orderId) ?? updatedOrder;
+    const refundPrintJobs = buildRefundReceiptJobs(
+      partialAuthoritativeOrder,
+      refundAmount,
+      reason || "未填寫原因",
+      updatedAt,
+      "部分退款單號",
+    );
+    persistPrintJobs([...refundPrintJobs, ...printJobs]);
+    pushEvents([
+      refundEvent,
+      ...refundPrintJobs.map<QueueEvent>((job) => ({
+        id: uid("evt"),
+        type: "PRINT_JOB_CREATED",
+        entityId: job.id,
+        payload: job,
+        status: "pending",
+        createdAt: updatedAt,
+      })),
+    ]);
+    setPartialRefundOrderId(null);
+    setPartialRefundReason("");
+    setPartialRefundQuantities({});
+    setViewingOrderId(null);
+    setToast({
+      tone: "success",
+      message: fullyRefunded ? `${updatedOrder.localOrderNo} 已全部退款。` : `${updatedOrder.localOrderNo} 已完成部分退款。`,
+    });
+  }
+
+  function printReceipt(order: PosOrder) {
+    if (!bootstrap) return;
+    // 結帳收據總開關（2026-09-08）：設備設置 → 打印開關設置可獨立關閉。關閉後結帳唔出收據。
+    // 手動掣（點餐介面「打印收據」）唔受呢個影響，照樣可出單。
+    //
+    // 🔴 2026-09-22：「靜默唔出紙」正是商家回報「所有收據都無法打印」時**最難查**嘅一環
+    //    （現場零提示、打印中心又照顯示綠色「已發送」）。所以呢兩個 early return
+    //    一律要**講出聲**，唔可以再靠 dev-only `console.warn`。
+    if (!isPrintContentEnabled("receipt")) {
+      setToast({
+        tone: "info",
+        message:
+          "已結帳，但「結帳收據」自動打印已關閉（設備設置 → 打印開關）。要印可按「打印收據」或補打帳單。",
+      });
+      return;
+    }
+    // 🔴 `once: true`（2026-09-21 實案）：呢度係**自動**結帳收據，同 Ledger 回傳嗰條
+    // 完成收據係同一件事；兩個 POS 視窗又各有一份 realm 級守衛 ⇒ 一張單曾出 4 張。
+    // 加咗內容唯一鍵（`receipt:${reopenCount}`）之後只會出一張；
+    // 手動補打走 `reprintReceiptForOrder`／補打帳單掣，**唔帶** onceKey，照樣撳幾次印幾次。
+    const nextPrintJobs = buildReceiptPrintJobs(order, bootstrap, { once: true });
+    if (nextPrintJobs.length === 0) {
+      // 冇啟用嘅 `role === "receipt"` 打印機 ⇒ builder 回空。以前只喺 dev log，
+      // 生產環境完全靜默（客人白等、店員以為印咗）。補上診斷文案。
+      setToast({ tone: "error", message: `已結帳，但收據印唔出：${describeNoReceiptPrinterError()}` });
+      return;
+    }
+
+    // persistPrintJobs 入面已經 dispatch "pos-print-jobs-changed"（令 Print Center 即時刷新）
+    enqueuePrintJobs(nextPrintJobs);
+  }
+
+  async function confirmPayment(method: string) {
+    if (!bootstrap || memberCheckoutSubmitting) return;
+    // 🔴 未開工禁止結帳（落單閘：ensureShiftOpened；結帳頁係二次確認，唔可以漏）。
+    if (!ensureShiftOpened()) return;
+
+    if (memberLedgerOpsNeeded && offlineMode) {
+      setToast({ tone: "info", message: "會員扣款／核銷券須連線，請恢復網絡後再試。" });
+      return;
+    }
+
+    const merchantId = getLedgerMerchantId();
+    if (memberLedgerOpsNeeded && !merchantId) {
+      setToast({ tone: "info", message: "無法取得商家 ID，請重新登入後再試。" });
+      return;
+    }
+
+    const deductAvos = useMemberBalance && ledgerMember ? mopToAvos(memberDeduction) : 0;
+    if (memberLedgerOpsNeeded && deductAvos > memberAvailableAvos) {
+      setToast({ tone: "info", message: "會員餘額不足（含所選現金券）。" });
+      return;
+    }
+
+    // 🔒 折扣備註硬閘（2026-09-11 需求 #1）：凡有折扣金額就一定要有原因。
+    // 正常路徑由「全單折扣」下拉嘅彈窗守住（揀完折扣先彈原因）；呢度兜住**程式化設值**嘅情況 ——
+    // 例如返結舊單時 `matchDiscountId` 反配到折扣預設，但舊單冇 `discountNote`，
+    // 收銀直接撳結帳就會漏咗原因。缺原因時唔結帳，改為彈原因彈窗（原因填好再撳一次即可）。
+    if (discountAmount > 0 && !discountNote.trim()) {
+      requestDiscountNote({ kind: "whole", presetId: discountValue }, "");
+      setToast({ tone: "info", message: "此單有折扣，請先選擇折扣原因。" });
+      return;
+    }
+
+    const applyPaymentToOrder = (targetOrder: PosOrder) => {
+      const now = new Date().toISOString();
+      // 系統抹零（docs/88 §5.1）：total = base - discount - rounding。roundingInput 空 = 0。
+      const rounding = roundingInput ? Math.max(0, round2(Number(roundingInput) || 0)) : 0;
+      const settledGrandTotal = Math.max(0, paymentBase.total - discountAmount - rounding);
+      const quickPaidFlow = isQuickMode && targetOrder.tableId === "counter";
+      const hasGrantRedeem = selectedGrantIds.length > 0;
+      // 返結 temp 枱重結：還原原枱並清掉 temp 標記
+      const isReopenRestore = Boolean(targetOrder.reopenOriginalTableId);
+      const updatedOrder: PosOrder = {
+        ...targetOrder,
+        status: quickPaidFlow ? "paid" : "settled",
+        fulfillmentStatus: quickPaidFlow ? targetOrder.fulfillmentStatus ?? "preparing" : undefined,
+        // 堂食結帳＝出餐；快餐 counter 出餐喺標記 ready 嗰刻（updateQuickFulfillment / markQuickOrderCompletedInStore）
+        servedAt: quickPaidFlow ? targetOrder.servedAt : targetOrder.servedAt ?? now,
+        tableId: isReopenRestore ? targetOrder.reopenOriginalTableId! : targetOrder.tableId,
+        tableName: isReopenRestore ? targetOrder.reopenOriginalTableName! : targetOrder.tableName,
+        reopenOriginalTableId: undefined,
+        reopenOriginalTableName: undefined,
+        paymentMethod:
+          memberDeduction > 0
+            ? paymentSummary.total > 0
+              ? `會員餘額 + ${method}`
+              : "會員餘額"
+            : hasGrantRedeem
+              ? `會員券 + ${method}`
+              : method,
+        discountAmount,
+        // ── 折扣備註（2026-09-11）：凡 discountAmount > 0 必然有原因（結帳頁彈窗係硬閘）。
+        //    免單唔行呢條路（佢有自己嘅 compNote 審計欄），所以呢度只跟 discountAmount。
+        //    清折扣時一併清原因，避免留低「冇折扣但有原因」嘅孤兒備註污糟報表。
+        discountNote: discountAmount > 0 ? discountNote.trim() || undefined : undefined,
+        // 系統抹零（docs/88 §5.1）：由結帳頁 input 寫入；total = subtotal - discount - rounding。
+        roundingAmount: rounding,
+        // 顧客付現金 + 找零（docs/88 §5.2）：receivedAmount 為空時當 = total（冇找零）。
+        cashTendered: receivedAmount ? Math.max(rounding, round2(Number(receivedAmount) || 0)) : settledGrandTotal,
+        changeAmount: changeDue,
+        total: settledGrandTotal,
+        // ── 會員扣款快照：供返結反向回滾；無會員扣款則清掉 ──
+        ledgerMemberPhone:
+          deductAvos > 0 ? (ledgerMember?.customerPhone ?? targetOrder.ledgerMemberPhone ?? undefined) : undefined,
+        memberDeductionAvos: deductAvos > 0 ? deductAvos : 0,
+        // ── 保留返結審計（重結不重置；originalSettledAt 鎖定首次結帳時間）──
+        originalSettledAt: targetOrder.originalSettledAt ?? now,
+        // ── 不可變業務時間（0057，2026-09-24 跨日漂移根治）：每次結帳都寫
+        //    （重結＝覆寫為重結時間＝「最後一次成為生意嗰刻」）。server 永不覆蓋 ⇒
+        //    之後重推／離線補傳／補建都改佢唔到，日歸屬以佢為準。──
+        settledAt: now,
+        // ── 結帳審計：記錄收銀員（訂單明細「收銀員」欄位）──
+        settledBy: authSession?.account ?? targetOrder.settledBy,
+        settledByName: authSession?.name ?? targetOrder.settledByName,
+        reopenCount: targetOrder.reopenCount ?? 0,
+        reopenedAt: targetOrder.reopenedAt,
+        reopenedBy: targetOrder.reopenedBy,
+        reopenReason: targetOrder.reopenReason,
+        updatedAt: now,
+      };
+
+      setOrders((currentOrders) => {
+        const baseline = mergeOrderLists(loadOrders(), currentOrders);
+        const nextOrders = baseline.some((order) => order.id === updatedOrder.id)
+          ? baseline.map((order) => (order.id === updatedOrder.id ? updatedOrder : order))
+          : [updatedOrder, ...baseline];
+        saveOrders(nextOrders);
+        return nextOrders;
+      });
+
+      // 該枱已結帳，清掉 seatedPartySizes 避免桌台總覽「空閒」狀態仍顯示舊人數
+      setSeatedPartySizes((current) => {
+        const next = { ...current };
+        delete next[updatedOrder.tableId];
+        return next;
+      });
+
+      // 返結 temp 枱重結完成：移除 temp 枱（訂單記錄唔新增，只改返結嗰條）
+      if (isReopenRestore) {
+        removeReopenTempTable(targetOrder.id);
+      }
+
+      const paymentEvent: QueueEvent = {
+        id: uid("evt"),
+        type: "ORDER_SETTLED",
+        entityId: updatedOrder.id,
+        payload: {
+          orderId: updatedOrder.id,
+          total: settledGrandTotal,
+          receivedAmount: Number(receivedAmount) || paymentSummary.total,
+          changeDue,
+          discountAmount,
+          paymentMethod: updatedOrder.paymentMethod,
+          memberPhone: ledgerMember?.customerPhone ?? null,
+          memberDeduction,
+          couponDiscount: 0,
+          couponIds: selectedGrantIds,
+          prepaidAmount,
+          status: updatedOrder.status,
+          fulfillmentStatus: updatedOrder.fulfillmentStatus ?? null,
+          sentToKitchenAt: updatedOrder.sentToKitchenAt ?? null,
+          servedAt: updatedOrder.servedAt ?? null,
+          // 入座人數上雲（docs/89 §3）：結帳時補傳 partySize，確保報表「覆蓋人數」有數。
+          partySize: updatedOrder.partySize ?? null,
+          // 全單折扣備註（0034）：結帳頁揀折扣時必填嘅原因，落 pos_orders.discount_note。
+          // 單品折扣原因唔使喺呢度帶 —— 佢藏喺 ORDER_UPDATED 嘅 items 內（逐件 OrderItem）。
+          discountNote: updatedOrder.discountNote ?? null,
+          // 🔴 2026-09-17 退貨修復：結帳時**補帶完整訂單內容**（items + 各層金額）。
+          //
+          // 【為何要帶】`ORDER_SETTLED` 舊設計係「純金額 patch，唔重寫 items」——
+          // 前提係 `ORDER_UPDATED` 一定先成功寫入過 items。但退貨 / 退菜會打破呢個前提：
+          // 帶 `sent_to_kitchen` 狀態嘅退貨更新會被「付款階段單向閘」拒收（`paid-downgrade`）
+          // ⇒ items 上唔到雲，之後只剩金額 patch ⇒ 雲端停留「舊數量 + 新金額」
+          // （實案：訂單06「×1 卻 MOP 62」、09-16 A03「1 項卻總額 160」），
+          // 再經 realtime / backfill merge 蓋返本機 ⇒ 收據／訂單詳情數量錯。
+          //
+          // 結帳係最後一次有完整內容嘅時機（收銀喺結帳頁見到嘅就係最終 items），
+          // 喺呢度補帶 = 俾雲端一次自愈機會。server 側只會喺有帶嘅時候才覆寫
+          // （見 `sync/route.ts` ORDER_SETTLED 段嘅 `"items" in ...` 判斷）。
+          // 🔴 2026-09-18 修復（第二個根因）：結帳時**必須補帶返結審計欄**。
+          //
+          // 【為何要帶】`sync/route.ts` 嘅 `ORDER_SETTLED` 分支有一句
+          // `if ("reopenCount" in eventPayload)` 才會寫 `reopen_count` / `reopened_at` /
+          // `reopen_reason`。舊 code 呢三個 key 一個都冇帶 ⇒ 條件永遠 false ⇒ 即使
+          // `ORDER_UPDATED(action="reopened")` 已經成功推上雲，之後「重結」嘅
+          // `ORDER_SETTLED` 亦**不會**再刷新審計欄（金額會更新、標籤資料唔會）。
+          //
+          // 【為何放在 payload 頂層而非 `order` 子物件內】server 側讀嘅係
+          // `eventPayload.reopenCount`（頂層），唔係 `eventPayload.order.reopenCount`。
+          // 而 `order` 子物件係設計成淨係「訂單內容」（items / 各層金額），
+          // 語意上係「結帳當刻見到嘅嘢」，唔應該塞審計欄入去。
+          //
+          // 【為何只在 count > 0 時才寫】server 側亦有 `settledReopenCount > 0` 才寫
+          // patch，兩邊一致 —— 避免普通結帳（count=0）把 `reopen_count` 覆寫成 0，
+          // 抹掉歷史上真係返結過嘅紀錄。單調遞增語意靠 `targetOrder.reopenCount ?? 0`
+          // 承襲保證（見上面 `updatedOrder` 構造）。
+          reopenCount: updatedOrder.reopenCount ?? 0,
+          reopenedAt: updatedOrder.reopenedAt ?? null,
+          reopenReason: updatedOrder.reopenReason ?? null,
+          // 不可變業務時間（0057）：結帳嗰刻嘅裝置鐘。server 只接受字串值、永不自己落章
+          // （見 sync/route.ts ORDER_SETTLED 段），所以冇值嘅舊單都唔會被呢度抹走。
+          settledAt: updatedOrder.settledAt ?? null,
+          order: {
+            items: updatedOrder.items,
+            subtotal: updatedOrder.subtotal,
+            serviceChargeAmount: updatedOrder.serviceChargeAmount,
+            taxAmount: updatedOrder.taxAmount,
+          },
+        },
+        status: "pending",
+        createdAt: updatedOrder.updatedAt,
+      };
+
+      pushEvents([paymentEvent]);
+      // 即時同步結帳狀態去 backend（唔等 30s 批量 flush）：收銀按結帳 → 客人掃碼 resume
+      // 即刻見到「枱已完結」，唔會再因 backend 仲係 sent_to_kitchen 而顯示「已落單」。
+      void syncNow([...queue, paymentEvent], { silent: true });
+
+      // 🔴 2026-09-14：線上單（帶 `onlineOrderId` 嘅真枱單）本地結帳後，推 Ledger 到 `completed`。
+      // 舊寫法只推 POS 雲端，Ledger 側靠「排位」時一次過推 —— 若嗰次推送失敗／冇經排位，
+      // Ledger 會停留喺 accepted/preparing，而 Ledger 報表 RPC `order_paid_avos`（只認「已完成」）
+      // 就永遠唔計嗰筆錢 ⇒ 交班「線上線下合計」同報表「營業額」齊齊少算
+      // （實案 2026-09-14 表嫂美食：本地「訂單 002」已完成但 Ledger 未 completed ⇒ 少 38）。
+      // 呢個呼叫係冪等（已完成會回 invalid transition → 讀返狀態確認），快餐 counter 單自動 no-op。
+      syncOnlineDineInCompletionInBackground(updatedOrder, (message) =>
+        setToast({ tone: "error", message: `已結帳，但會員通狀態未同步：${message}` }),
+      );
+      setPayingOrderId(null);
+      setActiveOrderId(null);
+      setCartItems([]);
+      setDiscountValue("0");
+      setDiscountNote("");
+      setReceivedAmount("");
+      setRoundingInput("");
+      setSelectedItemId("");
+      setBaseOrderItems([]);
+      resetMemberCheckoutState();
+      setSelectedPaymentMethod("");
+      setToast({
+        tone: "success",
+        message: networkOnline
+          ? quickPaidFlow
+            ? `已收款 ${updatedOrder.localOrderNo}，等待製作完成。`
+            : `已完成 ${updatedOrder.localOrderNo} 結帳。`
+          : quickPaidFlow
+            ? `已離線記錄 ${updatedOrder.localOrderNo} 付款，待恢復網絡後補傳。`
+            : `已離線記錄 ${updatedOrder.localOrderNo} 付款，待補傳。`,
+      });
+      setSettlementFlash(true);
+      printReceipt(updatedOrder);
+      if (quickPaidFlow) {
+        setViewingOrderId(null);
+      } else {
+        backToTables();
+      }
+    };
+
+    const runCheckout = async (targetOrder: PosOrder) => {
+      if (memberLedgerOpsNeeded && merchantId && ledgerMember) {
+        setMemberCheckoutSubmitting(true);
+        try {
+          const idempotencyKey =
+            memberCheckoutIdempotencyRef.current ?? crypto.randomUUID();
+          memberCheckoutIdempotencyRef.current = idempotencyKey;
+
+          const grantIdsToRedeem = memberCheckoutRedeemDone ? [] : selectedGrantIds;
+          const result = await executeLedgerMemberCheckout({
+            merchantId,
+            phone: ledgerMember.customerPhone,
+            deductAvos,
+            grantIds: grantIdsToRedeem,
+            idempotencyKey,
+            skipRedeem: memberCheckoutRedeemDone,
+          });
+
+          if (grantIdsToRedeem.length > 0) {
+            setMemberCheckoutRedeemDone(true);
+          }
+
+          if (typeof result.balanceAfterAvos === "number" && ledgerMember) {
+            setLedgerMember({
+              ...ledgerMember,
+              balanceAvos: result.balanceAfterAvos,
+              redeemableGrants: ledgerMember.redeemableGrants.filter(
+                (grant) => !selectedGrantIds.includes(grant.grantId),
+              ),
+            });
+          }
+
+          applyPaymentToOrder(targetOrder);
+        } catch (error) {
+          if (error instanceof LedgerMemberCheckoutError && error.redeemCompleted) {
+            setMemberCheckoutRedeemDone(true);
+            setMemberSearchHint("券已核銷，扣款失敗。請重試扣款（勿重複核銷券）。");
+          }
+          setToast({
+            tone: "info",
+            message: friendlyLedgerMemberError(error instanceof Error ? error.message : String(error)),
+          });
+        } finally {
+          setMemberCheckoutSubmitting(false);
+        }
+        return;
+      }
+
+      // 🔴🔴 防禦（2026-09-14 走數實案）：
+      // 行到呢度 = `memberLedgerOpsNeeded && merchantId && ledgerMember` 唔成立，
+      // 即係**唔會**執行 `executeLedgerMemberCheckout()`（唔扣會員餘額）。
+      //
+      // 但店員明明揀咗「會員餘額」！舊寫法會靜默行 `applyPaymentToOrder()` ——
+      // 張單被標記「已付款」，但客人嘅餘額**一毫子都冇扣**，而且**冇任何提示**
+      // （實案：小計 160、會員扣 85、Ledger 完全冇扣，店員以為結咗帳）。
+      //
+      // 走數比「結唔到帳」嚴重得多，所以呢度**寧願唔結帳**都要大聲講。
+      if (useMemberBalance && memberDeduction > 0) {
+        setToast({
+          tone: "info",
+          message:
+            "未能執行會員扣款（會員資料或商戶登入狀態不完整），已取消結帳。請重新輸入會員號碼查詢後再試。",
+        });
+        return;
+      }
+
+      applyPaymentToOrder(targetOrder);
+    };
+
+    if (isQuickMode && payingOrderId === CART_PAYING_ID) {
+      const createdOrder = await sendToKitchen({ silent: true, forceNewOrder: true });
+      if (!createdOrder) {
+        setToast({ tone: "info", message: "下單失敗，請確認購物車有菜品後再試。" });
+        return;
+      }
+      await runCheckout(createdOrder);
+      return;
+    }
+
+    // 🔴 2026-09-14：目標解析統一收喺 `resolveSettleTargetOrder()` ——
+    // 舊寫法最後一重「全店第一張可結帳單」會令 A03 嘅結帳去咗第二張枱（見該函式註釋）。
+    const targetOrder = resolveSettleTargetOrder(payingOrderId);
+    if (!targetOrder) {
+      setToast({ tone: "info", message: noSettleTargetMessage() });
+      return;
+    }
+
+    await runCheckout(targetOrder);
+  }
+
+  /**
+   * 免單（comp）：整張單全額減免後照結帳 —— 照出單、照出收據、照計入營業額，但實收 0。
+   *
+   * 同 `confirmPayment` 嘅分別：
+   *  - `total` 寫 0；`discountAmount` = 應收原額（全額減免）；`paymentMethod` = "免單"
+   *  - **唔行會員扣款／核券**：免費單唔需要扣會員錢，亦避免離線時俾 `memberLedgerOpsNeeded` 擋住
+   *  - 備註寫落 `compNote`（**唔係** `orderNote` —— 後者受 docs/84 鎖定，見 types.ts 註釋）
+   *
+   * 其餘（寫入 orders、推 ORDER_SETTLED 事件、即時 syncNow、打印收據、返回桌台）
+   * 同 `confirmPayment` 完全一致，確保對帳／報表口徑統一。
+   */
+  function settleCompOrder(targetOrder: PosOrder, reason: string, now: string) {
+    if (!bootstrap) return;
+    // 全額減免：結帳基準（未扣免單前）全部轉做 discountAmount，實收 0。
+    const compedAmount = Math.max(0, paymentBase.total);
+    const quickPaidFlow = isQuickMode && targetOrder.tableId === "counter";
+    // 返結 temp 枱重結：還原原枱並清掉 temp 標記
+    const isReopenRestore = Boolean(targetOrder.reopenOriginalTableId);
+
+    const updatedOrder: PosOrder = {
+      ...targetOrder,
+      status: quickPaidFlow ? "paid" : "settled",
+      fulfillmentStatus: quickPaidFlow ? targetOrder.fulfillmentStatus ?? "preparing" : undefined,
+      servedAt: quickPaidFlow ? targetOrder.servedAt : targetOrder.servedAt ?? now,
+      tableId: isReopenRestore ? targetOrder.reopenOriginalTableId! : targetOrder.tableId,
+      tableName: isReopenRestore ? targetOrder.reopenOriginalTableName! : targetOrder.tableName,
+      reopenOriginalTableId: undefined,
+      reopenOriginalTableName: undefined,
+      paymentMethod: "免單",
+      discountAmount: compedAmount,
+      // 免單無現金／抹零／找續，三個欄位留 0（收據 block 自動 hidden）。
+      roundingAmount: 0,
+      cashTendered: 0,
+      changeAmount: 0,
+      total: 0,
+      // ── 免單審計：備註 + 時間（結帳期欄位，唔入 orderNote） ──
+      compNote: reason,
+      compedAt: now,
+      // 免單原因由 compNote 承載；清走之前可能套過嘅折扣備註，唔好留個對唔上嘅原因
+      // （報表「折扣備註」欄會 fallback 去 compNote，見 order-detail-list）。
+      discountNote: undefined,
+      // 免單唔扣會員錢
+      ledgerMemberPhone: undefined,
+      memberDeductionAvos: 0,
+      // ── 保留返結審計（重結不重置；originalSettledAt 鎖定首次結帳時間）──
+      originalSettledAt: targetOrder.originalSettledAt ?? now,
+      // ── 不可變業務時間（0057）：免單都係一次結帳，照寫（重結＝覆寫為重結時間）──
+      settledAt: now,
+      // ── 結帳審計：免單都記錄操作人 ──
+      settledBy: authSession?.account ?? targetOrder.settledBy,
+      settledByName: authSession?.name ?? targetOrder.settledByName,
+      reopenCount: targetOrder.reopenCount ?? 0,
+      reopenedAt: targetOrder.reopenedAt,
+      reopenedBy: targetOrder.reopenedBy,
+      reopenReason: targetOrder.reopenReason,
+      updatedAt: now,
+    };
+
+    setOrders((currentOrders) => {
+      const baseline = mergeOrderLists(loadOrders(), currentOrders);
+      const nextOrders = baseline.some((order) => order.id === updatedOrder.id)
+        ? baseline.map((order) => (order.id === updatedOrder.id ? updatedOrder : order))
+        : [updatedOrder, ...baseline];
+      saveOrders(nextOrders);
+      return nextOrders;
+    });
+
+    // 返結 temp 枱重結完成：移除 temp 枱（訂單記錄唔新增，只改返結嗰條）
+    if (isReopenRestore) {
+      removeReopenTempTable(targetOrder.id);
+    }
+
+    const paymentEvent: QueueEvent = {
+      id: uid("evt"),
+      type: "ORDER_SETTLED",
+      entityId: updatedOrder.id,
+      payload: {
+        orderId: updatedOrder.id,
+        total: 0,
+        receivedAmount: 0,
+        changeDue: 0,
+        discountAmount: compedAmount,
+        paymentMethod: "免單",
+        memberPhone: null,
+        memberDeduction: 0,
+        couponDiscount: 0,
+        couponIds: [],
+        prepaidAmount,
+        status: updatedOrder.status,
+        fulfillmentStatus: updatedOrder.fulfillmentStatus ?? null,
+        sentToKitchenAt: updatedOrder.sentToKitchenAt ?? null,
+        servedAt: updatedOrder.servedAt ?? null,
+        // 入座人數上雲（docs/89 §3）
+        partySize: updatedOrder.partySize ?? null,
+        // 免單審計上雲（docs/91）：
+        //   1. queue_events.payload 係 JSONB → 唔使 migration 就留到底稿，
+        //      報表 / 對帳可追溯「點解免單」。
+        //   2. /api/pos/sync 會由呢度讀 compNote / compedAt 寫落 pos_orders 直欄
+        //      （0018 migration）→ 換機／清 cache 由 server state reload 都仲見到。
+        compNote: reason,
+        compedAt: now,
+        // 🔴 2026-09-18：免單同樣係「重結」嘅一條路徑（返結後可以免單收尾），
+        // 故一樣要補帶返結審計欄，否則免單收尾嘅單喺雲端會冇「已返結」標籤。
+        // 口徑同 `confirmPayment`：count > 0 才寫，避免覆寫成 0。
+        reopenCount: updatedOrder.reopenCount ?? 0,
+        reopenedAt: updatedOrder.reopenedAt ?? null,
+        reopenReason: updatedOrder.reopenReason ?? null,
+        // 不可變業務時間（0057）：server 只接受字串值、永不自己落章（見 sync/route.ts）。
+        settledAt: updatedOrder.settledAt ?? null,
+      },
+      status: "pending",
+      createdAt: now,
+    };
+
+    pushEvents([paymentEvent]);
+    void syncNow([...queue, paymentEvent], { silent: true });
+
+    // 收尾：同 confirmPayment 一致
+    setPayingOrderId(null);
+    setCompModalOpen(false);
+    setCompNote("");
+    setActiveOrderId(null);
+    setCartItems([]);
+    setDiscountValue("0");
+    setDiscountNote("");
+    setReceivedAmount("");
+    setRoundingInput("");
+    setSelectedItemId("");
+    setBaseOrderItems([]);
+    resetMemberCheckoutState();
+    setSelectedPaymentMethod("");
+    setToast({
+      tone: "success",
+      message: networkOnline
+        ? `已免單 ${updatedOrder.localOrderNo}（${reason}）。`
+        : `已離線記錄 ${updatedOrder.localOrderNo} 免單，待補傳。`,
+    });
+    setSettlementFlash(true);
+    printReceipt(updatedOrder);
+    if (quickPaidFlow) {
+      setViewingOrderId(null);
+    } else {
+      backToTables();
+    }
+  }
+
+  /** 結帳頁「免單」掣：備註必填，揀好／輸入好先落單。 */
+  async function confirmComp(note: string) {
+    if (!bootstrap) return;
+    const reason = note.trim();
+    if (!reason) {
+      setToast({ tone: "error", message: "請選擇或輸入免單備註。" });
+      return;
+    }
+    const now = new Date().toISOString();
+
+    // 快餐模式購物車結帳：同 confirmPayment 一樣要先落單
+    if (isQuickMode && payingOrderId === CART_PAYING_ID) {
+      const createdOrder = await sendToKitchen({ silent: true, forceNewOrder: true });
+      if (!createdOrder) {
+        setToast({ tone: "info", message: "下單失敗，請確認購物車有菜品後再試。" });
+        return;
+      }
+      settleCompOrder(createdOrder, reason, now);
+      return;
+    }
+
+    // 🔴 2026-09-14：同 `confirmPayment()` —— 只喺「明確指定 / 當前工作台 / 當前枱」之間揀，
+    // 唔可以喺全店亂揀（免單一樣係「落錯枱」嘅高危操作）。
+    const targetOrder = resolveSettleTargetOrder(payingOrderId);
+    if (!targetOrder) {
+      setToast({ tone: "error", message: `搵唔到要免單嘅訂單（${activeTable?.name ?? "本枱"}：${describeTableOrderStates()}）。` });
+      return;
+    }
+
+    settleCompOrder(targetOrder, reason, now);
+  }
+
+  function completeOnlinePaidOrder() {
+    if (!bootstrap) return;
+    // 🔴 2026-09-14：同上 —— 「客人已支付，完成訂單」都只可以作用喺
+    // 明確指定 / 當前工作台 / 當前枱嘅單（呢粒掣一樣會寫 status + 出收據）。
+    const targetOrder = resolveSettleTargetOrder(payingOrderId);
+    if (!targetOrder) {
+      setToast({ tone: "info", message: noSettleTargetMessage() });
+      return;
+    }
+
+    const settledGrandTotal = Math.max(0, paymentBase.total - discountAmount);
+    const quickPaidFlow = isQuickMode && targetOrder.tableId === "counter";
+    const updatedOrder: PosOrder = {
+      ...targetOrder,
+      status: quickPaidFlow ? "paid" : "settled",
+      paymentMethod: "線上已支付",
+      discountAmount,
+      // 線上支付無現金／抹零，三個欄位留 0（收據 block 自動 hidden）。
+      roundingAmount: 0,
+      cashTendered: 0,
+      changeAmount: 0,
+      total: settledGrandTotal,
+      // ── 結帳審計：線上已支付都記錄操作人 ──
+      settledBy: authSession?.account ?? targetOrder.settledBy,
+      settledByName: authSession?.name ?? targetOrder.settledByName,
+      // ── 不可變業務時間（0057）：完成線上已支付單都係一次結帳，照寫（重結＝覆寫）──
+      settledAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    const nextOrders = orders.map((order) => (order.id === targetOrder.id ? updatedOrder : order));
+    persistOrders(nextOrders);
+
+    const paymentEvent: QueueEvent = {
+      id: uid("evt"),
+      type: "ORDER_SETTLED",
+      entityId: updatedOrder.id,
+      payload: {
+        orderId: updatedOrder.id,
+        total: settledGrandTotal,
+        receivedAmount: 0,
+        changeDue: 0,
+        discountAmount,
+        paymentMethod: updatedOrder.paymentMethod,
+        memberPhone: null,
+        memberDeduction: 0,
+        couponDiscount: 0,
+        couponIds: [],
+        prepaidAmount,
+        status: updatedOrder.status,
+        // 折扣備註（0034）：線上已支付都可能套過折扣，一齊上雲。
+        discountNote: updatedOrder.discountNote ?? null,
+        // 入座人數上雲（docs/89 §3）：線上支付結帳都要補傳。
+        partySize: updatedOrder.partySize ?? null,
+        // 不可變業務時間（0057）：server 只接受字串值、永不自己落章（見 sync/route.ts）。
+        settledAt: updatedOrder.settledAt ?? null,
+      },
+      status: "pending",
+      createdAt: updatedOrder.updatedAt,
+    };
+
+    pushEvents([paymentEvent]);
+    // 即時同步結帳狀態去 backend（唔等 30s 批量 flush），同上。
+    void syncNow([...queue, paymentEvent], { silent: true });
+
+    // 🔴 2026-09-14 實案根因：呢條路（「客人已支付，完成訂單」）舊寫法**完全冇推 Ledger**。
+    // 於是本地 status 變 `settled`（甚至顯示「已完成」）＋ POS 雲端都更新咗，
+    // 但 Ledger 側冇人推 ⇒ 狀態停留 ⇒ Ledger 報表唔認呢筆錢 ⇒ 交班／報表少計。
+    // （表嫂美食 2026-09-14：訂單 002 = 線上已支付 MOP 38 ⇒ 交班「線上線下合計」少 38。）
+    // 冪等 + 自動 no-op（快餐 counter 單唔行堂食梯），失敗會出 error toast 唔會靜默。
+    syncOnlineDineInCompletionInBackground(updatedOrder, (message) =>
+      setToast({ tone: "error", message: `客人已支付，但會員通狀態未同步：${message}` }),
+    );
+    setToast({
+      tone: "success",
+      message: quickPaidFlow
+        ? `客人已支付 ${updatedOrder.localOrderNo}，等待製作完成。`
+        : `客人已支付，已完成 ${updatedOrder.localOrderNo}。`,
+    });
+    setSettlementFlash(true);
+    printReceipt(updatedOrder);
+    if (quickPaidFlow) {
+      setViewingOrderId(null);
+    } else {
+      backToTables();
+    }
+  }
+
+  async function openSettlementModal() {
+    if (isReadOnlySettled) return;
+    // 🔴 未開工禁止結帳（落單閘：ensureShiftOpened）。
+    if (!ensureShiftOpened()) return;
+    if (isQuickMode) {
+      if (cartItems.length === 0) {
+        setToast({ tone: "info", message: "請先點餐再結帳。" });
+        return;
+      }
+      setPayingOrderId(CART_PAYING_ID);
+      resetMemberCheckoutState();
+      setSelectedPaymentMethod(paymentMethods[0] ?? "現金");
+      return;
+    }
+
+    // 🔴 2026-09-13：判準收喺 `isSettleableOrder()`。舊寫法只認 `sent_to_kitchen` / `reopened`，
+    // 令「排位後已付款嘅線上堂食單」（`paid` + `onlineOrderId` + 真枱）永遠撳唔到結帳。
+    // 🔴 2026-09-14：但佢**唔可以**再 fallback 去全店任何一張單 ——
+    // 實案 A03（掃碼 paid 單，冇 `onlineOrderId`）撳「去結帳」時，
+    // 舊 fallback 就揀咗第二張枱嘅單入結帳頁（詳見 `resolveSettleTargetOrder()`）。
+    const targetOrder = resolveSettleTargetOrder(null);
+    if (!targetOrder) {
+      setToast({ tone: "info", message: noSettleTargetMessage() });
+      return;
+    }
+    setPayingOrderId(targetOrder.id);
+    resetMemberCheckoutState();
+    setSelectedPaymentMethod(paymentMethods[0] ?? "現金");
+  }
+
+  // 本頁「返結帳」：把已結單退回可編輯（status → reopened）。
+  // 成功後 pos-orders-changed listener 會刷新 orders → activeOrder 變 reopened → 工作台變可編輯。
+  async function handlePosReopen() {
+    if (!activeOrderId) return;
+    if (!roReason.trim()) {
+      setToast({ tone: "info", message: "請先揀返結原因" });
+      return;
+    }
+    setRoSubmitting(true);
+    try {
+      const session = loadAuthSession();
+      const operator = session?.name ?? session?.account ?? "收銀";
+      const result = await reopenPosOrder({ orderId: activeOrderId, reason: roReason, operator });
+      if (!result.ok) {
+        setToast({ tone: "info", message: result.error ?? "返結失敗" });
+        return;
+      }
+      setRoReason("");
+      setRoModalOpen(false);
+      // 進入 temp 枱工作枱（原枱唔會被取代；亦可唔改直接結帳）
+      const temp = result.tempTable;
+      if (temp) {
+        setActiveFloorId(temp.floorId);
+        setPosMode("order");
+        loadOrderIntoWorkspace(result.order ?? null, temp.id);
+      }
+      setToast({
+        tone: "success",
+        message: result.memberReversed
+          ? "已返結、會員餘額已退回並印單"
+          : result.memberReverseError
+            ? "已返結並印單；會員餘額退回待 Ledger 對接"
+            : "已返結並印返結單",
+      });
+    } finally {
+      setRoSubmitting(false);
+    }
+  }
+
+  if (isBootstrapping || !bootstrap) {
+    return <div className="empty-state">{t("正在載入門店設定…")}</div>;
+  }
+
+  return (
+    <div className="h-[100dvh] overflow-hidden bg-slate-100">
+      <AppSidebar />
+      <div className="flex h-[100dvh] flex-col overflow-hidden md:pl-[72px]">
+        {/* 🔴 版本過期橫幅（2026-09-22）：只有「本機版本 ≠ 線上最新」才出現。
+            in-flow ⇒ 推低內容，唔會蓋住任何控制項。詳見 `build-stale-banner.tsx`。 */}
+        <BuildStaleBanner
+          cartItemCount={cartItems.length}
+          pendingSyncCount={queue.filter((event) => event.status === "pending").length}
+          settlementOpen={Boolean(payingOrderId)}
+        />
+        {/* ⛔ 工作階段被管理員強制關閉（2026-09-22）：只有收到 server 訊號才出現。
+            同上面一樣係 in-flow（推低內容、唔蓋控制項），而且**唔會自動 reload**
+            （結帳中途 reload 會出事）。詳見 `pos-session-revoked-banner.tsx`。 */}
+        <SessionRevokedBanner
+          cartItemCount={cartItems.length}
+          pendingSyncCount={queue.filter((event) => event.status === "pending").length}
+          settlementOpen={Boolean(payingOrderId)}
+        />
+        {posMode === "tables" ? (
+          <div className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden lg:grid-cols-[minmax(0,1fr)_280px] xl:grid-cols-[minmax(0,1fr)_330px]">
+            <main className="flex h-full flex-col overflow-hidden bg-slate-100">
+              {/* 桌台總覽標題列 —— 2026-09-15 J 拍板：**全部按鈕同一行，唔准掉第二行**。
+                  ── 為何要改 ─────────────────────────────────────────────────────
+                  iPad 橫向（1084px）標題列可用只有約 692px
+                  （1084 − 側欄 72 − 快捷操作欄 286 − padding 32 − 邊框 2）。
+                  擺齊「開工 ＋ 手動更新 ＋ 同步健康 ＋ 查看線上訂單 ＋ 線上接單 ＋ 線下接單」
+                  實測需要 1,076px → 必定掉第二行。所以三個配套一起做：
+                    ① 刪「查看線上訂單」（入口仍在側欄「訂單」＋右欄「快捷操作 › 線上訂單」卡片）
+                    ② 「手動更新 ＋ 同步健康」合併成一個 42px icon（`PosToolsMenu`，J 揀方案 A：彈小選單）
+                    ③ 兩粒接單總掣用精簡版 `size="xs"`（104 × 40px，高度仍然守 40px 觸控準則）
+                  ⇒ 控件簇 340px ≤ 可用 358px（692 − 副標題 322 − 12 間距）→ 單行唔會爆。
+                  🔴 CSS 用 `minmax(0,1fr)_auto` ＋ 右側 `flex-nowrap`：標題欄吸收剩餘寬度，
+                     控件簇**永遠唔會掉行** —— 唔靠 magic number 遷就。
+                  🔴🔴 2026-10-08 補：上面嗰條「永遠唔掉行」嘅鐵律**只適用於 ≥md（768px）**。
+                     手機 390px 實測（`70-mobile-pos-en.png`）：英文翻譯令控件簇變闊
+                     （`線上接單`→`Online orders`、`未接通`→`Not connected`），
+                     控件簇 358px 用盡全部可用寬度 ⇒ `min-w-0` 嘅標題欄被榨到 **3px**，
+                     「桌台總覽」逐個字直排、桌卡消失（中文版同尺寸完全正常）。
+                     ⇒ 改為 `grid-cols-1 md:grid-cols-[minmax(0,1fr)_auto]`：手機直排（標題在上、
+                     控件簇另起一行並可換行），≥md 維持原判（iPad 橫向 1084px 行為不變）。
+                     詳見 docs/mockups/i18n-verify-2026-10-08/70-mobile-pos-{en,zh-Hant}.png
+                  ⇒ 原本嘅單行稿：docs/mockups/accept-toggle-placement-2026-09-15-v2.html */}
+              <div className="border-b border-slate-200 bg-white px-4 py-3">
+                <div className="grid grid-cols-1 items-center gap-3 md:grid-cols-[minmax(0,1fr)_auto]">
+                  <div className="min-w-0">
+                    <div className="text-lg font-semibold text-slate-900">{t("桌台總覽")}</div>
+                    {/* ⚠️ 副標題刻意用 `text-xs`（12px）唔用 `text-sm`（14px）：
+                        14px 時自然闊約 376px，而標題欄只有約 350px → 會 wrap 成兩行，
+                        header 由 74px 變 95px（實測）。12px 只需約 322px → 穩穩一行。
+                        （v2 確認稿亦係 12px，J 已過目。） */}
+                    <div className="mt-0.5 text-xs text-slate-500">
+                      {t("點開桌子後進入點餐介面。桌台狀態：空閒 / 未下單 / 已下單")}
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2 md:shrink-0 md:flex-nowrap">
+                    {/* 「開工」（2026-09-14）：未開工才出，擺喺最左。
+                        收起「今日未開工」彈窗之後，呢粒就係開工嘅入口。
+                        開工後自動隱藏（判準 `shift.openedAt`，同彈窗同一份真源）。
+                        ⚠️ 動畫期間呢粒掣會被 startWorkHint 加上光圈，唔可以蓋住佢（z 要夠高）。 */}
+                    {!shift.openedAt ? (
+                      <span className="relative inline-flex">
+                        <button
+                          ref={startWorkButtonRef}
+                          type="button"
+                          title={t("開始今日班次（未開工前不能開枱／落單）")}
+                          onClick={startWork}
+                          className={`rounded-2xl bg-orange-500 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-orange-600 ${
+                            startWorkHint ? "pos-start-work-pulse" : ""
+                          }`}
+                        >
+                          {t("開工")}
+                        </button>
+                        {startWorkHint ? (
+                          <span className="pointer-events-none absolute left-1/2 top-[calc(100%+10px)] z-[8] -translate-x-1/2 whitespace-nowrap rounded-full bg-slate-900 px-3.5 py-1.5 text-xs font-semibold text-white shadow-lg">
+                            {t("👆 開工喺呢度")}
+                          </span>
+                        ) : null}
+                      </span>
+                    ) : null}
+                    {/* 維修工具（無文字）：手動更新 ＋ 同步健康。
+                        唔顯示文字係因為正常情況下商家唔會撳；有待上傳會出角標提醒。 */}
+                    <PosToolsMenu
+                      busy={manualSyncing || isBootstrapping}
+                      onManualUpdate={() => void handleManualUpdate()}
+                      onSyncHealth={() => setShowSyncHealth(true)}
+                    />
+                    {/* 兩個總掣成對出現：
+                        線上接單 = Ledger `merchant_enabled`（會員通線上落單）
+                        線下接單 = POS DB `pos_store_status.is_open`（擋掃碼點餐 ＋ 自助點餐機）
+                        ⚠️ 掣面措辭／顏色刻意唔同（接單中·綠 vs 營業中·綠／已暫停·紅），
+                           兩個都寫「營業中」會令收銀撳錯 = 停業。 */}
+                    <OnlineOpenPill size="xs" />
+                    <StoreOpenPill size="xs" />
+                  </div>
+                </div>
+              </div>
+
+              {/* 收起「今日未開工」彈窗之後嘅常駐提示（2026-09-14）：
+                  講清楚「只可以對數、未可以落單」，避免收銀以為系統壞咗。
+                  開工後（或彈窗仍在）唔會顯示。 */}
+              {!shift.openedAt && startWorkPromptDismissed ? (
+                <div className="flex flex-none items-center gap-2 border-b border-amber-300 bg-amber-50 px-4 py-2.5 font-semibold text-amber-800">
+                  <span className="rounded-full bg-amber-500 px-2.5 py-0.5 text-[11px] font-bold text-white">{t("今日未開工")}</span>
+                  <span className="text-[13px]">{t("只可以查看／對數，落單功能暫停。要開始營業，請按頁首「開工」。")}</span>
+                </div>
+              ) : null}
+
+              <div className="flex-1 overflow-auto p-4">
+              <div className="mb-4 flex flex-wrap gap-2">
+                <button
+                  key={ALL_FLOOR_ID}
+                  className={`rounded-full px-4 py-2 text-sm font-semibold ${
+                    effectiveFloorId === ALL_FLOOR_ID ? "bg-orange-500 text-white" : "bg-white text-slate-700 ring-1 ring-slate-200"
+                  }`}
+                  onClick={() => setActiveFloorId(ALL_FLOOR_ID)}
+                  type="button"
+                >
+                  {t("全部")}
+                </button>
+                {floors.map((floor) => (
+                  <button
+                    key={floor.id}
+                    className={`rounded-full px-4 py-2 text-sm font-semibold ${
+                      effectiveFloorId === floor.id ? "bg-orange-500 text-white" : "bg-white text-slate-700 ring-1 ring-slate-200"
+                    }`}
+                    onClick={() => setActiveFloorId(floor.id)}
+                    type="button"
+                  >
+                    {floor.name}
+                  </button>
+                ))}
+              </div>
+
+              {/**
+               * 桌台格仔網 —— 全部枱 + 返結卡**同一個 6 欄網格**（2026-10-05 J 拍板方案 C）。
+               *
+               * 🔴 為咩唔另開一個區塊（方案 A 被否決）：
+               *    需求明確要求返結枱「排在全部區域第一張枱之前」，而且卡片樣式要
+               *    同現有枱**完全一致**（同一欄寬、同一網格線）。另開區塊會令兩區
+               *    各自一套欄數，格線對唔埋。
+               *
+               * 🔴 為咩唔用左欄並排（方案 B 被否決）：
+               *    左欄 206px 會令全部區域由 6 欄壓成 3 欄，桌面被推走一半。
+               *
+               * 做法：把「返結區標題」同「全部區域標題」做成兩個**跨欄分隔列**
+               * （`col-span-full`），插喺同一個 grid 內。返結卡緊接第一條分隔列，
+               * 因此自然排喺 A01（第一張枱）之前。
+               */}
+              <div className="grid grid-cols-3 gap-3 md:grid-cols-4 xl:grid-cols-6">
+                {/**
+                 * 返結區分隔列（跨滿所有欄）。
+                 * ⚠️ 整段**條件 render**（記憶 §6 教訓）：冇返結單就完全唔 render，
+                 *    連標題都唔出 —— 唔可以留一條空標題。
+                 */}
+                {reopenAccountList.length > 0 ? (
+                  <>
+                    <div className="col-span-full flex flex-wrap items-center gap-2 border-t-[1.5px] border-dashed border-amber-300 pt-3">
+                      <span className="flex items-center gap-1.5 text-[13.5px] font-extrabold text-amber-900">
+                        <span className="h-2 w-2 rounded-[3px] bg-amber-500" />
+                        返結區
+                      </span>
+                      <span className="rounded-full bg-amber-600 px-2 py-0.5 text-[11px] font-extrabold text-white">
+                        {reopenAccountList.length} 張待重結
+                      </span>
+                      <span className="ml-auto text-[11.5px] text-amber-800">
+                        {t("已反結 · 錢未收 · 唔計入營業額 · 依返結時間新→舊")}
+                      </span>
+                    </div>
+
+                    {reopenAccountList.map((row) => {
+                      const target = openOrders.find((o) => o.id === row.id);
+                      return (
+                        <button
+                          key={`reopen-${row.id}`}
+                          type="button"
+                          onClick={() => {
+                            if (!target) return;
+                            // 🔴 落單機以外嘅機：temp 枱唔存在於本機 `floors`，
+                            //    所以**唔好**順住 `tableId` 鎖 floor（會鎖到一個唔存在嘅
+                            //    display floor，枱 grid 變空）。直接載單入工作台最穩陣。
+                            loadOrderIntoWorkspace(target, target.tableId);
+                            setPosMode("order");
+                          }}
+                          // 同現有桌台卡**同一套 tone**（`isReopenedTable` 嗰條琥珀分支），
+                          // 只係內容換成返結單嘅欄位。卡闊／圓角／內距完全一致。
+                          className="rounded-2xl border border-amber-600 bg-amber-500 p-4 text-left text-white shadow-sm transition-colors hover:border-amber-700"
+                        >
+                          {/* 枱名（原枱，例如 A01）＋ 單號角標 —— 同現有卡同一 flex 兩欄排版 */}
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="min-w-0 truncate text-base font-semibold text-inherit">
+                              {row.tableLabel}
+                            </div>
+                            <span
+                              className="-mr-1 -mt-1 max-w-[66%] shrink-0 truncate rounded-lg bg-white px-2 py-0.5 text-[11px] font-bold leading-5 text-amber-700 shadow-sm ring-1 ring-black/10"
+                              title={`訂單號：${row.orderNo}`}
+                            >
+                              {row.orderNo}
+                            </span>
+                          </div>
+                          {/* 第 2 行：返結時間（取代現有卡嘅「樓層」，因為返結單已離開原枱，
+                              樓層對跨機對數冇意義；時間才係對數依據）。 */}
+                          <div className="mt-2 text-xs text-white/85">
+                            {row.reopenedAt ? `返結 ${formatMacauTime(row.reopenedAt)}` : "—"}
+                          </div>
+                          {/* 第 3 行：返結次數（對應現有卡嘅「已坐 N/—」位置） */}
+                          <div className="mt-1 text-xs font-semibold text-white/90">
+                            {row.reopenCount ? `已返結 ×${row.reopenCount}` : "待重結"}
+                          </div>
+                          {/* 第 4 行：應收金額（對應現有卡嘅「應收」位置）。
+                              🔴 J 拍板選項 1：維持 truncate，同現有桌台卡完全同一規則。
+                              卡闊受 6 欄限制（約 125px），三位數金額會截 —— 用 title 補全文。 */}
+                          {row.total > 0 ? (
+                            <div
+                              className="mt-1 truncate text-sm font-bold text-white"
+                              title={`應收 ${formatMoney(row.total)}`}
+                            >
+                              應收 {formatMoney(row.total)}
+                            </div>
+                          ) : null}
+                          {/* 第 5 行：狀態標記（同現有卡嘅 badge 同一位置／形狀） */}
+                          <div className="mt-3 inline-flex rounded-full bg-white px-3 py-1 text-xs font-semibold text-amber-800">
+                            {t("返結")}
+                          </div>
+                        </button>
+                      );
+                    })}
+
+                    {/* 全部區域分隔列（跨滿所有欄） */}
+                    <div className="col-span-full mt-1 flex flex-wrap items-center gap-2 border-t border-slate-200 pt-3">
+                      <span className="flex items-center gap-1.5 text-[13.5px] font-extrabold text-slate-400">
+                        <span className="h-2 w-2 rounded-[3px] bg-slate-300" />
+                        全部 · {visibleTables.length} 張枱
+                      </span>
+                    </div>
+                  </>
+                ) : null}
+
+                {visibleTables.map((table) => {
+                  const tableOrder = tableOrderMap.get(table.id);
+                    const status = tableOrder?.status ?? "idle";
+                    const isReopenedTable = status === "reopened";
+                    const isOccupied = status !== "idle";
+                    // 🔴 2026-09-13 商家口徑：線上已付款嘅堂食單排位入枱後，本地寫 `paid`
+                    // （錢喺 Ledger 收咗，只等收尾／加菜）→ 桌台卡要**綠色**「已結帳 / 待收尾」，
+                    // 唔可以同一般「已下單」嘅橙色混在一起（收銀一眼分唔到邊張已經收咗錢）。
+                    // 判準用 `isPaidDineInOrder()`（`paid` ＋ 真枱號）——
+                    // 同結帳入口（`isSettleableOrder()`）係**同一份**邊界條件。
+                    //
+                    // 🔴 2026-09-14 修：舊寫法用 `isOnlineDineInOrder()`（要求 `onlineOrderId`），
+                    // 令**客人掃碼堂食單**（冇 `onlineOrderId`）出現
+                    // 「橙色（有單）但標籤寫『空閒』」嘅自相矛盾，收銀完全睇唔出張單已收款。
+                    const isPaidDineInTable =
+                      !!tableOrder && isPaidDineInOrder(tableOrder);
+                    // 枱狀態為空閒時，唔應再顯示舊單嘅入座人數，否則會出現「空閒 / 已坐 1/—」
+                    const seatedCount = isOccupied ? (seatedPartySizes[table.id] ?? 0) : 0;
+                    const total = table.capacity ?? 0;
+                    const occupancy = total > 0 ? `${seatedCount}/${total}` : `${seatedCount}/—`;
+                    const label =
+                      isPaidDineInTable
+                        ? "已結帳 / 待收尾"
+                        : isReopenedTable
+                          ? "待重結"
+                          : status === "sent_to_kitchen"
+                            ? "已下單"
+                            : status === "draft"
+                              ? "未下單"
+                              : "空閒";
+                    const labelFull = label;
+                    // 開桌（非空閒）枱：整張格子實底高對比配色，方便一眼分開「有單」vs「空閒」
+                    // —— 已結帳待收尾用綠、待重結用琥珀、已下單/未下單用橙；空閒維持白底。
+                    const cardTone = isPaidDineInTable
+                      ? "border-emerald-600 bg-emerald-500 text-white"
+                      : isReopenedTable
+                        ? "border-amber-600 bg-amber-500 text-white"
+                        : isOccupied
+                          ? "border-orange-600 bg-orange-500 text-white"
+                          : "border-slate-200 bg-white text-slate-900";
+                    const areaTone = isOccupied ? "text-white/85" : "text-slate-500";
+                    const badgeTone = isOccupied ? "bg-white/25 text-white" : "bg-orange-50 text-orange-700";
+                    // 🔴 2026-09-22 商家需求：枱格右上角「訂單號」角標。
+                    //   顯示規則抽去 `@/lib/pos/table-order-badge`（有單先出／空閒枱唔出／
+                    //   單號空白唔出），唔喺 UI 重寫 —— 有 `table-order-badge.test.ts` 守。
+                    //   角標用**白底 + 同卡身同色系文字**（橙／琥珀／綠），係彩色實底卡上對比最高嘅寫法；
+                    //   排版用 flex 兩欄（枱名 `truncate` 讓位 + 角標 `shrink-0`），**唔用 absolute**，
+                    //   確保枱名長（例如「外賣自取 3」）都唔會被角標壓住／截斷。
+                    const orderBadge = tableOrderBadge({
+                      status,
+                      localOrderNo: tableOrder?.localOrderNo,
+                    });
+                    const orderBadgeTone = isPaidDineInTable
+                      ? "text-emerald-700"
+                      : isReopenedTable
+                        ? "text-amber-700"
+                        : "text-orange-700";
+                    // 應收金額（桌台總覽）：該枱最新一張未結帳單嘅 total 扣返已預付（prepaid）。
+                    // 未結帳單 total = subtotal + 服務費 + 稅（結帳嗰刻先扣折扣/抹零重寫），同結帳頁 paymentBase 口徑一致。
+                    const tableDueAmount = tableOrder
+                      ? Math.max(0, round2(tableOrder.total - (tableOrder.prepaidAmount ?? 0)))
+                      : 0;
+                    return (
+                      <button
+                        key={table.id}
+                        className={`rounded-2xl border p-4 text-left shadow-sm transition-colors ${cardTone} ${
+                          isOccupied ? "" : "hover:border-orange-300"
+                        }`}
+                        onClick={() => selectTable(table.id)}
+                        type="button"
+                      >
+                        {/* 枱名（左）＋ 訂單號角標（右上角）。
+                            `min-w-0` 容許枱名 `truncate` 讓位，角標 `shrink-0` 永不變形。 */}
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0 truncate text-base font-semibold text-inherit">
+                            {table.name}
+                          </div>
+                          {orderBadge.show ? (
+                            <span
+                              className={`-mr-1 -mt-1 max-w-[68%] shrink-0 truncate rounded-lg bg-white px-2 py-0.5 text-[11px] font-bold leading-5 shadow-sm ring-1 ring-black/10 ${orderBadgeTone}`}
+                              title={`訂單號：${orderBadge.text}`}
+                            >
+                              {orderBadge.text}
+                            </span>
+                          ) : null}
+                        </div>
+                        <div className={`mt-2 text-xs ${areaTone}`}>
+                          {table.area}
+                        </div>
+                        <div
+                          className={`mt-1 text-xs font-semibold ${isOccupied ? "text-white/90" : "text-slate-700"}`}
+                        >
+                          已坐 {occupancy}
+                        </div>
+                        {isOccupied && tableDueAmount > 0 ? (
+                          <div className="mt-1 truncate text-sm font-bold text-white" title={`應收 ${formatMoney(tableDueAmount, bootstrap.currency)}`}>
+                            應收 {formatMoney(tableDueAmount, bootstrap.currency)}
+                          </div>
+                        ) : null}
+                        <div
+                          className={`mt-3 inline-flex rounded-full px-3 py-1 text-xs font-semibold ${badgeTone}`}
+                        >
+                          {labelFull}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </main>
+
+            {openTableModalTableId ? (
+              <ResponsiveModal
+                title={t("開桌")}
+                onClose={() => setOpenTableModalTableId(null)}
+                actions={
+                  <>
+                    <button
+                      className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-700 ring-1 ring-slate-200"
+                      onClick={() => setOpenTableModalTableId(null)}
+                      type="button"
+                    >
+                      {t("取消")}
+                    </button>
+                    <button
+                      className="rounded-2xl bg-orange-500 px-4 py-2 text-sm font-semibold text-white"
+                      onClick={() => confirmOpenTable()}
+                      type="button"
+                    >
+                      {t("開桌")}
+                    </button>
+                  </>
+                }
+              >
+                <div className="space-y-3">
+                  <div className="text-sm text-slate-600">
+                    桌台：
+                    {visibleTables.find((tbl) => tbl.id === openTableModalTableId)?.name ?? ""}
+                    {visibleTables.find((tbl) => tbl.id === openTableModalTableId)?.capacity
+                      ? `（${visibleTables.find((tbl) => tbl.id === openTableModalTableId)?.capacity} 座位）`
+                      : ""}
+                  </div>
+                    <div>
+                    <label className="text-sm font-semibold text-slate-900">{t("入座人數")}</label>
+                    {/* 2026-09-09：由手動輸入改為數字按鈕（1..座位數），點選只做選取（反白），
+                        撳右下角「開桌」掣先真正確認開桌。冇填座位數嘅枱 fallback 12 個掣 +
+                        提示去設置補填；唔會出現超座選項。 */}
+                    {openTableModalTable?.capacity && openTableModalTable.capacity > 0 ? null : (
+                      <div className="mt-1 text-xs text-slate-500">
+                        {t("此桌未設座位數，暫以 12 個按鈕代替；請到「設置 → 桌台管理」補填座位數。")}
+                      </div>
+                    )}
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {Array.from({ length: openTableMaxSeats }, (_, index) => index + 1).map((size) => {
+                        const selected = openTablePartySize === size;
+                        return (
+                          <button
+                            key={size}
+                            type="button"
+                            aria-pressed={selected}
+                            className={
+                              selected
+                                ? "h-11 w-11 rounded-2xl bg-orange-500 text-base font-bold text-white shadow-sm"
+                                : "h-11 w-11 rounded-2xl bg-white text-base font-semibold text-slate-900 ring-1 ring-slate-200 hover:bg-slate-50"
+                            }
+                            onClick={() => setOpenTablePartySize(size)}
+                          >
+                            {size}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              </ResponsiveModal>
+            ) : null}
+
+            <section className="flex h-full flex-col overflow-hidden border-l border-slate-200 bg-white">
+              <div className="border-b border-slate-100 px-4 py-4">
+                <div className="text-base font-semibold text-slate-900">{t("快捷操作")}</div>
+                <div className="mt-1 text-xs text-slate-500">{t("桌台流程、收銀入口與營運操作集中在這裡")}</div>
+              </div>
+              <div className="min-w-0 flex-1 overflow-auto px-4 py-4">
+                {/* 線上訂單（2026-09-11 用戶要求）：堂食模式之前只有「自取 / 掃碼訂單」（線下 counter 單），
+                    會員通／掃碼落嘅線上單完全喺呢塊面板睇唔到，收銀要跳去「訂單 → 線上訂單」先接得到單。
+                    呢度直接內嵌同一個 `QuickOnlineOrdersPanel`（快餐模式嗰個），
+                    接單 / 拒單 / 審核客人取消改單 / 查看 全部照舊，兩邊行為一致。
+                    只喺有 Ledger 商戶（已連結會員通）時才 render，否則會多一個「請重新登入」錯誤框。
+                    註：要傳 `skipTableAssignment`（＝跳過「安排桌台」彈窗）—— 線上堂食單嗰個彈窗目前揀完
+                    **唔會寫落單**（`acceptLedgerOrder()` 唔收桌台參數，嗰兩個 option 由頭到尾冇用過），
+                    開咗反而令收銀以為安排咗枱。要真正支援，要先喺 Ledger 側／bridge 落枱號。 */}
+                {!isQuickMode && ledgerMerchantId ? (
+                  /* ⚠️ `min-w-0 overflow-hidden`：卡片內容（標籤／按鈕）萬一太闊，
+                     都唔可以撐到成頁橫向滾動（2026-09-12 實案：快捷操作欄被撐爆，
+                     連帶點餐頁三欄版面被推歪）。 */
+                  <div className="min-w-0 overflow-hidden rounded-2xl border border-slate-200 bg-slate-50/70 p-3">
+                    <div className="text-xs font-semibold text-slate-700">{t("線上訂單")}</div>
+                    <div className="mt-3">
+                      <QuickOnlineOrdersPanel
+                        autoAccept={autoAcceptOnlineOrders}
+                        currency={bootstrap.currency}
+                        layout="stack"
+                        onAutoAcceptChange={(next) => void setAutoAcceptOnlineOrders(next)}
+                        onToast={(payload) =>
+                          setToast({
+                            // ⚠️ 唔可以把 `error`／`warning` 降級成 `info`（2026-09-12 修 error、
+                            // 2026-09-14 修 warning）：線上單出單／排位失敗、以及「自動接單但
+                            // 未出廚房單」都係要即刻見到嘅事，降級會令人以為冇事。
+                            tone:
+                              payload.tone === "success"
+                                ? "success"
+                                : payload.tone === "error"
+                                  ? "error"
+                                  : payload.tone === "warning"
+                                    ? "warning"
+                                    : "info",
+                            message: payload.message,
+                          })
+                        }
+                        skipTableAssignment
+                        tableAssign
+                        tables={assignableTables}
+                      />
+                    </div>
+                  </div>
+                ) : null}
+
+                {!isQuickMode && counterKioskOrders.length > 0 ? (
+                  <div className="mt-4 rounded-2xl border border-orange-200 bg-orange-50/70 p-3">
+                    <div className="flex items-center justify-between">
+                      <div className="text-xs font-semibold text-orange-700">{t("自取 / 掃碼訂單")}</div>
+                      <div className="text-[11px] text-orange-500">{counterKioskOrders.length} 張待處理</div>
+                    </div>
+                    <div className="mt-3 space-y-2">
+                      {counterKioskOrders.map((order) => (
+                        <NoticeFocusCard
+                          key={order.id}
+                          focusKey={noticeFocus && noticeFocus.orderId === order.id ? noticeFocus.seq : null}
+                          className="rounded-2xl border border-slate-200 bg-white p-3"
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="min-w-0">
+                              <div className="truncate text-sm font-semibold text-slate-900">{order.localOrderNo}</div>
+                              <div className="mt-0.5 truncate text-xs text-slate-500">
+                                {order.tableName} · {order.items.reduce((n, it) => n + it.quantity, 0)} 件
+                              </div>
+                              {(() => {
+                                const itemSaving = orderItemDiscountTotal(order.items);
+                                const wholeSaving = Math.max(0, order.discountAmount ?? 0);
+                                if (itemSaving + wholeSaving <= 0) return null;
+                                return (
+                                  <div className="mt-0.5 flex flex-wrap items-baseline gap-x-2 text-[11px]">
+                                    {itemSaving > 0 ? (
+                                      <span className="font-semibold text-emerald-700">
+                                        單品 -{formatMoney(itemSaving, bootstrap.currency)}
+                                      </span>
+                                    ) : null}
+                                    {wholeSaving > 0 ? (
+                                      <span className="font-semibold text-emerald-700">
+                                        全單 -{formatMoney(wholeSaving, bootstrap.currency)}
+                                      </span>
+                                    ) : null}
+                                  </div>
+                                );
+                              })()}
+                            </div>
+                            <div className="flex flex-col items-end gap-1.5">
+                              {(() => {
+                                const itemSaving = orderItemDiscountTotal(order.items);
+                                const wholeSaving = Math.max(0, order.discountAmount ?? 0);
+                                const totalSaving = itemSaving + wholeSaving;
+                                if (totalSaving <= 0) {
+                                  return (
+                                    <div className="text-sm font-bold tabular-nums text-slate-900">
+                                      {formatMoney(order.total, bootstrap.currency)}
+                                    </div>
+                                  );
+                                }
+                                const original = Math.round((order.total + totalSaving) * 100) / 100;
+                                return (
+                                  <>
+                                    <div className="text-sm font-bold tabular-nums text-amber-700">
+                                      {formatMoney(order.total, bootstrap.currency)}
+                                    </div>
+                                    <div className="text-[10px] tabular-nums text-slate-400 line-through">
+                                      {formatMoney(original, bootstrap.currency)}
+                                    </div>
+                                  </>
+                                );
+                              })()}
+                              {(() => {
+                                // 狀態藥丸：改用 getOrderStatusBadge（同卡片 / 訂單頁同一套顏色 token），
+                                // 唔再全部硬編碼橙色 —— 待取餐要出天藍、已完成要出綠色。
+                                const badge = getOrderStatusBadge(order);
+                                const pay = getPaymentBadge(order);
+                                return (
+                                  <>
+                                    <div
+                                      className={`inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-3 py-1 text-sm font-semibold ${badge.bgClass} ${badge.textClass}`}
+                                    >
+                                      <span className={`h-4 w-4 rounded-full ${badge.dotClass}`} />
+                                      {badge.label}
+                                    </div>
+                                    <div
+                                      className={`inline-flex shrink-0 items-center whitespace-nowrap rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${pay.bgClass} ${pay.textClass}`}
+                                    >
+                                      {pay.label}
+                                    </div>
+                                  </>
+                                );
+                              })()}
+                              <OrderSourceBadge order={order} />
+                            </div>
+                          </div>
+                          <div className="mt-2 flex gap-2">
+                            <button
+                              className="flex-1 whitespace-nowrap rounded-xl bg-white px-2 py-1.5 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
+                              onClick={() => setViewingOrderId(order.id)}
+                              type="button"
+                            >
+                              {t("查看")}
+                            </button>
+                            {/* 自助單 draft → 顯示接受 / 拒絕（規格 6，統一用 SelfOrderActionButtons 避免走樣） */}
+                            {order.status === "draft" && isSelfOrder(order) ? (
+                              <SelfOrderActionButtons
+                                orderLabel={order.localOrderNo}
+                                onConfirm={() => {
+                                  const result = confirmSelfOrder(order.id);
+                                  if (result.ok) {
+                                    setToast({ tone: "success", message: `已接受自助單 ${order.localOrderNo}` });
+                                  } else {
+                                    setToast({ tone: "error", message: result.error ?? "接受失敗" });
+                                  }
+                                  return result;
+                                }}
+                                onReject={() => {
+                                  const result = rejectSelfOrder(order.id);
+                                  if (result.ok) {
+                                    setToast({ tone: "success", message: `已拒絕自助單 ${order.localOrderNo}` });
+                                  } else {
+                                    setToast({ tone: "error", message: result.error ?? "拒絕失敗" });
+                                  }
+                                  return result;
+                                }}
+                              />
+                            ) : (
+                              <>
+                                {/* docs/87 §6.3：放寬可取餐閘門。
+                                    2026-09-12：出餐階段一律看 fulfillmentStatus（ready 單向閘），
+                                    唔可以再夾 status=paid —— 否則未收款先出餐嘅單撳完冇反應。 */}
+                                {!isQuickOrderReady(order) &&
+                                (order.status === "sent_to_kitchen" || order.status === "paid") ? (
+                                  <button
+                                    className="flex-[1.6] whitespace-nowrap rounded-xl bg-orange-500 px-2 py-1.5 text-xs font-semibold text-white hover:bg-orange-600"
+                                    onClick={() => updateQuickFulfillment(order.id)}
+                                    type="button"
+                                  >
+                                    {t("可取餐")}
+                                  </button>
+                                ) : null}
+                                {/* 已標記可取餐 → 只剩「完成」（同快餐卡片一致：可取餐 → 完成 單鏈）。 */}
+                                {isQuickOrderReady(order) ? (
+                                  <button
+                                    className="flex-[1.6] whitespace-nowrap rounded-xl bg-emerald-600 px-2 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700"
+                                    onClick={() => markOrderCompleted(order.id, { label: quickCompleteLabel(order) })}
+                                    type="button"
+                                  >
+                                    {quickCompleteLabel(order)}
+                                  </button>
+                                ) : null}
+                                {/*
+                                  🔴 外賣平台單（澳覓 / MFOOD）一律**線上已付款** ——
+                                  POS 冇嘢可以再收，所以唔應該出現「結帳」掣。
+
+                                  刻意只針對平台單（用 `order.source` 直接判斷，
+                                  **唔用** `orderSourceOf()` —— 佢對未知 source 會回退
+                                  `"pos"`，分辨唔到平台單）。
+
+                                  其餘來源（pos / kiosk / scan / 舊單）行為完全不變。
+                                */}
+                                {/*
+                                  ⚠️ 型別註解：`PosOrder["source"]` 目前只有
+                                  `pos | kiosk | scan`，所以比對要 cast 成 string。
+                                  正式做法係擴聯集 + 同步改 order-source.ts 同 badge 元件
+                                  （三處必須一起改，否則型別會爆）—— 嗰件事仍待使用者決定，
+                                  所以呢度先用最小改動，只影響平台單，唔碰任何既有來源。
+                                */}
+                                {(order.source as string) !== "aomi" &&
+                                (order.source as string) !== "mfood" ? (
+                                  <button
+                                    className="flex-1 whitespace-nowrap rounded-xl bg-slate-900 px-2 py-1.5 text-xs font-semibold text-white hover:bg-slate-800"
+                                    onClick={() => setPayingOrderId(order.id)}
+                                    type="button"
+                                  >
+                                    {t("結帳")}
+                                  </button>
+                                ) : null}
+                              </>
+                            )}
+                          </div>
+                        </NoticeFocusCard>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+
+                {offlineMode ? (
+                  <div className="mt-3 w-full rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-700">
+                    {t("目前離線，恢復網絡後會自動補傳資料")}
+                  </div>
+                ) : null}
+              </div>
+            </section>
+          </div>
+        ) : (
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <div className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden lg:grid-cols-[260px_minmax(0,1fr)_280px] xl:grid-cols-[300px_minmax(0,1fr)_330px]">
+          <section className="flex h-full flex-col overflow-hidden border-r border-slate-200 bg-white">
+            <div className="border-b border-slate-100 px-4 py-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="text-base font-semibold text-slate-900">{displayStoreName}</div>
+                  {displayStoreSubtitle ? (
+                    <div className="mt-1 text-xs text-slate-500">{displayStoreSubtitle}</div>
+                  ) : null}
+                </div>
+                {isQuickMode ? (
+                  <div className="flex items-center gap-2">
+                    {/* 快餐模式頁首冇「手動更新」，所以「開工」掣要自己擺一個位（2026-09-14）。
+                        同堂食一樣：未開工才出，收起彈窗後就係唯一開工入口。 */}
+                    {!shift.openedAt ? (
+                      <span className="relative inline-flex">
+                        <button
+                          ref={startWorkButtonRef}
+                          type="button"
+                          title={t("開始今日班次（未開工前不能落單）")}
+                          onClick={startWork}
+                          className={`rounded-2xl bg-orange-500 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-orange-600 ${
+                            startWorkHint ? "pos-start-work-pulse" : ""
+                          }`}
+                        >
+                          {t("開工")}
+                        </button>
+                        {startWorkHint ? (
+                          <span className="pointer-events-none absolute right-0 top-[calc(100%+10px)] z-[8] whitespace-nowrap rounded-full bg-slate-900 px-3.5 py-1.5 text-xs font-semibold text-white shadow-lg">
+                            {t("👆 開工喺呢度")}
+                          </span>
+                        ) : null}
+                      </span>
+                    ) : null}
+                    <div className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
+                      {t("快餐模式")}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
+                    {/* 🔴 唔可以直接 `t(activeTable?.name)` —— 真正嘅桌名嚟自
+                        `bootstrap.tables`（DB 值）= **第 2 層，絕對唔可以譯**。
+                        只有快餐模式嘅**合成桌**（`id === "counter"`，`name` 硬編 `"快餐"`）
+                        係 UI 標籤，所以喺呢度 special-case（2026-10-08）。 */}
+                    {t("桌號")}{" "}
+                    {activeTable?.id === "counter"
+                      ? t("快餐")
+                      : (activeTable?.name ?? "--")}
+                  </div>
+                )}
+              </div>
+              {/* 快餐模式：頂部只保留「店名 / 副標題 / 快餐模式」三樣，
+                  唔再顯示「可直接點餐並結帳」＋「狀態：XX」呢行（用戶要求精簡）。
+                  堂食模式保留呢行：「返回桌台」掣 + 桌台狀態。 */}
+              {!isQuickMode ? (
+                <div className="mt-3 flex items-center justify-between gap-2">
+                  <button
+                    className="rounded-2xl bg-white px-3 py-2 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
+                    onClick={backToTables}
+                    type="button"
+                  >
+                    {t("返回桌台")}
+                  </button>
+                  <div className="text-xs text-slate-500">
+                    狀態：{selectedTableStatus === "paid" ? "已結帳 / 待收尾" : selectedTableStatus === "sent_to_kitchen" ? "已下單" : selectedTableStatus === "reopened" ? "待重結" : selectedTableStatus === "draft" ? "未下單" : "空閒"}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+
+            {activeOrder?.status === "reopened" ? (
+              <div className="mx-4 mb-1 mt-2 rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3">
+                <div className="flex items-center gap-2">
+                  <span className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full bg-amber-500 px-3 py-1 text-sm font-bold text-white">
+                    <span className="h-4 w-4 rounded-full bg-white" />
+                    返結帳
+                  </span>
+                  <span className="min-w-0 flex-1 text-xs font-semibold text-amber-800">{t("此單為返結單，可改價／加餐後重新結帳")}</span>
+                </div>
+                {activeOrder.reopenReason ? (
+                  <div className="mt-1 text-[11px] text-amber-700">返結原因：{activeOrder.reopenReason}</div>
+                ) : null}
+                {activeOrder.originalSettledAt ? (
+                  <div className="mt-0.5 text-[11px] text-amber-600">
+                    原結帳時間：{formatMacauDateTime(activeOrder.originalSettledAt)}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
+            {isReadOnlySettled ? (
+              <div className="mx-4 mb-1 mt-2 rounded-2xl border border-slate-300 bg-slate-100 px-4 py-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    <span className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full bg-slate-500 px-3 py-1 text-sm font-bold text-white">
+                      <span className="h-4 w-4 rounded-full bg-white" />
+                      已結帳
+                    </span>
+                    <span className="min-w-0 flex-1 text-xs font-semibold text-slate-700">{t("唯讀預覽 · 所有操作已鎖定")}</span>
+                  </div>
+                  <button
+                    className="rounded-2xl bg-amber-600 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50"
+                    disabled={roSubmitting}
+                    onClick={() => setRoModalOpen(true)}
+                    type="button"
+                  >
+                    {t("返結帳")}
+                  </button>
+                </div>
+                {workspaceOrder?.settledAt ||
+                workspaceOrder?.reopenedAt ||
+                workspaceOrder?.originalSettledAt ||
+                workspaceOrder?.updatedAt ? (
+                  <div className="mt-1 text-[11px] text-slate-500">
+                    {/* 🔴 2026-09-24・0057：口徑同交班明細 / 報表明細（均為
+                        `settledAt ?? reopenedAt ?? originalSettledAt ?? updatedAt`）。
+                        有 settledAt（最近一次結帳，server 永不覆蓋）優先；舊單落返舊鏈。 */}
+                    結帳時間：
+                    {formatMacauDateTime(
+                      workspaceOrder.settledAt ??
+                        workspaceOrder.reopenedAt ??
+                        workspaceOrder.originalSettledAt ??
+                        workspaceOrder.updatedAt,
+                    )}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
+            <div className="px-4 py-3">
+              <div className="flex items-center justify-between text-sm">
+                <span className="font-semibold text-slate-900">{t("訂單明細")}</span>
+                <span className="text-xs text-slate-500">{cartItems.length + voidedItems.length} 項</span>
+              </div>
+              {isQuickMode ? (
+                <div className="mt-3 grid grid-cols-3 gap-2 rounded-2xl border border-slate-200 bg-white p-2">
+                  <button
+                    className={`rounded-2xl px-3 py-2 text-xs font-semibold ${
+                      quickOrderType === "dine_in" ? "bg-orange-500 text-white" : "bg-slate-100 text-slate-700"
+                    }`}
+                    onClick={() => setQuickOrderType("dine_in")}
+                    type="button"
+                  >
+                    {t("堂食")}
+                  </button>
+                  <button
+                    className={`rounded-2xl px-3 py-2 text-xs font-semibold ${
+                      quickOrderType === "delivery" ? "bg-orange-500 text-white" : "bg-slate-100 text-slate-700"
+                    }`}
+                    onClick={() => setQuickOrderType("delivery")}
+                    type="button"
+                  >
+                    {t("外賣")}
+                  </button>
+                  <button
+                    className={`rounded-2xl px-3 py-2 text-xs font-semibold ${
+                      quickOrderType === "pickup" ? "bg-orange-500 text-white" : "bg-slate-100 text-slate-700"
+                    }`}
+                    onClick={() => setQuickOrderType("pickup")}
+                    type="button"
+                  >
+                    {t("自取")}
+                  </button>
+                </div>
+              ) : null}
+
+              {/* 打印操作（自動打印 + 兩個手動掣）已搬至「收銀與支付」section 最底部。 */}
+            </div>
+
+            <div className="flex-1 overflow-auto px-3 pb-3">
+              {cartItems.length === 0 && voidedItems.length === 0 ? (
+                <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center text-sm text-slate-500">
+                  {t("請從右側商品區加入菜品")}
+                </div>
+              ) : (
+                  <div className="grid gap-2">
+                  {cartItems.map((item) => {
+                    const itemKey = itemIdentity(item);
+                    const orderedQty = orderedItemQtyMap.get(itemKey) ?? 0;
+                    const locked = orderedQty > 0;
+                    return (
+                    <article
+                      key={itemKey}
+                      className={`rounded-2xl border px-3 py-3 ${
+                        locked
+                          ? "border-slate-200 bg-slate-100 opacity-75"
+                          : selectedItemId === item.menuItemId
+                            ? "border-orange-300 bg-orange-50/50"
+                            : "border-slate-100 bg-slate-50"
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="truncate text-sm font-semibold text-slate-900">
+                            {item.name}
+                            {locked ? (
+                              <span className="ml-2 inline-flex rounded-full bg-slate-200 px-2 py-0.5 text-[11px] font-semibold text-slate-700">
+                                {t("已下單")}
+                              </span>
+                            ) : null}
+                          </div>
+                          <div className="mt-1 text-xs text-slate-500">
+                            {specText(item) || item.note || "未選規格"}
+                            {item.discountRate != null ? (
+                              <>
+                                {" · "}
+                                <span className="text-slate-400 line-through">
+                                  {formatMoney(item.price, bootstrap.currency)}
+                                </span>{" "}
+                                <span className="font-semibold text-amber-700">
+                                  {formatMoney(discountedUnitPrice(item.price, item.discountRate), bootstrap.currency)}
+                                </span>
+                              </>
+                            ) : (
+                              <> · {formatMoney(item.price, bootstrap.currency)}</>
+                            )}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          {locked ? (
+                            <div className="rounded-full bg-slate-200 px-3 py-1 text-xs font-semibold text-slate-700">
+                              已下單 x{item.quantity}
+                            </div>
+                          ) : (
+                            <>
+                              <button
+                                className="grid h-10 w-10 shrink-0 place-items-center rounded-full border border-slate-200 bg-white text-base font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+                                disabled={isReadOnlySettled}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  updateQuantity(itemKey, -1);
+                                }}
+                                type="button"
+                              >
+                                -
+                              </button>
+                              <div className="w-8 shrink-0 text-center text-base font-semibold text-slate-800">{item.quantity}</div>
+                              <button
+                                className="grid h-10 w-10 shrink-0 place-items-center rounded-full border border-slate-200 bg-white text-base font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+                                disabled={isReadOnlySettled}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  updateQuantity(itemKey, 1);
+                                }}
+                                type="button"
+                              >
+                                +
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                      {/* 動作列：只放掣 + 短狀態（「已退 N 份」），保持單行，唔會俾長備註擠走位 */}
+                      <div className="mt-2 flex items-center justify-between gap-2">
+                        <div className="flex flex-nowrap items-center gap-2">
+                          {!locked ? (
+                              <button
+                                className="whitespace-nowrap rounded-full bg-white px-3 py-1 text-xs font-semibold text-slate-700 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                                disabled={isReadOnlySettled}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  openItemNoteEditor(item);
+                                }}
+                                type="button"
+                              >
+                              {item.note ? "編輯備註" : "加備註"}
+                            </button>
+                          ) : null}
+                          <button
+                            className={`whitespace-nowrap rounded-full px-3 py-1 text-xs font-semibold shadow-sm ring-1 disabled:cursor-not-allowed disabled:opacity-40 ${
+                              item.discountRate != null
+                                ? "bg-amber-50 text-amber-700 ring-amber-200 hover:bg-amber-100"
+                                : "bg-white text-slate-700 ring-slate-200 hover:bg-slate-50"
+                            }`}
+                            disabled={isReadOnlySettled}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setItemDiscountDraft(
+                                item.discountRate != null
+                                  ? localSettings.discounts.find((d) => d.rate === item.discountRate)?.id ?? ""
+                                  : "",
+                              );
+                              setItemDiscountEditor(itemKey);
+                            }}
+                            type="button"
+                          >
+                            {item.discountRate != null ? "改折扣" : "折扣"}
+                          </button>
+                          {locked ? (
+                              <button
+                                className="whitespace-nowrap rounded-full bg-red-50 px-3 py-1 text-xs font-semibold text-red-700 shadow-sm ring-1 ring-red-200 disabled:cursor-not-allowed disabled:opacity-40"
+                                disabled={isReadOnlySettled}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  if (!canVoidItem) {
+                                    showPermissionDenied("退菜");
+                                    return;
+                                  }
+                                  setVoidRequest({ item, mode: "one" });
+                                }}
+                                type="button"
+                              >
+                              {t("退 1 份")}
+                            </button>
+                          ) : null}
+                        </div>
+                        {locked && item.quantity < orderedQty ? (
+                          <div className="shrink-0 text-xs font-semibold text-red-600">
+                            已退 {orderedQty - item.quantity} 份
+                          </div>
+                        ) : null}
+                      </div>
+                      {/* 單品備註（docs/84 §7）：獨立一行、整寬。長文字向下自動換行，
+                          break-words 令 CJK 都可靠邊斷行（純 break-normal 對長串中文無效）。
+                          唔再用 truncate 切走，亦唔會向右撐破 card 或產生橫向捲軸。 */}
+                      {item.note ? (
+                        <div className="mt-1.5 whitespace-pre-wrap break-words text-xs text-slate-500">
+                          備註：{item.note}
+                          {locked ? <span className="ml-1 text-[11px] font-medium text-amber-600">{t("已鎖定")}</span> : null}
+                        </div>
+                      ) : null}
+                    </article>
+                    );
+                  })}
+                  {voidedItems.map((item, idx) => (
+                    <article
+                      key={`voided-${idx}-${itemIdentity(item)}`}
+                      className="rounded-2xl border border-red-200 bg-red-50/60 px-3 py-3 opacity-80"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="truncate text-sm font-semibold text-slate-900 line-through">
+                            {item.name}
+                            <span className="ml-2 inline-flex rounded-full bg-red-500 px-2 py-0.5 text-[11px] font-bold text-white">
+                              {t("已退菜")}
+                            </span>
+                          </div>
+                          <div className="mt-1 text-xs text-slate-500">
+                            {specText(item) || item.note || "未選規格"} · {formatMoney(item.price, bootstrap.currency)}
+                          </div>
+                          {item.voidedReason ? (
+                            <div className="mt-1 text-[11px] text-red-600">退菜原因：{item.voidedReason}</div>
+                          ) : null}
+                        </div>
+                        <div className="shrink-0 rounded-full bg-red-200 px-3 py-1 text-xs font-semibold text-red-700">
+                          已退 x{item.quantity}
+                        </div>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="border-t border-slate-100 px-4 py-4">
+              <div className="mb-3 flex flex-wrap justify-end gap-2">
+                {isAddOnOrder && cartItems.some((item) => (orderedItemQtyMap.get(itemIdentity(item)) ?? 0) > 0) ? (
+                  <button
+                    className="rounded-2xl bg-red-50 px-3 py-2 text-xs font-semibold text-red-700 shadow-sm ring-1 ring-red-200 disabled:cursor-not-allowed disabled:opacity-40"
+                    disabled={isReadOnlySettled}
+                    onClick={() => {
+                      if (!canVoidItem) {
+                        showPermissionDenied("退菜");
+                        return;
+                      }
+                      setVoidRequest({
+                        item: cartItems.find((item) => (orderedItemQtyMap.get(itemIdentity(item)) ?? 0) > 0) ?? cartItems[0],
+                        mode: "all",
+                        isFullOrder: true,
+                      });
+                    }}
+                    type="button"
+                  >
+                    {t("全部退菜")}
+                  </button>
+                ) : null}
+                {findVoidableTableOrder(activeTableId) ? (
+                  <button
+                    className="rounded-2xl bg-red-50 px-3 py-2 text-xs font-semibold text-red-700 shadow-sm ring-1 ring-red-200 disabled:cursor-not-allowed disabled:opacity-40"
+                    disabled={isReadOnlySettled}
+                    onClick={() => {
+                      if (!canVoidItem) {
+                        showPermissionDenied("退桌");
+                        return;
+                      }
+                      setVoidTableRequest(activeTableId);
+                    }}
+                    type="button"
+                  >
+                    {t("退桌")}
+                  </button>
+                ) : null}
+              </div>
+              {/* items-start：備註換行增高時，「編輯」掣留喺頂部唔會被拉到垂直居中而走位 */}
+              <div className="flex items-start justify-between gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2">
+                {/* flex-1 + min-w-0：文字區塊食晒剩餘寬度並以 card 邊界為限向下換行（docs/84 §7） */}
+                <div className="min-w-0 flex-1">
+                  <div className="text-xs font-semibold text-slate-600">{t("全單備註")}</div>
+                  <div className="mt-0.5 whitespace-pre-wrap break-words text-xs text-slate-500">
+                    {orderNote ? orderNote : <span className="text-slate-400">{t("（可選）")}</span>}
+                  </div>
+                  {orderNoteLocked ? (
+                    <div className="mt-0.5 whitespace-pre-wrap break-words text-[11px] font-medium text-amber-600">
+                      {t("訂單已送出，備註已鎖定")}
+                    </div>
+                  ) : null}
+                </div>
+                  <button
+                    className="shrink-0 rounded-2xl bg-white px-3 py-2 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                    disabled={isReadOnlySettled || orderNoteLocked}
+                    onClick={() => {
+                      setNoteDraft(orderNote);
+                      setNoteModal({ type: "order" });
+                    }}
+                    type="button"
+                  >
+                  {orderNoteLocked ? "已鎖定" : "編輯"}
+                </button>
+              </div>
+            </div>
+          </section>
+
+          <main className="flex h-full flex-col overflow-hidden bg-slate-100">
+            <div className="border-b border-slate-200 bg-white px-4 py-3">
+              <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+                <div className="flex min-w-0 flex-1 items-start gap-2">
+                  <div
+                    className={`min-w-0 flex-1 ${
+                      categoriesExpanded ? "" : "max-h-[88px] overflow-hidden"
+                    }`}
+                  >
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        key="all"
+                        className={`h-10 whitespace-nowrap shrink-0 rounded-full px-4 py-2 text-sm font-semibold ${
+                          effectiveCategoryId === "" ? "bg-orange-500 text-white" : "bg-slate-100 text-slate-700"
+                        }`}
+                        onClick={() => setActiveCategoryId(ALL_MENU_CATEGORY_ID)}
+                        type="button"
+                      >
+                        {t("全部")}
+                      </button>
+                      {bootstrap.categories.map((category) => (
+                        <button
+                          key={category.id}
+                          className={`h-10 whitespace-nowrap shrink-0 rounded-full px-4 py-2 text-sm font-semibold ${
+                            effectiveCategoryId === category.id
+                              ? "bg-orange-500 text-white"
+                              : "bg-slate-100 text-slate-700"
+                          }`}
+                          onClick={() => setActiveCategoryId(category.id)}
+                          type="button"
+                        >
+                          {category.name}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  {bootstrap.categories.length > CATEGORY_COLLAPSE_THRESHOLD ? (
+                    <button
+                      className="h-10 shrink-0 whitespace-nowrap rounded-full bg-white px-3 py-2 text-sm font-semibold text-orange-600 ring-1 ring-orange-200 transition-colors hover:bg-orange-50"
+                      onClick={() => setCategoriesExpanded((value) => !value)}
+                      type="button"
+                    >
+                      {categoriesExpanded ? "收起 ▴" : "全部分類 ▾"}
+                    </button>
+                  ) : null}
+                </div>
+                <div className="flex shrink-0 items-center gap-2 xl:w-28">
+                  <input
+                    className="h-10 w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm outline-none transition-all duration-150 focus:border-orange-400"
+                    onChange={(event) => {
+                      const next = event.target.value;
+                      setSearchKeyword(next);
+                      if (next.trim()) {
+                        // 搜尋時自動切到「全部」
+                        setActiveCategoryId(ALL_MENU_CATEGORY_ID);
+                      }
+                    }}
+                    placeholder={t("搜尋商品")}
+                    value={searchKeyword}
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-auto p-4">
+              <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+                {filteredMenuItems.map((item) => {
+                  const soldOut = isItemSoldOut(item.id);
+                  const remainingQty = soldOutMap[item.id]?.remainingQty;
+                  const hasRemainingBadge =
+                    typeof remainingQty === "number" && remainingQty > 0 && (soldOutMap[item.id]?.initialQty ?? 0) > 0;
+                  return (
+                  <button
+                    key={item.id}
+                    className={`flex min-h-36 flex-col justify-between rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-sm transition ${
+                      soldOut ? "opacity-60" : "hover:-translate-y-0.5 hover:border-orange-300"
+                    } disabled:cursor-not-allowed disabled:opacity-40`}
+                    disabled={isReadOnlySettled}
+                    onClick={() => addMenuItem(item)}
+                    type="button"
+                  >
+                    <div className="min-w-0">
+                      <div
+                        className="line-clamp-3 whitespace-normal break-words text-sm font-semibold leading-snug text-slate-900"
+                        title={item.name}
+                      >
+                        {item.name}
+                      </div>
+                      {hasRemainingBadge ? (
+                        <div className="mt-2 inline-flex rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700">
+                          只剩 {remainingQty} 份
+                        </div>
+                      ) : null}
+                    </div>
+                    <div className="mt-2 flex items-center justify-between">
+                      <div className="text-base font-semibold text-slate-900">
+                        {item.isMarketPrice ? "時價菜" : formatMoney(item.price, bootstrap.currency)}
+                      </div>
+                      <div
+                        className={`rounded-full px-2 py-1 text-xs font-semibold ${
+                          soldOut ? "bg-amber-50 text-amber-700" : "bg-orange-50 text-orange-600"
+                        }`}
+                      >
+                        {soldOut ? "售罄" : "加入"}
+                      </div>
+                    </div>
+                  </button>
+                  );
+                })}
+                {filteredMenuItems.length === 0 ? (
+                  <div className="col-span-full rounded-2xl border border-dashed border-slate-200 bg-white p-10 text-center text-sm text-slate-500">
+                    {t("沒有符合條件的商品")}
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          </main>
+
+          <section className="flex h-full flex-col overflow-hidden border-l border-slate-200 bg-white">
+            <div className="border-b border-slate-100 px-4 py-4">
+              <div className="text-base font-semibold text-slate-900">{t("收銀與支付")}</div>
+              <div className="mt-1 text-xs text-slate-500">
+                {isQuickMode
+                  ? "點餐結帳在此；線上／線下訂單見螢幕下方"
+                  : currentSettlementOrder
+                    ? `待結帳單號 ${currentSettlementOrder.localOrderNo}`
+                    : selectedTableStatus === "draft"
+                      ? "目前尚未下單，可繼續加菜或送廚房"
+                      : "目前未有待結帳訂單，可先開台或送廚房單"}
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-auto px-4 py-4">
+              <>
+              <div className="rounded-3xl bg-slate-50 p-4">
+                <div className="flex items-center justify-between text-sm text-slate-500">
+                  <span>{t("小計")}</span>
+                  <span className="font-semibold text-slate-900">
+                    {formatMoney(paymentSummary.subtotal, bootstrap.currency)}
+                  </span>
+                </div>
+                <div className="mt-4 border-t border-slate-200 pt-4">
+                  {/* 折扣分項：單品折扣 + 全單折扣（用戶要求所有訂單明細位都要見到） */}
+                  <OrderDiscountRow
+                    currency={bootstrap.currency}
+                    items={currentSettlementOrder?.items ?? workspaceOrder?.items ?? cartItems}
+                    wholeOrderDiscountAmount={paymentSummary.discountAmount}
+                  />
+                  {(!orderItemDiscountTotal(currentSettlementOrder?.items ?? workspaceOrder?.items ?? cartItems) &&
+                    !(paymentSummary.discountAmount > 0)) ? (
+                    <div className="mb-3 flex items-center justify-between text-sm text-slate-500">
+                      <span>{t("折扣")}</span>
+                      <span className="font-semibold text-slate-900">-{formatMoney(0, bootstrap.currency)}</span>
+                    </div>
+                  ) : null}
+                  <div className="mt-3 text-xs font-semibold text-slate-500">{t("應收")}</div>
+                  <div className="mt-2 text-3xl font-semibold tracking-tight text-orange-600">
+                    {formatMoney(paymentSummary.total, bootstrap.currency)}
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-2 grid gap-2">
+                {!isQuickMode ? (
+                  <button
+                    className="rounded-2xl bg-orange-500 px-4 py-3 text-base font-semibold text-white hover:bg-orange-600 disabled:cursor-not-allowed disabled:opacity-40"
+                    aria-busy={orderSubmitting}
+                    title={!shift.openedAt ? "今日未開工：請先按頁首「開工」" : undefined}
+                    disabled={orderSubmitting || isReadOnlySettled || !shift.openedAt}
+                    onClick={() => void sendToKitchen()}
+                    type="button"
+                  >
+                    {orderSubmitting ? "提交中…" : isAddOnOrder ? "加單" : "下單"}
+                  </button>
+                ) : null}
+                <button
+                  className="rounded-2xl bg-slate-900 px-4 py-3 text-base font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
+                  title={!shift.openedAt ? "今日未開工：請先按頁首「開工」" : undefined}
+                  disabled={isReadOnlySettled || !shift.openedAt}
+                  onClick={() => void openSettlementModal()}
+                  type="button"
+                >
+                  {t("去結帳")}
+                </button>
+              </div>
+
+              {offlineMode ? (
+                <div className="mt-3 w-full rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-700">
+                  {t("目前離線，恢復網絡後可補傳資料")}
+                </div>
+              ) : null}
+
+              {/* ── 打印操作（堂食／外賣模式）─────────────────────────────
+                  ・「自動打印」開關：關閉時落單／結帳完全唔出單，切換即時生效。
+                  ・兩個手動掣唔受開關影響（用戶確認「手動優先」）：
+                    「打印廚房單」＝ 打印中心「重打整單」；「打印收據」＝ 即時印當前所有已點項目。
+                  ・原位於「訂單明細」section 內，已搬到此處方便收銀員喺結帳區域直接操作。 */}
+              <div className="mt-3 rounded-2xl border border-slate-200 bg-white p-2">
+                <div className="flex items-center justify-between px-1">
+                  <AutoAcceptPill
+                    enabled={autoPrintEnabled}
+                    label={t("自動打印")}
+                    onChange={setAutoPrint}
+                    size="sm"
+                  />
+                  <span className="text-[11px] font-medium text-slate-400">
+                    {autoPrintEnabled ? "落單／結帳自動出單" : "已關閉 · 唔會自動出單"}
+                  </span>
+                </div>
+                <div className="mt-2 grid grid-cols-2 gap-2">
+                  <button
+                    aria-busy={kitchenPrintSubmitting}
+                    className="rounded-2xl bg-white px-3 py-2 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                    disabled={kitchenPrintSubmitting || isReadOnlySettled}
+                    onClick={printKitchenTicketNow}
+                    type="button"
+                  >
+                    {kitchenPrintSubmitting ? "打印中…" : "打印廚房單"}
+                  </button>
+                  <button
+                    aria-busy={receiptPrintSubmitting}
+                    className="rounded-2xl bg-white px-3 py-2 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                    disabled={receiptPrintSubmitting || isReadOnlySettled}
+                    onClick={printReceiptNow}
+                    type="button"
+                  >
+                    {receiptPrintSubmitting ? "打印中…" : "打印收據"}
+                  </button>
+                </div>
+                {!autoPrintEnabled ? (
+                  <div className="mt-2 rounded-xl bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-700">
+                    {t("落單／結帳不會自動打印任何單據；上面兩個掣係手動打印，仍然可以使用。")}
+                  </div>
+                ) : null}
+              </div>
+
+              {/* 最近訂單：點餐頁不顯示，避免干擾店員操作 */}
+              </>
+            </div>
+          </section>
+        </div>
+        {isQuickMode && !offlineMode && bootstrap ? (
+          <QuickModeOrdersBar
+            autoAcceptOnline={autoAcceptOnlineOrders}
+            completeLabel={quickCompleteLabel}
+            completionLabel={quickCompletionLabel}
+            currency={bootstrap.currency}
+            onAutoAcceptOnlineChange={(next) => void setAutoAcceptOnlineOrders(next)}
+            onMarkCompleted={(orderId, label) => markOrderCompleted(orderId, { label })}
+            onMarkReady={(orderId) => updateQuickFulfillment(orderId)}
+            onOnlineToast={(payload) =>
+              // ⚠️ 快餐模式以前一律 `success ? success : info` —— 會把「出紙失敗」（error）
+              // 同「自動接單但未出廚房單」（warning）都降級成灰色 info，等於冇提示
+              // （2026-09-14 J 實案：取餐碼 005 冇紙又冇 job，收銀完全唔知）。
+              setToast({
+                tone:
+                  payload.tone === "success"
+                    ? "success"
+                    : payload.tone === "error"
+                      ? "error"
+                      : payload.tone === "warning"
+                        ? "warning"
+                        : "info",
+                message: payload.message,
+              })
+            }
+            onCheckout={(orderId) => setPayingOrderId(orderId)}
+            onConfirmSelfOrder={(order) => {
+              const result = confirmSelfOrder(order.id);
+              setToast(
+                result.ok
+                  ? { tone: "success", message: `已接受自助單 ${order.localOrderNo}` }
+                  : { tone: "error", message: result.error ?? "接受失敗" },
+              );
+              return result;
+            }}
+            onRejectSelfOrder={(order) => {
+              const result = rejectSelfOrder(order.id);
+              setToast(
+                result.ok
+                  ? { tone: "success", message: `已拒絕自助單 ${order.localOrderNo}` }
+                  : { tone: "error", message: result.error ?? "拒絕失敗" },
+              );
+              return result;
+            }}
+            onViewOrder={(orderId) => setViewingOrderId(orderId)}
+            /**
+             * 外賣平台單「取消（覆寫）」：卡上按鈕 → 開同一個原因彈窗（`void_platform_order`）。
+             * 唔直接寫入 —— 一定要店主／員工填原因（審計 + 影響報表）。
+             */
+            onVoidPlatformOrder={(order) => {
+              setOrderActionRequest({ type: "void_platform_order", orderId: order.id });
+              setOrderActionReason("");
+            }}
+            noticeFocus={noticeFocus}
+            preparingOrders={quickPreparingOrders}
+            waitingOrders={quickWaitingOrders}
+          />
+        ) : null}
+        </div>
+        )}
+      </div>
+
+      <ItemSpecModal
+        key={`${specModalItem?.id ?? "none"}-${specEditingKey ?? "new"}-${JSON.stringify(selectedSpecValues)}`}
+        isOptionDisabled={isSpecOptionSoldOut}
+        onClose={() => {
+          setSpecModalOpen(false);
+          setSpecModalItem(null);
+          setSpecEditingKey(null);
+          setSelectedSpecValues({});
+        }}
+        onConfirm={applySpecSelection}
+        open={specModalOpen}
+        selectedSpecs={selectedSpecValues}
+        specGroups={specModalItem?.specGroups ?? []}
+        title={specModalItem ? `${specModalItem.name} 規格` : "規格"}
+      />
+
+      {marketPriceItem ? (
+        <ResponsiveModal
+          onClose={() => {
+            setMarketPriceItem(null);
+            setMarketPriceValue("");
+            setMarketPriceSpecs([]);
+          }}
+          widthClassName="max-w-3xl"
+          zIndexClassName="z-[60]"
+          bodyClassName="p-0"
+        >
+          <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_300px] md:h-[520px]">
+            <div className="p-5">
+              <div className="text-xs font-semibold uppercase tracking-wide text-rose-500">{t("時價菜")}</div>
+              <h3 className="mt-1 text-xl font-bold text-slate-900">{marketPriceItem.name}</h3>
+              {marketPriceSpecs.length > 0 ? (
+                <ul className="mt-3 space-y-1 text-sm text-slate-500">
+                  {marketPriceSpecs.map((spec) => (
+                    <li key={`${spec.groupId}-${spec.optionId}`}>
+                      • {spec.groupName}：{spec.optionLabel}
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+              <p className="mt-4 text-sm text-slate-500">
+                請輸入本次下單的時價金額（{bootstrap.currency}）。
+              </p>
+              <div className="mt-3 rounded-2xl bg-slate-50 px-4 py-3 text-3xl font-bold text-slate-900">
+                {bootstrap.currency} {marketPriceValue || "0.00"}
+              </div>
+              <p className="mt-3 text-xs text-slate-400">
+                {t("金額每次落單都不同，請向廚房確認後填入。")}
+              </p>
+            </div>
+            <FixedNumberPad
+              title={t("時價金額")}
+              value={marketPriceValue}
+              onChange={setMarketPriceValue}
+              onConfirm={confirmMarketPrice}
+              confirmLabel="加入單"
+              showDisplay
+            />
+          </div>
+        </ResponsiveModal>
+      ) : null}
+
+      {noteModal ? (
+        <ResponsiveModal
+          actions={
+            <>
+              <button
+                className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                onClick={() => setNoteDraft("")}
+                type="button"
+              >
+                {t("清空")}
+              </button>
+              <button
+                className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white"
+                onClick={() => {
+                  if (noteModal.type === "order") {
+                    // 資料層防線：全單備註喺訂單送出後即鎖定（就算彈窗被其他途徑打開都擋得住）。
+                    if (orderNoteLocked) {
+                      setToast({ tone: "info", message: ORDER_NOTE_LOCKED_MESSAGE });
+                      setNoteModal(null);
+                      return;
+                    }
+                    setOrderNote(noteDraft.trim());
+                  } else if (noteModal.itemKey) {
+                    applyItemNote(noteModal.itemKey, noteDraft);
+                  }
+                  setNoteModal(null);
+                }}
+                type="button"
+              >
+                {t("保存")}
+              </button>
+            </>
+          }
+          description={t("可多選常用備註，也可自由輸入。")}
+          onClose={() => setNoteModal(null)}
+          title={noteModal.type === "order" ? "全單備註" : "單品備註"}
+          widthClassName="max-w-2xl"
+          zIndexClassName="z-[70]"
+        >
+            <div>
+              <div className="text-xs font-semibold text-slate-500">{t("常用備註")}</div>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {localSettings.notePresets.length === 0 ? (
+                  <div className="text-sm text-slate-500">{t("尚未設定常用備註（可到 設置 → 備註 新增）。")}</div>
+                ) : (
+                  localSettings.notePresets.map((preset) => (
+                    <button
+                      key={preset}
+                      className="rounded-full bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-200"
+                      onClick={() => {
+                        const base = noteDraft.trim();
+                        const next = base ? (base.includes(preset) ? base : `${base}，${preset}`) : preset;
+                        setNoteDraft(next);
+                      }}
+                      type="button"
+                    >
+                      {preset}
+                    </button>
+                  ))
+                )}
+              </div>
+            </div>
+
+            <div className="mt-4">
+              <div className="text-xs font-semibold text-slate-500">{t("自由輸入")}</div>
+              {/*
+                iOS 鍵盤（2026-09-14 全單／單品備註「焦點有到、鍵盤唔彈」）四項設定：
+                ① autoFocus —— 焦點喺「開彈窗嗰下嘅 user gesture」內取得；
+                ② text-base = 16px —— iOS 對 <16px 欄位會 focus 自動放大，同 POS 全屏佈局撞；
+                   另 globals.css 有一條 @media (pointer: coarse) 全域規則做同樣事；
+                ③ autoCorrect/autoCapitalize/spellCheck 關閉 —— 中文輸入法組字唔會被自動更正食走；
+                ④ onPointerUp → refocusForIosKeyboard() —— iOS 只喺「焦點改變」時才彈鍵盤：
+                   若欄位已經聚焦（autoFocus 已取焦／上一下撳過），再撳同一欄位**唔會**彈。
+                   呢個 handler 會喺「鍵盤明顯未開」時先 blur 再 focus，造出新鮮嘅焦點改變
+                   （詳細理由見 src/lib/pos/ios-keyboard.ts）。
+                另外兩項根治：layout.tsx 移除 user-scalable=no（視口重算失敗就唔彈鍵盤）
+                ＋ src/components/ios-focus-helper.tsx（focus 時 scrollIntoView block:'nearest'）。
+              */}
+              <textarea
+                autoCapitalize="off"
+                autoCorrect="off"
+                autoFocus
+                className="mt-2 w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-base leading-relaxed text-slate-900 outline-none focus:border-orange-400"
+                enterKeyHint="done"
+                onChange={(event) => setNoteDraft(event.target.value)}
+                onPointerUp={(event) => refocusForIosKeyboard(event.currentTarget)}
+                placeholder={t("例如：不要吸管、少辣、走蔥...")}
+                rows={4}
+                spellCheck={false}
+                style={{ touchAction: "manipulation", WebkitUserSelect: "text" }}
+                value={noteDraft}
+              />
+            </div>
+        </ResponsiveModal>
+      ) : null}
+
+      {/* 單品折扣彈窗：內容同「全單折扣」下拉一致，只套用於該單品（docs/折扣需求 #3）。 */}
+      {itemDiscountEditor ? (
+        <ResponsiveModal
+          actions={
+            <>
+              <button
+                className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                onClick={() => {
+                  applyItemDiscount(itemDiscountEditor, undefined);
+                  setItemDiscountEditor(null);
+                }}
+                type="button"
+              >
+                {t("移除折扣")}
+              </button>
+              <button
+                className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white"
+                onClick={() => saveItemDiscount(itemDiscountEditor, itemDiscountDraft)}
+                type="button"
+              >
+                {t("保存")}
+              </button>
+            </>
+          }
+          description={t("此折扣只套用於該單品，不影響全單。")}
+          onClose={() => setItemDiscountEditor(null)}
+          title={t("單品折扣")}
+          widthClassName="max-w-md"
+        >
+          <label className="grid gap-1 text-xs font-semibold text-slate-500">
+            選擇折扣
+            <select
+              className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900"
+              onChange={(event) => setItemDiscountDraft(event.target.value)}
+              value={itemDiscountDraft}
+            >
+              <option value="">{t("冇折扣")}</option>
+              {localSettings.discounts.map((disc) => (
+                <option key={disc.id} value={disc.id}>
+                  {disc.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        </ResponsiveModal>
+      ) : null}
+
+      {roModalOpen && activeOrderId
+        ? (() => {
+            const target = orders.find((o) => o.id === activeOrderId) ?? null;
+            if (!target) return null;
+            return (
+              <ResponsiveModal
+                description={`${target.tableName} · 退回可編輯後重新結帳`}
+                onClose={() => {
+                  setRoModalOpen(false);
+                  setRoReason("");
+                }}
+                title={t("返結帳（反結賬）")}
+                widthClassName="max-w-md"
+              >
+                <div className="grid gap-3">
+                  <p className="text-[11px] text-amber-700">
+                    {t("必須揀返結原因。確認後此單退回可編輯，可改價／加餐後重新結帳。")}
+                  </p>
+                  {/* 🔴 線上已付金額鎖死（商家 2026-09-12 定案：准返結但唔可以改 prepaidAmount）；
+                      嗰筆錢喺 Ledger，POS 冇 RPC 可以沖正 → 一定要當面講清楚，
+                      否則收銀會以為「返結 = 退錢」。同返結單上嘅文案係同一口徑。 */}
+                  {(() => {
+                    const target = orders.find((order) => order.id === activeOrderId);
+                    const prepaid = target?.onlineOrderId ? target.prepaidAmount ?? 0 : 0;
+                    if (prepaid <= 0) return null;
+                    return (
+                      <p className="rounded-xl bg-red-50 px-3 py-2 text-[11px] font-semibold leading-relaxed text-red-700">
+                        ⚠️ 此單線上已付 {bootstrap?.currency ?? "MOP"} {prepaid.toFixed(2)}
+                        ，返結唔會沖正／退款（款項喺會員通 Ledger）。
+                      </p>
+                    );
+                  })()}
+                  <select
+                    className="w-full rounded-lg border border-amber-300 bg-white px-2 py-2 text-sm"
+                    value={roReason}
+                    onChange={(e) => setRoReason(e.target.value)}
+                  >
+                    <option value="" disabled>
+                      {t("揀返結原因…")}
+                    </option>
+                    {(loadPosLocalSettings()?.reopenReasons ?? []).map((r) => (
+                      <option key={r} value={r}>
+                        {r}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    className="w-full rounded-xl bg-amber-600 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50"
+                    disabled={!roReason || roSubmitting}
+                    onClick={() => void handlePosReopen()}
+                  >
+                    {roSubmitting ? "處理中…" : "返結帳"}
+                  </button>
+                </div>
+              </ResponsiveModal>
+            );
+          })()
+        : null}
+
+      {viewingOrder ? (
+        <ResponsiveModal
+          onClose={() => setViewingOrderId(null)}
+          actions={
+            <>
+              <button
+                className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                onClick={() => setViewingOrderId(null)}
+                type="button"
+              >
+                {t("關閉")}
+              </button>
+              {canReprintBill(viewingOrder.status) ? (
+                <button
+                  className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
+                  onClick={() => reprintBillForOrder(viewingOrder)}
+                  type="button"
+                >
+                  {t("補打帳單")}
+                </button>
+              ) : null}
+              <button
+                className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                onClick={() => reprintOrder(viewingOrder)}
+                type="button"
+              >
+                {t("重打單")}
+              </button>
+              {/* 用戶反饋：查看內嘅掣要同外面（quick strip）完全一致。
+                  將「已完成 / 去結帳 / 取消結帳」舊邏輯換成依訂單狀態 mirror strip：
+                  - 自助單（kiosk/scan counter）：split 雙掣 + 觸發後消失機制
+                  - 收銀台單（pos counter）：舊單鏈（可取餐 → 已取餐）
+                  - 堂食單：冇 strip 掣 → 用「取消結帳」/「去結帳」（管理員導向），唔變
+                  退款 / 部分退款（settled only）仍保留（modal 限定管理員操作，strip 冇）。 */}
+              {(() => {
+                const v = viewingOrder;
+                const isSelf = isSelfOrder(v);
+                const isQuick = isQuickCounterOrder(v);
+                const showSplit = isQuick && isSelf;
+                const isPaid = v.status === "paid";
+                const isReady = v.fulfillmentStatus === "ready";
+                const isBothDone = isPaid && isReady;
+                const completeText = quickCompleteLabel(v);
+
+                /**
+                 * 🔴 外賣平台單（澳覓 / MFOOD）「取消（覆寫）」（2026-09-24 使用者要求）。
+                 *
+                 * **刻意唔跟狀態流程**：平台單嘅錢係平台收，我哋只係記錄營業額；
+                 * 平台嗰邊取消咗（可能喺任何階段，甚至已完成之後）我哋就要跟住唔計入報表。
+                 * 所以 `paid` / `settled` 都要出呢粒掣，唔可以因為「已收款」而收埋。
+                 * 只有已作廢／已退款先隱藏（後者要用退款流程，否則報表淨額會出錯）。
+                 * 規則本體：`@/lib/pos/platform-order`（零 import、有單測）。
+                 */
+                const platformVoidBtn = canVoidPlatformOrder(v) ? (
+                  <button
+                    className="rounded-2xl bg-rose-50 px-4 py-2 text-sm font-semibold text-rose-700 ring-1 ring-rose-200"
+                    onClick={() => {
+                      setOrderActionRequest({ type: "void_platform_order", orderId: v.id });
+                      setOrderActionReason("");
+                    }}
+                    title={t("平台單作廢（覆寫）：任何階段都可用，會將呢張單唔計入報表")}
+                    type="button"
+                  >
+                    {t("取消")}
+                  </button>
+                ) : null;
+
+                // draft 自助單：外面 strip 出「接受 / 拒絕」，彈窗要 mirror（2026-09-11 補）。
+                // ⚠️ 舊版呢個 case 三個掣都被 `v.status !== "draft"` 擋走 → 撳「查看」之後
+                // 彈窗完全冇接單入口，收銀只可以關窗再返出去撳卡。而家同外面完全一致：
+                // 文字（接受 / 拒絕）、顏色（emerald / rose）、尺寸（全局統一，同卡片 /
+                // 訂單列表用同一粒元件同一個 size，唔再喺彈窗特別放大）、
+                // 間距（外層 flex gap-2）、對齊（justify-end）。
+                if (v.status === "draft" && isSelf) {
+                  return (
+                    <SelfOrderActionButtons
+                      fill={false}
+                      orderLabel={v.localOrderNo}
+                      onConfirm={() => {
+                        const result = confirmSelfOrder(v.id);
+                        if (result.ok) {
+                          setToast({ tone: "success", message: `已接受自助單 ${v.localOrderNo}` });
+                          setViewingOrderId(null);
+                        } else {
+                          setToast({ tone: "error", message: result.error ?? "接受失敗" });
+                        }
+                        return result;
+                      }}
+                      onReject={() => {
+                        const result = rejectSelfOrder(v.id);
+                        if (result.ok) {
+                          setToast({ tone: "success", message: `已拒絕自助單 ${v.localOrderNo}` });
+                          setViewingOrderId(null);
+                        } else {
+                          setToast({ tone: "error", message: result.error ?? "拒絕失敗" });
+                        }
+                        return result;
+                      }}
+                    />
+                  );
+                }
+
+                if (showSplit) {
+                  // 自助單：mirror strip 嘅 split 雙掣邏輯
+                  return (
+                    <>
+                      {!isPaid && v.status !== "draft" ? (
+                        <button
+                          className="rounded-2xl bg-slate-700 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
+                          onClick={() => {
+                            setViewingOrderId(null);
+                            setPayingOrderId(v.id);
+                          }}
+                          type="button"
+                        >
+                          {t("去結帳")}
+                        </button>
+                      ) : null}
+                      {!isReady && v.status !== "draft" ? (
+                        <button
+                          className="rounded-2xl bg-orange-500 px-4 py-2 text-sm font-semibold text-white hover:bg-orange-600"
+                          onClick={() => updateQuickFulfillment(v.id)}
+                          type="button"
+                        >
+                          {t("可取餐")}
+                        </button>
+                      ) : null}
+                      {isBothDone ? (
+                        <button
+                          className="rounded-2xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700"
+                          onClick={() => markOrderCompleted(v.id, { label: completeText })}
+                          type="button"
+                        >
+                          {completeText}
+                        </button>
+                      ) : null}
+                      {/* 「取消結帳」（2026-09-12 補回）：客人落單後幾秒內反悔嘅逃生口。
+                          只喺未收款（sent_to_kitchen）出現 —— draft 已經有「接受／拒絕」。 */}
+                      {v.status === "sent_to_kitchen" ? (
+                        <button
+                          className="rounded-2xl bg-rose-50 px-4 py-2 text-sm font-semibold text-rose-700 ring-1 ring-rose-200"
+                          onClick={() => {
+                            setOrderActionRequest({ type: "cancel_order", orderId: v.id });
+                            setOrderActionReason("");
+                          }}
+                          type="button"
+                        >
+                          {t("取消結帳")}
+                        </button>
+                      ) : null}
+                    </>
+                  );
+                }
+                if (isQuick) {
+                  // 收銀台快餐單（source="pos"）：mirror 卡片單鏈（可取餐 → 完成），
+                  // **一律以出餐階段 `isQuickOrderReady()` 為準**。
+                  // 舊寫法 `inWaiting = isBothDone || (paid && ready)` 會令「未收款先出餐」
+                  // （status=sent_to_kitchen + fulfillmentStatus=ready，docs/87 §6.3 合法路徑）
+                  // 嘅單兩個分支都唔中 → 跌落下面「堂食單」分支，彈窗變成
+                  // 「取消結帳 / 去結帳」而且冇可取餐／完成，同卡片完全唔一致。
+                  const isOpen = v.status === "sent_to_kitchen" || v.status === "paid";
+                  // 「取消結帳」掣（2026-09-12 補回）：**唔可以**因為上面兩個 early return
+                  // 而消失 —— 客人落單後約 2 秒內仍可能反悔，冇咗呢粒掣張單就卡死冇得取消。
+                  // 只喺未收款（`sent_to_kitchen` / `draft`）出現：`paid` 已經收咗錢，
+                  // 作廢要走返結／退款，唔應該用「取消結帳」靜靜抹走。
+                  const cancelButton = canVoidPlatformOrder(v) ? (
+                    platformVoidBtn
+                  ) : isPaid ? null : (
+                    <button
+                      className="rounded-2xl bg-rose-50 px-4 py-2 text-sm font-semibold text-rose-700 ring-1 ring-rose-200"
+                      onClick={() => {
+                        setOrderActionRequest({ type: "cancel_order", orderId: v.id });
+                        setOrderActionReason("");
+                      }}
+                      type="button"
+                    >
+                      {t("取消結帳")}
+                    </button>
+                  );
+                  if (isOpen && !isReady) {
+                    return (
+                      <>
+                        {cancelButton}
+                        <button
+                          className="rounded-2xl bg-orange-500 px-4 py-2 text-sm font-semibold text-white hover:bg-orange-600"
+                          onClick={() => updateQuickFulfillment(v.id)}
+                          type="button"
+                        >
+                          {t("可取餐")}
+                        </button>
+                      </>
+                    );
+                  }
+                  if (isOpen && isReady) {
+                    return (
+                      <>
+                        {cancelButton}
+                        <button
+                          className="rounded-2xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700"
+                          onClick={() => markOrderCompleted(v.id, { label: completeText })}
+                          type="button"
+                        >
+                          {completeText}
+                        </button>
+                      </>
+                    );
+                  }
+                  // 唔係 open（draft / 終態 / 已返結）→ **唔 return**，落下面通用分支，
+                  // 保持原本「取消結帳 / 去結帳 / 退款」口徑完全唔變。
+                }
+                // 堂食單 / 其他：保留舊管理員導向掣
+                return (
+                  <>
+                    {(v.status === "draft" || v.status === "sent_to_kitchen") ? (
+                      <button
+                        className="rounded-2xl bg-red-600 px-4 py-2 text-sm font-semibold text-white"
+                        onClick={() => {
+                          setOrderActionRequest({ type: "cancel_order", orderId: v.id });
+                          setOrderActionReason("");
+                        }}
+                        type="button"
+                      >
+                        {t("取消結帳")}
+                      </button>
+                    ) : null}
+                    {v.status !== "settled" &&
+                    v.status !== "cancelled" &&
+                    v.status !== "refunded" &&
+                    (v.prepaidAmount ?? 0) < v.total ? (
+                      <button
+                        className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white"
+                        onClick={() => {
+                          setViewingOrderId(null);
+                          setPayingOrderId(v.id);
+                        }}
+                        type="button"
+                      >
+                        {t("去結帳")}
+                      </button>
+                    ) : null}
+                    {/* 🔴 已結帳／已完成嘅外賣平台單要靠呢度先有掣（`isQuick` 分支只處理
+                        open 狀態）—— 平台單任何階段都要可以作廢（覆寫）。
+                        非平台單一律 null，本地單口徑完全不變。 */}
+                    {platformVoidBtn}
+                  </>
+                );
+              })()}
+              {(viewingOrder.status === "settled" || viewingOrder.status === "partially_refunded") ? (
+                <>
+                  <button
+                    className="rounded-2xl bg-amber-500 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                    disabled={!canRefundOrder}
+                    onClick={() => {
+                      if (!canRefundOrder) {
+                        showPermissionDenied("退款");
+                        return;
+                      }
+                      setPartialRefundOrderId(viewingOrder.id);
+                      setPartialRefundReason("");
+                      setPartialRefundQuantities({});
+                    }}
+                    type="button"
+                  >
+                    {t("部分退款")}
+                  </button>
+                  <button
+                    className="rounded-2xl bg-red-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                    disabled={!canRefundOrder}
+                    onClick={() => {
+                      if (!canRefundOrder) {
+                        showPermissionDenied("退款");
+                        return;
+                      }
+                      setOrderActionRequest({ type: "refund_order", orderId: viewingOrder.id });
+                      setOrderActionReason("");
+                    }}
+                    type="button"
+                  >
+                    {t("整單退款")}
+                  </button>
+                </>
+              ) : null}
+            </>
+          }
+          description={`${viewingOrder.localOrderNo} · ${viewingOrder.tableName}`}
+          header={
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="text-xl font-semibold text-slate-900">{t("訂單詳情")}</div>
+                <div className="mt-1 text-sm text-slate-500">
+                  {viewingOrder.localOrderNo} · {viewingOrder.tableName}
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                {(() => {
+                  // 訂單狀態標籤（統一看板：草稿/製作中/已付款/待取餐/已完成/已取消/已退款/部分退款/已返結）
+                  // 顏色 token 見 getOrderStatusBadge（pos-order-filters.ts）
+                  const badge = getOrderStatusBadge(viewingOrder);
+                  const prepaidFull =
+                    viewingOrder.status === "paid" || (viewingOrder.prepaidAmount ?? 0) >= viewingOrder.total;
+                  return (
+                    <>
+                      <div
+                        className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold ${badge.bgClass} ${badge.textClass}`}
+                      >
+                        <span className={`h-2 w-2 rounded-full ${badge.dotClass}`} />
+                        {badge.label}
+                      </div>
+                      {/* 快餐單（2026-09-12）：付款狀態同出餐狀態係兩個獨立維度，
+                          要同時顯示（例：已結帳 · 製作中）。此時「待完成」多餘 → 唔再出。 */}
+                      {isQuickCounterOrder(viewingOrder) ? (
+                        (() => {
+                          const pay = getPaymentBadge(viewingOrder);
+                          return (
+                            <div
+                              className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${pay.bgClass} ${pay.textClass}`}
+                            >
+                              {pay.label}
+                            </div>
+                          );
+                        })()
+                      ) : prepaidFull &&
+                        viewingOrder.status !== "settled" &&
+                        viewingOrder.status !== "refunded" &&
+                        viewingOrder.status !== "partially_refunded" ? (
+                        <div className="inline-flex rounded-full bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-700">
+                          {t("待完成")}
+                        </div>
+                      ) : null}
+                    </>
+                  );
+                })()}
+              </div>
+            </div>
+          }
+          showCloseButton={false}
+          widthClassName="max-w-2xl"
+        >
+            <div className="grid gap-2">
+              {viewingOrder.items.map((item, index) => (
+                <div key={`${item.menuItemId}-${index}`} className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-sm font-semibold text-slate-900">{item.name}</div>
+                      {item.selectedSpecs?.length ? (
+                        <div className="mt-1 text-xs text-slate-500">
+                          {item.selectedSpecs.map((spec) => `${spec.groupName}:${spec.optionLabel}`).join(" / ")}
+                        </div>
+                      ) : null}
+                      {/* docs/84 §7：break-words 預防窄容器下長備註向右撐破版面 */}
+                      {item.note ? (
+                        <div className="mt-1 whitespace-pre-wrap break-words text-xs text-slate-500">備註：{item.note}</div>
+                      ) : null}
+                      {/* 單品折扣：原價刪除線 + 折後價 + 優惠金額（用戶要求查看內見到「折扣多少」） */}
+                      <div className="mt-1">
+                        <OrderItemDiscountLine currency={bootstrap.currency} item={item} />
+                      </div>
+                      {/* 單品折扣原因（2026-09-11）：逐件顯示，令「邊件菜、點解折」一眼睇到 */}
+                      {item.discountNote ? (
+                        <div className="mt-1 whitespace-pre-wrap break-words text-xs font-semibold text-amber-700">
+                          折扣原因：{item.discountNote}
+                        </div>
+                      ) : null}
+                    </div>
+                    <div className="shrink-0 text-right">
+                      <div className="text-sm font-semibold text-slate-900">x{item.quantity}</div>
+                      <div className="mt-0.5 text-xs tabular-nums text-slate-500">
+                        {formatMoney(item.price * item.quantity, bootstrap.currency)}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+              {(viewingOrder.voidedItems ?? []).map((item, index) => (
+                <div
+                  key={`voided-${item.menuItemId}-${index}`}
+                  className="rounded-2xl border border-red-200 bg-red-50/60 p-3 opacity-80"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-semibold text-slate-900 line-through">
+                        {item.name}
+                        <span className="ml-2 inline-flex rounded-full bg-red-500 px-2 py-0.5 text-[11px] font-bold text-white">
+                          {t("已退菜")}
+                        </span>
+                      </div>
+                      {item.selectedSpecs?.length ? (
+                        <div className="mt-1 text-xs text-slate-500">
+                          {item.selectedSpecs.map((spec) => `${spec.groupName}:${spec.optionLabel}`).join(" / ")}
+                        </div>
+                      ) : null}
+                      {item.voidedReason ? (
+                        <div className="mt-1 text-[11px] text-red-600">退菜原因：{item.voidedReason}</div>
+                      ) : null}
+                    </div>
+                    <div className="shrink-0 rounded-full bg-red-200 px-3 py-1 text-xs font-semibold text-red-700">
+                      已退 x{item.quantity}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
+              {/* 全單折扣分項（單品折扣 + 全單折扣）— 用戶要求查看內見到「優惠多少」 */}
+              <OrderDiscountRow
+                currency={bootstrap.currency}
+                items={viewingOrder.items}
+                wholeOrderDiscountAmount={viewingOrder.discountAmount}
+              />
+              {/* 折扣備註（2026-09-11 需求 #2）：凡影響實收嘅調整都要見到原因 */}
+              {viewingOrderDiscountNotes.length > 0 ? (
+                <div className="mt-2 rounded-2xl border border-amber-200 bg-amber-50/60 px-3 py-2 text-sm text-slate-500">
+                  折扣備註：
+                  <span className="ml-1 inline-flex flex-wrap gap-1 align-middle">
+                    {viewingOrderDiscountNotes.map((note, index) => (
+                      <span
+                        key={`${note.kind}-${note.text}-${index}`}
+                        className="inline-flex whitespace-nowrap rounded-md bg-amber-100 px-2 py-0.5 text-[11px] font-bold text-amber-800"
+                      >
+                        {note.text}
+                      </span>
+                    ))}
+                  </span>
+                </div>
+              ) : null}
+              {/* 外賣平台非菜品費用明細（餐盒費／膠袋費／商家優惠／配送費）：
+                  2026-09-24 使用者要求 —— 之前只喺收據印，訂單詳情完全睇唔到，
+                  令佢以為插件冇推到。店內單冇 `platformFees` → 組件自己唔 render。 */}
+              <PlatformFeeBreakdown currency={bootstrap.currency} fees={viewingOrder.platformFees} />
+              <div className="mt-2 flex items-center justify-between text-sm text-slate-500">
+                <span>{t("總計")}</span>
+                <span className="text-base font-semibold text-slate-900">{formatMoney(viewingOrder.total, bootstrap.currency)}</span>
+              </div>
+              {/* 平台實收（2026-09-26 需求）：營業額 vs 平台實際過數。
+                  🔴 同 local-orders-panel 用同一組件 —— 兩邊唔可以各寫一套口徑。
+                  🔴 只喺平台單出現（店內單／線上單唔應該見到「待對帳」）。 */}
+              {isPlatformOrder(viewingOrder) ? (
+                <PlatformSettlementBreakdown
+                  order={viewingOrder}
+                  currency={bootstrap.currency}
+                />
+              ) : null}
+              {viewingOrder.orderNote ? (
+                <div className="mt-2 text-sm text-slate-500">
+                  全單備註：<span className="font-semibold text-slate-900">{viewingOrder.orderNote}</span>
+                </div>
+              ) : null}
+              {/* 免單：獨立審計欄位（唔係 orderNote —— 後者受 docs/84 鎖定）。
+                  docs/84 §7：長文字要 whitespace-pre-wrap break-words，唔好用 truncate。 */}
+              {viewingOrder.compNote ? (
+                <div className="mt-2 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-500">
+                  免單備註：<span className="whitespace-pre-wrap break-words font-semibold text-slate-900">{viewingOrder.compNote}</span>
+                  {viewingOrder.compedAt ? (
+                    <span className="ml-2 text-xs">（{formatMacauDateTime(viewingOrder.compedAt)}）</span>
+                  ) : null}
+                </div>
+              ) : null}
+              {viewingOrder.prepaidAmount ? (
+                <div className="mt-2 flex items-center justify-between text-sm text-slate-500">
+                  <span>{t("已支付")}</span>
+                  <span className="font-semibold text-slate-900">
+                    {formatMoney(viewingOrder.prepaidAmount, bootstrap.currency)}
+                  </span>
+                </div>
+              ) : null}
+              {viewingOrder.cancelledReason ? (
+                <div className="mt-2 text-sm text-slate-500">
+                  取消原因：<span className="font-semibold text-slate-900">{viewingOrder.cancelledReason}</span>
+                </div>
+              ) : null}
+              {viewingOrder.refundedReason ? (
+                <div className="mt-2 text-sm text-slate-500">
+                  退款原因：<span className="font-semibold text-slate-900">{viewingOrder.refundedReason}</span>
+                </div>
+              ) : null}
+              {(viewingOrder.refundedAmount ?? 0) > 0 ? (
+                <div className="mt-2 flex items-center justify-between text-sm text-slate-500">
+                  <span>{t("已退款")}</span>
+                  <span className="font-semibold text-red-700">
+                    {formatMoney(viewingOrder.refundedAmount ?? 0, bootstrap.currency)}
+                  </span>
+                </div>
+              ) : null}
+              {viewingOrder.refundRecords?.length ? (
+                <div className="mt-4 rounded-2xl border border-red-100 bg-red-50/60 p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-sm font-semibold text-slate-900">{t("退款明細")}</div>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        className="rounded-2xl bg-white px-3 py-2 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                        onClick={() => exportRefundDetails(viewingOrder)}
+                        type="button"
+                      >
+                        {t("導出明細")}
+                      </button>
+                      <button
+                        className="rounded-2xl bg-white px-3 py-2 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                        onClick={() => setRefundSummaryExportOpen(true)}
+                        type="button"
+                      >
+                        {t("匯總導出")}
+                      </button>
+                    </div>
+                  </div>
+                  <div className="mt-3 grid gap-3">
+                    {viewingOrder.refundRecords
+                      .slice()
+                      .reverse()
+                      .map((record) => (
+                        <div key={record.id} className="rounded-2xl border border-red-100 bg-white p-3">
+                          <div className="flex items-center justify-between gap-3 text-sm">
+                            <span className="font-semibold text-slate-900">{formatMacauDateTime(record.createdAt)}</span>
+                            <span className="font-semibold text-red-700">
+                              {formatMoney(record.amount, bootstrap.currency)}
+                            </span>
+                          </div>
+                          <div className="mt-1 text-xs text-slate-500">原因：{record.reason}</div>
+                          <div className="mt-1 text-xs text-slate-500">
+                            操作人：{record.employeeName ?? record.employeeAccount ?? "未記錄"}
+                          </div>
+                          {record.items?.length ? (
+                            <div className="mt-2 grid gap-1">
+                              {record.items.map((item) => (
+                                <div key={`${record.id}-${item.itemKey}`} className="flex items-center justify-between text-xs text-slate-600">
+                                  <span>{item.name} × {item.quantity}</span>
+                                  <span>{formatMoney(item.amount, bootstrap.currency)}</span>
+                                </div>
+                              ))}
+                            </div>
+                          ) : null}
+                        </div>
+                      ))}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+        </ResponsiveModal>
+      ) : null}
+
+      {payingOrderId ? (
+        <ResponsiveModal
+          onClose={() => setPayingOrderId(null)}
+          header={
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="text-xl font-semibold text-slate-900">{t("結帳")}</div>
+                <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-slate-500">
+                  <span>
+                    {payingOrderId === CART_PAYING_ID
+                      ? "本次結帳"
+                      : currentSettlementOrder
+                        ? `訂單 ${currentSettlementOrder.localOrderNo}`
+                        : "待結帳訂單"}
+                  </span>
+                  {/* 顯示位 ③：結帳畫面（規格 7）*/}
+                  {currentSettlementOrder ? <OrderSourceBadge order={currentSettlementOrder} /> : null}
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                {currentSettlementOrder && currentSettlementOrder.status !== "paid" ? (
+                  <button
+                    className="rounded-full bg-red-50 px-3 py-2 text-sm font-semibold text-red-700"
+                    onClick={() => {
+                      setPayingOrderId(null);
+                      setOrderActionRequest({ type: "cancel_order", orderId: currentSettlementOrder.id });
+                      setOrderActionReason("");
+                    }}
+                    type="button"
+                  >
+                    {t("取消結帳")}
+                  </button>
+                ) : null}
+                <button
+                  className="rounded-full bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700"
+                  onClick={() => {
+                    setPayingOrderId(null);
+                    resetMemberCheckoutState();
+                  }}
+                  type="button"
+                >
+                  {t("關閉")}
+                </button>
+              </div>
+            </div>
+          }
+          showCloseButton={false}
+          widthClassName="max-w-5xl"
+        >
+            <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
+              <div className="grid gap-4 md:grid-cols-[1.1fr_0.9fr]">
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                  <div className="text-sm font-semibold text-slate-900">{t("本次支付內容")}</div>
+                  <div className="mt-3 space-y-2">
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-slate-500">{t("小計")}</span>
+                    <span className="font-semibold text-slate-900">
+                      {formatMoney(paymentSummary.subtotal, bootstrap.currency)}
+                    </span>
+                  </div>
+                  {/* 折扣分項：單品折扣 + 全單折扣（用戶要求所有訂單明細位都要見到） */}
+                  <OrderDiscountRow
+                    currency={bootstrap.currency}
+                    items={currentSettlementOrder?.items ?? workspaceOrder?.items ?? cartItems}
+                    variant="compact"
+                    wholeOrderDiscountAmount={paymentSummary.discountAmount}
+                  />
+                  {selectedMoneyVoucherAvos > 0 ? (
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-slate-500">{t("已選現金券（兌換入餘額）")}</span>
+                      <span className="font-semibold text-slate-900">
+                        {formatMoney(avosToMop(selectedMoneyVoucherAvos), bootstrap.currency)}
+                      </span>
+                    </div>
+                  ) : null}
+                  {paymentSummary.prepaidAmount > 0 ? (
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-slate-500">{t("客人已支付")}</span>
+                      <span className="font-semibold text-emerald-700">
+                        {formatMoney(paymentSummary.prepaidAmount, bootstrap.currency)}
+                      </span>
+                    </div>
+                  ) : null}
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-slate-500">
+                      {paymentSummary.prepaidAmount > 0 ? "剩餘需收" : "應收"}
+                    </span>
+                    <span className="text-2xl font-semibold text-orange-600">
+                      {formatMoney(paymentSummary.total, bootstrap.currency)}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-slate-500">{t("會員扣款")}</span>
+                    <span className="font-semibold text-slate-900">
+                      {formatMoney(paymentSummary.memberDeduction, bootstrap.currency)}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-slate-500">{t("找續")}</span>
+                    <span className="font-semibold text-emerald-600">
+                      {formatMoney(changeDue, bootstrap.currency)}
+                    </span>
+                  </div>
+                  </div>
+
+                  <div className="mt-4 grid gap-3">
+                  <label className="grid gap-1 text-xs font-semibold text-slate-500">
+                    全單折扣
+                    <select
+                      className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900"
+                      onChange={(event) => setDiscountValue(event.target.value)}
+                      value={discountValue}
+                    >
+                      <option value="">{t("冇折扣")}</option>
+                      {localSettings.discounts.map((disc) => (
+                        <option key={disc.id} value={disc.id}>
+                          {disc.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="grid gap-1 text-xs font-semibold text-slate-500">
+                    系統抹零
+                    <input
+                      className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900"
+                      inputMode="decimal"
+                      onChange={(event) => setRoundingInput(event.target.value)}
+                      placeholder="0.00"
+                      value={roundingInput}
+                    />
+                  </label>
+                  <label className="grid gap-1 text-xs font-semibold text-slate-500">
+                    實收金額
+                    <input
+                      className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900"
+                      inputMode="decimal"
+                      onChange={(event) => setReceivedAmount(event.target.value)}
+                      value={receivedAmount}
+                    />
+                  </label>
+                  <div className="rounded-2xl border border-slate-200 bg-white p-3">
+                    <div className="text-xs font-semibold text-slate-500">{t("會員優惠 / 餘額")}</div>
+                    <div className="mt-2 text-xs text-slate-500">
+                      {t("輸入會員手機號碼後，可在右側「支付方式」選「會員餘額」扣款，並核銷獎賞券（須連線）。")}
+                    </div>
+                    {offlineMode && memberPhone.length === 8 ? (
+                      <div className="mt-2 text-xs text-amber-700">{t("離線狀態無法查詢會員或扣款。")}</div>
+                    ) : null}
+                    {ledgerMember ? (
+                      <div className="mt-3 rounded-2xl bg-slate-50 p-3 text-sm">
+                        <div className="font-semibold text-slate-900">
+                          {ledgerMember.displayName ?? "會員"} · {ledgerMember.customerPhone}
+                        </div>
+                        <div className="mt-1 text-slate-500">
+                          餘額 {formatMoney(avosToMop(ledgerMember.balanceAvos), bootstrap.currency)} · 可用券{" "}
+                          {ledgerMember.redeemableGrants.length} 張
+                        </div>
+                        <label className="mt-3 grid gap-1">
+                          <span className="text-xs font-semibold text-slate-600">{t("核銷獎賞券")}</span>
+                          <div className="grid gap-2">
+                            {ledgerMember.redeemableGrants.length === 0 ? (
+                              <div className="text-xs text-slate-500">{t("目前沒有可核銷獎賞券")}</div>
+                            ) : (
+                              ledgerMember.redeemableGrants.map((grant) => {
+                                const selected = selectedGrantIds.includes(grant.grantId);
+                                const disabled = memberCheckoutRedeemDone;
+                                return (
+                                  <label
+                                    key={grant.grantId}
+                                    className={`flex items-start justify-between gap-3 rounded-2xl border px-3 py-2 ${
+                                      selected ? "border-orange-300 bg-orange-50" : "border-slate-200 bg-white"
+                                    } ${disabled ? "opacity-60" : ""}`}
+                                  >
+                                    <div>
+                                      <div className="text-sm font-semibold text-slate-900">{grant.title}</div>
+                                      <div className="mt-1 text-xs text-slate-500">
+                                        {grantTypeLabel(grant.prizeType)}
+                                        {grant.prizeType === "money_voucher"
+                                          ? ` · ${formatMoney(avosToMop(grant.rewardAmountAvos), bootstrap.currency)} 入餘額`
+                                          : " · 結帳時核銷"}
+                                      </div>
+                                    </div>
+                                    <input
+                                      checked={selected}
+                                      disabled={disabled}
+                                      onChange={(event) => {
+                                        const checked = event.target.checked;
+                                        setSelectedGrantIds((current) =>
+                                          checked
+                                            ? [...current, grant.grantId]
+                                            : current.filter((id) => id !== grant.grantId),
+                                        );
+                                      }}
+                                      type="checkbox"
+                                    />
+                                  </label>
+                                );
+                              })
+                            )}
+                          </div>
+                        </label>
+                      </div>
+                    ) : null}
+                  </div>
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                  <div className="text-sm font-semibold text-slate-900">{t("支付方式")}</div>
+                  <div className="mt-1 text-xs text-slate-500">
+                    {t("可選「會員餘額」搭配一種其他支付方式；餘額不足時剩餘金額以所選方式收取。")}
+                  </div>
+                  <div className="mt-3 grid gap-2">
+                    <button
+                      className={`rounded-2xl border px-4 py-3 text-left text-sm font-semibold transition ${
+                        !ledgerMember || memberCheckoutRedeemDone
+                          ? "cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400"
+                          : useMemberBalance
+                            ? "border-orange-300 bg-orange-50 text-orange-700"
+                            : "border-slate-200 bg-slate-50 text-slate-900 hover:border-orange-300"
+                      }`}
+                      disabled={!ledgerMember || memberCheckoutRedeemDone}
+                      onClick={() => {
+                        if (!ledgerMember || memberCheckoutRedeemDone) return;
+                        setUseMemberBalance((current) => !current);
+                      }}
+                      type="button"
+                    >
+                      <div>{t("會員餘額")}</div>
+                      {ledgerMember ? (
+                        <div className="mt-1 text-xs font-normal opacity-80">
+                          可用 {formatMoney(avosToMop(memberAvailableAvos), bootstrap.currency)}
+                          {useMemberBalance && memberDeduction > 0
+                            ? ` · 本次扣 ${formatMoney(memberDeduction, bootstrap.currency)}`
+                            : ""}
+                        </div>
+                      ) : (
+                        <div className="mt-1 text-xs font-normal">{t("請先在右側輸入會員手機號碼")}</div>
+                      )}
+                    </button>
+                    {paymentMethods.map((method) => (
+                      <button
+                        key={method}
+                        className={`rounded-2xl border px-4 py-3 text-left text-sm font-semibold ${
+                          selectedPaymentMethod === method
+                            ? "border-orange-300 bg-orange-50 text-orange-700"
+                            : "border-slate-200 bg-slate-50 text-slate-900 hover:border-orange-300"
+                        }`}
+                        onClick={() => setSelectedPaymentMethod(method)}
+                        type="button"
+                      >
+                        {method}
+                      </button>
+                    ))}
+                  </div>
+
+                  <button
+                    className="mt-4 w-full rounded-2xl bg-orange-500 px-4 py-3 text-base font-semibold text-white hover:bg-orange-600 disabled:cursor-not-allowed disabled:opacity-60"
+                    disabled={
+                      memberCheckoutSubmitting ||
+                      (useMemberBalance && memberDeduction > 0 && paymentSummary.total > 0 && !selectedPaymentMethod)
+                    }
+                    onClick={() => {
+                      // 🔴 用 `isOnlinePaidComplete`（已排除「用會員餘額付清」）——
+                      //    直接寫 `total <= 0` 會走數（見該變數註解）。
+                      if (isOnlinePaidComplete) {
+                        completeOnlinePaidOrder();
+                        return;
+                      }
+                      if (
+                        useMemberBalance &&
+                        memberDeduction > 0 &&
+                        paymentSummary.total > 0 &&
+                        !selectedPaymentMethod
+                      ) {
+                        setToast({ tone: "info", message: "會員餘額不足，請再選一種支付方式。" });
+                        return;
+                      }
+                      const method =
+                        useMemberBalance && memberDeduction > 0 && paymentSummary.total <= 0
+                          ? "會員餘額"
+                          : selectedPaymentMethod || paymentMethods[0] || "現金";
+                      void confirmPayment(method);
+                    }}
+                    type="button"
+                  >
+                    {memberCheckoutSubmitting
+                      ? "處理會員扣款中…"
+                      : isOnlinePaidComplete
+                        ? "客人已支付，完成訂單"
+                        : memberCheckoutRedeemDone
+                          ? "重試扣款"
+                          : "去結帳"}
+                  </button>
+
+                  {/* 免單：全額減免後照結帳（實收 0），必須選／輸入備註。
+                      備註清單嚟自 設置 → 備註 → 免單備註（localSettings.compNotePresets）。 */}
+                  <button
+                    className="mt-2 w-full rounded-2xl bg-white px-4 py-3 text-sm font-semibold text-slate-700 ring-1 ring-slate-200 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                    disabled={memberCheckoutSubmitting}
+                    onClick={() => {
+                      setCompNote("");
+                      setCompModalOpen(true);
+                    }}
+                    type="button"
+                  >
+                    {t("免單")}
+                  </button>
+                </div>
+              </div>
+
+              <aside className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white">
+                <div className="border-b border-slate-100 px-4 py-4">
+                  <div className="text-sm font-semibold text-slate-900">{t("會員")}</div>
+                  <div className="mt-1 text-xs text-slate-500">{t("輸入 8 位手機號碼後會自動查詢")}</div>
+                </div>
+                <div className="min-h-0 flex-1 overflow-auto px-4 py-4">
+                  <label className="grid gap-1 text-xs font-semibold text-slate-500">
+                    會員號碼（8 位）
+                    <input
+                      className="rounded-2xl border border-slate-200 bg-white px-3 py-3 text-base font-semibold text-slate-900 tracking-widest"
+                      inputMode="numeric"
+                      maxLength={8}
+                      onChange={(event) => handleMemberPhoneChange(event.target.value)}
+                      placeholder={t("例如：63936542")}
+                      value={memberPhone}
+                    />
+                  </label>
+                  {memberSearching ? <div className="mt-2 text-xs text-slate-500">{t("搜尋中…")}</div> : null}
+                  {memberSearchHint ? <div className="mt-2 text-xs text-red-600">{memberSearchHint}</div> : null}
+                  {ledgerMember ? (
+                    <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm">
+                      <div className="font-semibold text-slate-900">
+                        {ledgerMember.displayName ?? "會員"}
+                      </div>
+                      <div className="mt-1 text-xs text-slate-600">{ledgerMember.customerPhone}</div>
+                      <div className="mt-2 text-xs text-slate-500">
+                        餘額 {formatMoney(avosToMop(ledgerMember.balanceAvos), bootstrap.currency)} · 可用券{" "}
+                        {ledgerMember.redeemableGrants.length}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+                <div className="shrink-0 border-t border-slate-200 px-4 py-4">
+                  <NumericKeypad value={memberPhone} onChange={handleMemberPhoneChange} maxLength={8} />
+                </div>
+              </aside>
+            </div>
+        </ResponsiveModal>
+      ) : null}
+
+      {orderActionRequest ? (
+        <ResponsiveModal
+          onClose={() => { setOrderActionRequest(null); setOrderActionReason(""); }}
+          actions={
+            <>
+              <button
+                className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                onClick={() => {
+                  setOrderActionRequest(null);
+                  setOrderActionReason("");
+                }}
+                type="button"
+              >
+                {t("取消")}
+              </button>
+              <button
+                className="rounded-2xl bg-red-600 px-4 py-2 text-sm font-semibold text-white"
+                onClick={() => {
+                  if (orderActionRequest.type === "refund_order") {
+                    refundOrder(orderActionRequest.orderId, orderActionReason.trim());
+                  } else {
+                    cancelOrder(orderActionRequest.orderId, orderActionReason.trim());
+                  }
+                }}
+                type="button"
+              >
+                {orderActionRequest.type === "refund_order"
+                  ? "確認退款"
+                  : orderActionRequest.type === "void_platform_order"
+                    ? "確認取消（覆寫）"
+                    : "確認取消"}
+              </button>
+            </>
+          }
+          description={orders.find((order) => order.id === orderActionRequest.orderId)?.localOrderNo ?? "--"}
+          title={
+            orderActionRequest.type === "refund_order"
+              ? "退款原因"
+              : orderActionRequest.type === "void_platform_order"
+                ? "取消平台單（覆寫）"
+                : "取消結帳原因"
+          }
+          widthClassName="max-w-md"
+          zIndexClassName="z-[60]"
+        >
+              {orderActionRequest.type === "void_platform_order" ? (
+                /* 🔴 講清楚呢個係 override：唔跟狀態流程，而且會即刻影響報表。 */
+                <p className="mb-2 rounded-2xl bg-amber-50 px-3 py-2 text-xs text-amber-800 ring-1 ring-amber-200">
+                  平台單作廢（覆寫）：<b>{t("任何階段都可以用")}</b>（含已結帳／已完成）。
+                  執行後呢張單會變成「已取消」，<b>{t("即刻唔計入營業額／報表")}</b>。
+                  平台照樣收錢嘅話，請自行對帳。
+                </p>
+              ) : null}
+              <input
+                autoFocus
+                className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm"
+                onChange={(event) => setOrderActionReason(event.target.value)}
+                placeholder={
+                  orderActionRequest.type === "refund_order"
+                    ? "例如：客人退款 / 支付失敗"
+                    : orderActionRequest.type === "void_platform_order"
+                      ? "例如：客人已取消 / 平台已退款（唔填＝平台單作廢（覆寫））"
+                      : "例如：客人不要了 / 重開一單"
+                }
+                value={orderActionReason}
+              />
+        </ResponsiveModal>
+      ) : null}
+
+      {refundSummaryExportOpen ? (
+        <ResponsiveModal
+          onClose={() => setRefundSummaryExportOpen(false)}
+          actions={
+            <>
+              <button
+                className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                onClick={() => setRefundSummaryExportOpen(false)}
+                type="button"
+              >
+                {t("取消")}
+              </button>
+              <button
+                className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white"
+                onClick={exportRefundSummary}
+                type="button"
+              >
+                {t("導出 CSV")}
+              </button>
+            </>
+          }
+          description={t("可按日期或按員工，把目前訂單中的退款記錄匯總導出成 CSV。")}
+          title={t("退款匯總導出")}
+          widthClassName="max-w-lg"
+          zIndexClassName="z-[60]"
+        >
+            <div className="grid gap-3 md:grid-cols-2">
+              <label className="grid gap-1 text-sm font-semibold text-slate-700">
+                <span className="text-xs text-slate-500">{t("匯總方式")}</span>
+                <select
+                  className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                  onChange={(event) => setRefundSummaryMode(event.target.value as "date" | "employee")}
+                  value={refundSummaryMode}
+                >
+                  <option value="date">{t("按日期")}</option>
+                  <option value="employee">{t("按員工")}</option>
+                </select>
+              </label>
+              <label className="grid gap-1 text-sm font-semibold text-slate-700">
+                <span className="text-xs text-slate-500">{t("開始日期")}</span>
+                <input
+                  className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                  onChange={(event) => setRefundSummaryDateFrom(event.target.value)}
+                  type="date"
+                  value={refundSummaryDateFrom}
+                />
+              </label>
+              <label className="grid gap-1 text-sm font-semibold text-slate-700">
+                <span className="text-xs text-slate-500">{t("結束日期")}</span>
+                <input
+                  className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                  onChange={(event) => setRefundSummaryDateTo(event.target.value)}
+                  type="date"
+                  value={refundSummaryDateTo}
+                />
+              </label>
+            </div>
+        </ResponsiveModal>
+      ) : null}
+
+      {partialRefundOrderId ? (
+        <ResponsiveModal onClose={() => { setPartialRefundOrderId(null); setPartialRefundReason(""); setPartialRefundQuantities({}); }} widthClassName="max-w-2xl" zIndexClassName="z-[60]">
+            {(() => {
+              const order = orders.find((item) => item.id === partialRefundOrderId);
+              if (!order || !bootstrap) return null;
+              const refundedMap = refundedItemQtyMap(order);
+              const refundableRows = order.items
+                .map((item) => {
+                  const key = itemIdentity(item);
+                  const alreadyRefunded = refundedMap.get(key) ?? 0;
+                  const availableQty = Math.max(0, item.quantity - alreadyRefunded);
+                  return {
+                    item,
+                    key,
+                    availableQty,
+                    selectedQty: Math.max(0, Math.min(availableQty, partialRefundQuantities[key] ?? 0)),
+                  };
+                })
+                .filter((row) => row.availableQty > 0);
+              const refundSubtotal = refundableRows.reduce(
+                (sum, row) => sum + row.item.price * row.selectedQty,
+                0,
+              );
+              const refundAmount = Math.max(
+                0,
+                Number(((order.total * (refundSubtotal / Math.max(order.subtotal || 1, 1))) || 0).toFixed(0)),
+              );
+              return (
+                <>
+                  <div className="flex items-start justify-between gap-3 border-b border-slate-100 pb-4">
+                    <div>
+                      <div className="text-lg font-semibold text-slate-900">{t("部分退款")}</div>
+                      <div className="mt-1 text-sm text-slate-500">{order.localOrderNo} · 選擇要退款的菜品與數量</div>
+                    </div>
+                    <button
+                      className="rounded-full bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700"
+                      onClick={() => {
+                        setPartialRefundOrderId(null);
+                        setPartialRefundReason("");
+                        setPartialRefundQuantities({});
+                      }}
+                      type="button"
+                    >
+                      {t("關閉")}
+                    </button>
+                  </div>
+                  <div className="mt-4 grid gap-3">
+                      {refundableRows.map(({ item, key, availableQty, selectedQty }) => (
+                        <div key={key} className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <div className="text-sm font-semibold text-slate-900">{item.name}</div>
+                              <div className="mt-1 text-xs text-slate-500">
+                                單價 {formatMoney(item.price, bootstrap.currency)} · 可退 {availableQty} 份
+                              </div>
+                              {item.selectedSpecs?.length ? (
+                                <div className="mt-1 text-xs text-slate-500">
+                                  {item.selectedSpecs.map((spec) => `${spec.groupName}:${spec.optionLabel}`).join(" / ")}
+                                </div>
+                              ) : null}
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <button
+                                className="rounded-full bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                                onClick={() =>
+                                  setPartialRefundQuantities((current) => ({
+                                    ...current,
+                                    [key]: Math.max(0, (current[key] ?? 0) - 1),
+                                  }))
+                                }
+                                type="button"
+                              >
+                                -
+                              </button>
+                              <div className="w-10 text-center text-sm font-semibold text-slate-900">{selectedQty}</div>
+                              <button
+                                className="rounded-full bg-white px-3 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                                onClick={() =>
+                                  setPartialRefundQuantities((current) => ({
+                                    ...current,
+                                    [key]: Math.min(availableQty, (current[key] ?? 0) + 1),
+                                  }))
+                                }
+                                type="button"
+                              >
+                                +
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                  <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
+                    <label className="grid gap-1 text-sm font-semibold text-slate-700">
+                      <span className="text-xs text-slate-500">{t("退款原因")}</span>
+                      <input
+                        className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                        onChange={(event) => setPartialRefundReason(event.target.value)}
+                        placeholder={t("例如：少做一杯 / 客人退某款配料")}
+                        value={partialRefundReason}
+                      />
+                    </label>
+                    <div className="mt-3 flex items-center justify-between text-sm">
+                      <span className="text-slate-500">{t("預計退款")}</span>
+                      <span className="text-lg font-semibold text-red-700">
+                        {formatMoney(refundAmount, bootstrap.currency)}
+                      </span>
+                    </div>
+                  </div>
+                  </div>
+                  <div className="mt-4 sticky bottom-0 z-[1] flex justify-end gap-2 border-t border-slate-200 bg-white/95 pt-3 backdrop-blur">
+                    <button
+                      className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                      onClick={() => {
+                        setPartialRefundOrderId(null);
+                        setPartialRefundReason("");
+                        setPartialRefundQuantities({});
+                      }}
+                      type="button"
+                    >
+                      {t("取消")}
+                    </button>
+                    <button
+                      className="rounded-2xl bg-red-600 px-4 py-2 text-sm font-semibold text-white"
+                      onClick={() => partialRefundOrder(order.id, partialRefundReason.trim(), partialRefundQuantities)}
+                      type="button"
+                    >
+                      {t("確認部分退款")}
+                    </button>
+                  </div>
+                </>
+              );
+            })()}
+        </ResponsiveModal>
+      ) : null}
+
+      {/* 免單備註彈窗：備註必填（設置 → 備註 → 免單備註 提供預設選項，可自由輸入補充） */}
+      {compModalOpen ? (
+        <ResponsiveModal
+          onClose={() => { setCompModalOpen(false); setCompNote(""); }}
+          actions={
+            <>
+              <button
+                className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                onClick={() => {
+                  setCompModalOpen(false);
+                  setCompNote("");
+                }}
+                type="button"
+              >
+                {t("取消")}
+              </button>
+              <button
+                className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={!compNote.trim()}
+                onClick={() => void confirmComp(compNote)}
+                type="button"
+              >
+                {t("確認免單")}
+              </button>
+            </>
+          }
+          description={`全額減免 · 應收 ${formatMoney(paymentBase.total, bootstrap.currency)} → 實收 ${formatMoney(0, bootstrap.currency)}`}
+          title={t("免單備註")}
+          widthClassName="max-w-md"
+          zIndexClassName="z-[70]"
+        >
+          <div>
+            <div className="text-xs font-semibold text-slate-500">{t("免單備註")}</div>
+            {localSettings.compNotePresets.length === 0 ? (
+              <div className="mt-2 rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-3 text-xs text-slate-500">
+                {t("尚未設定免單備註（可到 設置 → 備註 → 免單備註 新增）。")}
+              </div>
+            ) : (
+              <div className="mt-2 flex flex-wrap gap-2">
+                {localSettings.compNotePresets.map((preset) => (
+                  <button
+                    key={preset}
+                    className={`rounded-full px-3 py-2 text-xs font-semibold ${
+                      compNote === preset
+                        ? "bg-slate-900 text-white"
+                        : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                    }`}
+                    onClick={() => setCompNote(preset)}
+                    type="button"
+                  >
+                    {preset}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          <input
+            autoCapitalize="off"
+            autoCorrect="off"
+            autoFocus
+            className="mt-4 w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-base"
+            enterKeyHint="done"
+            onChange={(event) => setCompNote(event.target.value)}
+            onPointerUp={(event) => refocusForIosKeyboard(event.currentTarget)}
+            placeholder={t("可自由輸入免單原因，例如：客人投訴補償")}
+            spellCheck={false}
+            value={compNote}
+          />
+        </ResponsiveModal>
+      ) : null}
+
+      {/* 折扣備註彈窗（2026-09-11 需求 #1）：凡套用折扣（全單 / 單品）都必須揀原因，
+          未揀就確認唔到 → 折扣唔會落實。原因清單嚟自 設置 → 備註 → 折扣備註。
+          注意：呢個彈窗唔落實折扣，要撳「確認折扣」先真正生效（取消 = 當冇折過）。 */}
+      {discountNoteRequest ? (
+        (() => {
+          const req = discountNoteRequest;
+          const targetLabel =
+            req.kind === "whole"
+              ? `全單折扣 · ${findDiscountPreset(localSettings.discounts, req.presetId)?.label ?? ""}`
+              : `${cartItems.find((item) => itemIdentity(item) === req.itemKey)?.name ?? "單品"} · ${
+                  localSettings.discounts.find((disc) => disc.rate === req.rate)?.label ?? `${req.rate}%`
+                }`;
+          return (
+            <ResponsiveModal
+              onClose={cancelDiscountNote}
+              actions={
+                <>
+                  <button
+                    className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                    onClick={cancelDiscountNote}
+                    type="button"
+                  >
+                    {t("取消")}
+                  </button>
+                  <button
+                    className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+                    disabled={!discountNoteDraft.trim()}
+                    onClick={confirmDiscountNote}
+                    type="button"
+                  >
+                    {t("確認折扣")}
+                  </button>
+                </>
+              }
+              description={`${targetLabel} · 必須選擇打折原因`}
+              title={t("折扣備註")}
+              widthClassName="max-w-md"
+              zIndexClassName="z-[70]"
+            >
+              <div>
+                <div className="text-xs font-semibold text-slate-500">{t("折扣原因")}</div>
+                {localSettings.discountNotePresets.length === 0 ? (
+                  <div className="mt-2 rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-3 text-xs text-slate-500">
+                    {t("尚未設定折扣備註（可到 設置 → 備註 → 折扣備註 新增），暫時請直接自由輸入。")}
+                  </div>
+                ) : (
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {localSettings.discountNotePresets.map((preset) => (
+                      <button
+                        key={preset}
+                        className={`rounded-full px-3 py-2 text-xs font-semibold ${
+                          discountNoteDraft === preset
+                            ? "bg-slate-900 text-white"
+                            : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                        }`}
+                        onClick={() => setDiscountNoteDraft(preset)}
+                        type="button"
+                      >
+                        {preset}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <input
+                  autoCapitalize="off"
+                  autoCorrect="off"
+                  autoFocus
+                  className="mt-4 w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-base"
+                  enterKeyHint="done"
+                  onChange={(event) => setDiscountNoteDraft(event.target.value)}
+                  onPointerUp={(event) => refocusForIosKeyboard(event.currentTarget)}
+                  placeholder={t("可自由輸入打折原因，例如：熟客介紹")}
+                  spellCheck={false}
+                  value={discountNoteDraft}
+                />
+              </div>
+            </ResponsiveModal>
+          );
+        })()
+      ) : null}
+
+      {voidRequest ? (
+        <ResponsiveModal
+          onClose={() => { setVoidRequest(null); setVoidReason(""); }}
+          actions={
+            <>
+              <button
+                className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                onClick={() => {
+                  setVoidRequest(null);
+                  setVoidReason("");
+                }}
+                type="button"
+              >
+                {t("取消")}
+              </button>
+              <button
+                className="rounded-2xl bg-red-600 px-4 py-2 text-sm font-semibold text-white"
+                onClick={() => {
+                  if (voidRequest.isFullOrder) {
+                    voidEntireOrder(voidReason.trim());
+                  } else {
+                    voidOrderedItem(voidRequest.item, voidRequest.mode, voidReason.trim());
+                  }
+                  setVoidRequest(null);
+                  setVoidReason("");
+                }}
+                type="button"
+              >
+                {t("確認退菜")}
+              </button>
+            </>
+          }
+          description={voidRequest.isFullOrder ? "全部退菜" : `${voidRequest.item.name} · 只退 1 份`}
+          title={t("退菜原因")}
+          widthClassName="max-w-md"
+          zIndexClassName="z-[60]"
+        >
+            <div>
+              <div className="text-xs font-semibold text-slate-500">{t("取消備註")}</div>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {localSettings.cancelNotePresets.map((preset) => (
+                  <button
+                    key={preset}
+                    className="rounded-full bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-200"
+                    onClick={() => {
+                      const base = voidReason.trim();
+                      const next = base ? (base.includes(preset) ? base : `${base}，${preset}`) : preset;
+                      setVoidReason(next);
+                    }}
+                    type="button"
+                  >
+                    {preset}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <input
+              autoFocus
+              className="mt-4 w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm"
+              onChange={(event) => setVoidReason(event.target.value)}
+              placeholder={t("例如：客人取消 / 廚房售罄")}
+              value={voidReason}
+            />
+        </ResponsiveModal>
+      ) : null}
+
+      {voidTableRequest ? (
+        <ResponsiveModal
+          onClose={() => { setVoidTableRequest(null); setVoidTableReason(""); }}
+          actions={
+            <>
+              <button
+                className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                onClick={() => {
+                  setVoidTableRequest(null);
+                  setVoidTableReason("");
+                }}
+                type="button"
+              >
+                {t("取消")}
+              </button>
+              <button
+                className="rounded-2xl bg-red-600 px-4 py-2 text-sm font-semibold text-white"
+                onClick={() => {
+                  voidTable(voidTableRequest, voidTableReason.trim());
+                  setVoidTableRequest(null);
+                  setVoidTableReason("");
+                }}
+                type="button"
+              >
+                {t("確認退桌")}
+              </button>
+            </>
+          }
+          description={t("退桌會將枱上所有菜作廢並釋放枱位，此操作不可還原")}
+          title={t("退桌原因")}
+          widthClassName="max-w-md"
+          zIndexClassName="z-[60]"
+        >
+          <div>
+            <div className="text-xs font-semibold text-slate-500">{t("取消備註")}</div>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {localSettings.cancelNotePresets.map((preset) => (
+                <button
+                  key={preset}
+                  className="rounded-full bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-200"
+                  onClick={() => {
+                    const base = voidTableReason.trim();
+                    const next = base ? (base.includes(preset) ? base : `${base}，${preset}`) : preset;
+                    setVoidTableReason(next);
+                  }}
+                  type="button"
+                >
+                  {preset}
+                </button>
+              ))}
+            </div>
+          </div>
+          <input
+            autoFocus
+            className="mt-4 w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm"
+            onChange={(event) => setVoidTableReason(event.target.value)}
+            placeholder={t("例如：客人取消 / 臨時要走")}
+            value={voidTableReason}
+          />
+        </ResponsiveModal>
+      ) : null}
+
+      {/* 同步健康檢查彈窗：失敗事件重試 / 已結帳未上雲補錄（2026-09-09） */}
+      {showSyncHealth ? (
+        <SyncHealthModal
+          open={showSyncHealth}
+          onClose={() => setShowSyncHealth(false)}
+          onMutated={() => replaceQueueFromStorage()}
+        />
+      ) : null}
+
+      {/* 左下角問題提示區（垂直 stack）：避開右下角嘅 toast；md:left-[88px] 避開 72px 側欄。
+          兩種問題可以同時出現，所以要 stack 而唔係兩嚿 fixed 互相冚住。 */}
+      {failedSyncCount > 0 || showPrintFailureToast ? (
+        <div className="fixed bottom-4 left-4 z-40 flex max-w-[10rem] flex-col gap-1.5 md:left-[88px]">
+          {/* 同步永久失敗：server 連續拒收 5 次，呢啲 event 已經唔會再自動重試。
+              用 amber 而唔係 red —— 資料安全留喺本機，只係未上到 DB，唔係即刻營運事故。 */}
+          {failedSyncCount > 0 ? (
+            <div className="rounded-xl bg-amber-500 px-2.5 py-1.5 text-left text-[11px] font-semibold text-white shadow-md">
+              <div>⚠ {failedSyncCount} 筆未同步</div>
+              <div className="mt-1 flex gap-1">
+                <button
+                  className="rounded bg-white/20 px-2 py-0.5 text-[10px] font-semibold text-white hover:bg-white/30"
+                  onClick={() => {
+                    const revived = retryFailedSyncEvents();
+                    replaceQueueFromStorage();
+                    setToast(
+                      revived > 0
+                        ? { tone: "success", message: `已重新排入 ${revived} 筆同步資料` }
+                        : { tone: "error", message: "搵唔到失敗嘅同步資料" },
+                    );
+                  }}
+                  type="button"
+                >
+                  {t("重試")}
+                </button>
+                <button
+                  className="rounded bg-white/20 px-2 py-0.5 text-[10px] font-semibold text-white hover:bg-white/30"
+                  onClick={() => setShowSyncHealth(true)}
+                  type="button"
+                >
+                  {t("詳細與補錄")}
+                </button>
+              </div>
+            </div>
+          ) : null}
+
+          {/* 列印失敗：背景 flush 失敗時收銀員喺落單畫面零提示，廚房就咁收唔到單。
+              docs/任務：尺寸縮至原大小一半，3 秒後自動消失（避免長期遮擋畫面）。
+              有新失敗單會重新計時並再次出現。 */}
+          {showPrintFailureToast ? (
+            <button
+              className="rounded-xl bg-red-600 px-2.5 py-1.5 text-left text-[11px] font-semibold text-white shadow-md hover:bg-red-700"
+              onClick={() => {
+                setPrintFailureDismissed(true);
+                router.push("/prints");
+              }}
+              type="button"
+            >
+              <div>列印失敗 {failedPrintJobs.length} 張 · 去打印中心</div>
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+
+      {/* ⚠ 即時通知未生效警示（2026-09-10 P0）。
+          為何要有：Realtime 訂錯專案時 Supabase 唔會報錯（channel 一樣 SUBSCRIBED），
+          收銀台會「以為正常」但新單永遠唔彈 → 只有手動 reload 先見到（＝靜默漏單）。
+          呢條警示把靜默失效變成看得見，並清楚講明補救（reload）。
+          可摺走（session 內有效），唔會阻住日常操作。 */}
+      {!offlineMode &&
+      !realtimeBannerDismissed &&
+      realtimeProbe !== null &&
+      (!isPosRealtimeHealthy(realtimeProbe) ||
+        realtimeStatus === "CHANNEL_ERROR" ||
+        realtimeStatus === "TIMED_OUT") ? (
+        <div className="fixed bottom-4 left-1/2 z-40 flex max-w-md -translate-x-1/2 items-start gap-2 rounded-2xl border border-amber-300 bg-amber-50 px-3 py-2 text-amber-900 shadow-lg">
+          <span aria-hidden className="text-base leading-5">
+            ⚠
+          </span>
+          <div className="text-[11px] leading-snug">
+            <div className="font-semibold">{t("即時通知未生效，新單唔會自動彈出")}</div>
+            <div className="mt-0.5">{describePosRealtimeProbe(realtimeProbe)}</div>
+            <div className="mt-0.5 text-amber-800/80">
+              連線目標：{realtimeProbe.host ?? "未設定"}（{realtimeProbe.source ?? "none"}）
+              {realtimeStatus && realtimeStatus !== "SUBSCRIBED" ? ` · 渠道：${realtimeStatus}` : ""}
+            </div>
+            <div className="mt-1">{t("請先手動重新載入；若持續，通知技術人員檢查部署環境變數。")}</div>
+          </div>
+          <button
+            className="ml-1 shrink-0 rounded-md px-1.5 py-0.5 text-[11px] font-semibold text-amber-800 hover:bg-amber-100"
+            onClick={() => setRealtimeBannerDismissed(true)}
+            type="button"
+          >
+            {t("知道了")}
+          </button>
+        </div>
+      ) : null}
+
+      {/* 右上角「掃碼新單」提示堆疊（2026-09-10 需求）：每張掃碼單一個獨立提示，
+          唔會自動消失；撳 = 跳去該桌台，向右滑 = 略過。 */}
+      <SelfOrderNoticeStack
+        items={selfOrderNoticeItems}
+        onDismiss={handleSelfOrderNoticeDismiss}
+        onOpen={openSelfOrderNotice}
+      />
+
+      {toast ? (
+        <div
+          className={`fixed bottom-4 right-4 z-40 rounded-2xl px-4 py-3 text-sm font-semibold text-white shadow-lg ${
+            toast.tone === "success" ? "bg-emerald-600" : "bg-slate-900"
+          }`}
+        >
+          {toast.message}
+        </div>
+      ) : null}
+
+      {/* 2026-09-07：連續開工超過 10 小時自動提醒（問題二）。
+          計時以 server 班次 openedAt / overtimeAckedAt + serverNow 為準（shift-sync.ts isShiftOvertimeDue），
+          sync effect 每 60s 更新 due 狀態，所以任何一部開住嘅機都會喺同一條件下彈窗。 */}
+      {shiftOvertimeDue && shift.openedAt ? (
+        <ResponsiveModal
+          zIndexClassName="z-[60]"
+          widthClassName="max-w-md"
+          panelClassName="p-6 sm:p-8 md:ml-[72px]"
+        >
+          <div className="text-center">
+            <div className="text-3xl">⏰</div>
+            <div className="mt-3 text-lg font-semibold text-slate-900">{t("連續上班提醒")}</div>
+            <p className="mt-2 text-sm leading-relaxed text-slate-600">
+              {t("你已經連續上班超過 10 個小時，需要交班嗎？")}
+            </p>
+            <div className="mt-6 grid gap-2.5">
+              <button
+                aria-busy={shiftAcking}
+                className="w-full rounded-3xl bg-slate-900 px-6 py-4 text-base font-semibold text-white disabled:opacity-60"
+                disabled={shiftAcking}
+                onClick={() => void acknowledgeShiftOvertime()}
+                type="button"
+              >
+                {t("取消（繼續營業）")}
+              </button>
+              <button
+                className="w-full rounded-3xl bg-orange-500 px-6 py-4 text-base font-semibold text-white hover:bg-orange-600"
+                onClick={() => {
+                  setShiftOvertimeDue(false);
+                  router.push("/shift");
+                }}
+                type="button"
+              >
+                {t("確認，去交班")}
+              </button>
+            </div>
+          </div>
+        </ResponsiveModal>
+      ) : null}
+
+      {/* 「今日未開工」提示彈窗（2026-09-14 改）——
+          ① 原「開工」掣**保留**（想即刻開工嘅人唔使多走一步）；
+          ② 新增右上角 ✕（＝`onClose`）：打烊後返嚟對數／查帳，唔想被逼開新班次；
+          ③ 撳 ✕ → 彈窗「飛」去頁首「開工」掣（純視覺引導），之後收起本彈窗；
+          ④ ⚠️ 收起彈窗**唔等於**可以落單 —— 落單閘獨立寫喺 `ensureShiftOpened()`。
+          動畫期間（`startWorkFly`）彈窗保持掛載，飛完先真正 unmount。 */}
+      {!shift.openedAt && (!startWorkPromptDismissed || startWorkFly) ? (
+        <ResponsiveModal
+          bodyClassName="text-center"
+          panelClassName={`p-6 sm:p-8 md:ml-[72px] ${startWorkFly ? "pos-start-work-fly" : ""}`}
+          panelRef={startWorkPanelRef}
+          panelStyle={
+            startWorkFly
+              ? ({
+                  "--pos-sw-x": `${startWorkFly.dx}px`,
+                  "--pos-sw-y": `${startWorkFly.dy}px`,
+                  "--pos-sw-s": String(startWorkFly.scale),
+                } as CSSProperties)
+              : undefined
+          }
+          widthClassName="max-w-md"
+          zIndexClassName="z-[52]"
+          overlayClassName={startWorkFly ? "pos-start-work-overlay pos-start-work-overlay-gone" : ""}
+          onClose={dismissStartWorkPrompt}
+          /* 唔用 ResponsiveModal 內建嘅「關閉」文字 pill：呢個彈窗要用**圓形 ✕**（44×44），
+             同確認稿一致，亦順手滿足觸控 ≥40px 嘅要求。 */
+          showCloseButton={false}
+        >
+            <button
+              className="absolute right-3 top-3 grid h-11 w-11 place-items-center rounded-full bg-slate-100 hover:bg-slate-200"
+              onClick={dismissStartWorkPrompt}
+              type="button"
+              aria-label={t("關閉（唔開工，只查看資料／對數）")}
+              title={t("關閉（唔開工，只查看資料／對數）")}
+            >
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#334155"
+                   strokeWidth="2.4" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+            </button>
+            <div className="text-sm font-semibold tracking-widest text-orange-500">{t("今日未開工")}</div>
+            <div className="mt-2 text-2xl font-semibold text-slate-900">{t("開始今日營業")}</div>
+            <div className="mt-2 text-sm text-slate-500">
+              {t("未開工前不能點餐。按下方按鈕後，今日班次正式開始。")}
+            </div>
+            <button
+              className="mt-6 w-full rounded-3xl bg-orange-500 px-6 py-5 text-xl font-semibold text-white hover:bg-orange-600"
+              onClick={startWork}
+              type="button"
+            >
+              {t("開工")}
+            </button>
+            <div className="mt-3 text-xs leading-relaxed text-slate-400">
+              {t("只想先查帳／對數？按右上角 ✕ 收起本視窗，稍後按頁首「開工」即可開始。")}
+            </div>
+        </ResponsiveModal>
+      ) : null}
+
+      {orderSuccessFlash ? (
+        <div className="pointer-events-none fixed inset-0 z-[55] grid place-items-center p-4">
+          <div className="rounded-3xl bg-emerald-600 px-8 py-5 text-lg font-semibold text-white shadow-2xl">
+            {t("下單成功")}
+          </div>
+        </div>
+      ) : null}
+
+      {settlementFlash ? (
+        <div className="pointer-events-none fixed inset-0 z-[55] grid place-items-center p-4">
+          <div className="rounded-3xl bg-emerald-600 px-8 py-5 text-lg font-semibold text-white shadow-2xl">
+            {t("已結帳")}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}

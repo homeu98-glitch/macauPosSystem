@@ -1,0 +1,4370 @@
+"use client";
+
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+
+import { AppSidebar } from "@/components/app-sidebar";
+import { DateRangeFilterChips } from "@/components/date-range-filter-chips";
+import type { CustomDateRange } from "@/lib/ledger/date-range";
+import {
+  getMerchantReportSummary,
+  type LedgerReportSummary,
+} from "@/lib/ledger/reports";
+import { restoreLedgerSession } from "@/lib/ledger/session";
+import { getOrderDetail, listMerchantOrders, fetchAdminLedgerOrders, type LedgerOrderDetailItem } from "@/lib/ledger/orders";
+import type { LedgerOnlineOrder } from "@/lib/ledger/order-mapper";
+// 🔴 支付方式標籤唯一真源（2026-10-07）：`pos_orders.payment_method` 會載住
+// Ledger enum 原文（`in_store` / `balance`），唔過呢層就會有英文行出畫面。
+import { posPaymentMethodLabel } from "@/lib/pos/payment-method-label";
+import { fetchPurchaseSummary, type PurchaseSummary } from "@/lib/inventory-stats";
+import {
+  loadAuthSession,
+  loadBootstrapCache,
+  loadDeletedOrderIds,
+  loadOrders,
+  loadPosLocalSettings,
+  loadSoldOutState,
+  savePosLocalSettings,
+  saveSoldOutState,
+} from "@/lib/storage";
+import { orderMatchesReportRange, reportRangeLabel, resolveReportRange, splitReportRangeArg, type ReportRangeArg, type ReportRangeKey } from "@/lib/ledger/report-period";
+import { resolveSoldOutDisplay, dropSoldOutKeys } from "@/lib/pos/soldout-display";
+// 🔴 Ledger 線上單嘅「屬於邊一日」必須用同一個時間口徑（見 `order-event-time.ts`）。
+// 唔可以自己寫 `createdAt ?? updatedAt`：RPC `list_merchant_orders` 係按 **`updated_at` DESC**
+// 排序，若用 `createdAt` 判斷就會「排序鍵 ≠ 過濾鍵」——一張「昨日落單、今日完成」嘅預約單
+// 會令 `break outer` 提早中止翻頁，之後嘅線上單全部靜默消失（2026-09-24 取餐碼 001 實案）。
+import { orderEventInstant, orderEventISO } from "@/lib/pos/order-event-time";
+import {
+  computeIngredientConsumption,
+  inMacauMonth,
+  loadBom,
+  type BomEntry,
+} from "@/lib/restaurant-bom";
+import {
+  computeFootfallFromOrders,
+} from "@/lib/restaurant-footfall";
+import { formatMoney } from "@/lib/format";
+import { buildOnlineOrderDetailNotes, buildOrderDetailNotes } from "@/lib/pos/order-notes";
+import { OrderDetailList, type OrderDetailRow } from "@/components/order-detail-list";
+// 外賣平台結算（2026-09-26）：報表 10 格下方「MFOOD 區塊」三格。
+// 🔴 計算一律經 `computeMfoodTotals()`（純函式、有單測），唔可以喺呢度另寫一套
+//    —— 部分對帳嘅「分子分母要同一批」判斷好易寫錯（見該函式註釋）。
+import {
+  computeSettlementTotals,
+  type SettlementTotals,
+} from "@/lib/pos/platform-settlement";
+
+// ── 外賣平台結算：分平台卡片（2026-09-29 使用者需求）─────────────────────────
+// MFOOD 用橙（#FB8F01）、澳覓用玫紅（#FF3159），來自使用者提供嘅參考圖取色。
+// 狀態色（待對帳＝amber、帳期口徑＝emerald）保持不變，避免同平台色混淆。
+
+type PlatformSettlementTheme = {
+  /** 卡片外框。 */
+  border: string;
+  /** 標題漸層（平台主色 → 略深）。 */
+  headerGradient: string;
+  /** 標題小圓點。 */
+  dot: string;
+  /** 標題右側副標題字色。 */
+  subtitle: string;
+  /** 實收金額數值字色（有值時）。 */
+  receivedValue: string;
+  /** 差額率數值字色（有值時）。 */
+  feeValue: string;
+  /** 比例條：實收部分（淺）。 */
+  barLight: string;
+  /** 比例條：平台抽成部分（深）。 */
+  barDark: string;
+};
+
+const MFOOD_THEME: PlatformSettlementTheme = {
+  border: "border-orange-200",
+  headerGradient: "bg-gradient-to-r from-orange-500 to-orange-600",
+  dot: "bg-orange-300",
+  subtitle: "text-orange-100",
+  receivedValue: "text-orange-700",
+  feeValue: "text-orange-700",
+  barLight: "bg-orange-300",
+  barDark: "bg-orange-600",
+};
+
+const AOMI_THEME: PlatformSettlementTheme = {
+  border: "border-rose-200",
+  headerGradient: "bg-gradient-to-r from-rose-500 to-rose-600",
+  dot: "bg-rose-300",
+  subtitle: "text-rose-100",
+  receivedValue: "text-rose-700",
+  feeValue: "text-rose-700",
+  barLight: "bg-rose-300",
+  barDark: "bg-rose-600",
+};
+
+/** 單一平台嘅結算三格卡片（MFOOD / 澳覓 共用，只係配色同標題唔同）。 */
+function PlatformSettlementCard({
+  totals,
+  theme,
+  label,
+}: {
+  totals: SettlementTotals;
+  theme: PlatformSettlementTheme;
+  label: string;
+}) {
+  return (
+    <div className={`mb-0 overflow-hidden rounded-xl border ${theme.border}`}>
+      <div
+        className={`flex flex-wrap items-center justify-between gap-2 ${theme.headerGradient} px-4 py-2.5`}
+      >
+        <span className="flex items-center gap-2 text-sm font-bold text-white">
+          <span className={`h-1.5 w-1.5 rounded-full ${theme.dot}`} />
+          {label}
+        </span>
+        <span className={`text-[11px] font-semibold ${theme.subtitle}`}>
+          平台財務對帳
+        </span>
+      </div>
+
+      {/* 口徑標示（狀態色，唔跟平台色）—— 帳期 / 逐單 兩個口徑數字唔同，必須講清楚。 */}
+      {totals.basis === "period" ? (
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-slate-200 bg-emerald-50/70 px-4 py-2 text-[11px] text-emerald-800">
+          <span className="rounded-full bg-emerald-600 px-2 py-0.5 text-[10px] font-bold text-white">
+            帳期口徑
+          </span>
+          <span>
+            以下三格為平台**帳期匯總**
+            {totals.periodLabel ? `（${totals.periodLabel}）` : ""}
+            ，非逐單加總。
+          </span>
+          {totals.usedPeriodFallback ? (
+            <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-700">
+              逐單仲有 {totals.pendingCount} 張未對帳
+            </span>
+          ) : null}
+        </div>
+      ) : null}
+
+      <div className="grid grid-cols-3 divide-x divide-slate-200">
+        {/* ① 應收金額（＝營業額總和，POS 即時有） */}
+        <div className="px-4 py-3">
+          <div className="text-[11.5px] font-semibold text-slate-500">應收金額</div>
+          <div className="mt-1 truncate text-xl font-bold tabular-nums text-slate-900">
+            {formatMoney(totals.receivable)}
+          </div>
+          <div className="mt-1 text-[11px] text-slate-400">
+            {totals.basis === "period"
+              ? `平台帳期營業額（${totals.periodLabel ?? "帳期"}）`
+              : `平台單營業額總和（POS 即時，共 ${
+                  totals.settledCount + totals.pendingCount
+                } 張）`}
+          </div>
+        </div>
+
+        {/* ② 實收金額（＝平台到帳總和） */}
+        <div className="px-4 py-3">
+          <div className="flex items-center gap-1.5 text-[11.5px] font-semibold text-slate-500">
+            實收金額
+            {totals.received === null ? (
+              <span className="rounded-full bg-amber-500 px-2 py-0.5 text-[10px] font-bold text-white">
+                待對帳
+              </span>
+            ) : totals.basis === "period" ? (
+              <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-700">
+                帳期
+              </span>
+            ) : totals.pendingCount > 0 ? (
+              <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-700">
+                部分未對帳
+              </span>
+            ) : (
+              <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-700">
+                已對帳
+              </span>
+            )}
+          </div>
+          <div
+            className={`mt-1 truncate text-xl font-bold tabular-nums ${
+              totals.received === null ? "text-slate-300" : theme.receivedValue
+            }`}
+          >
+            {totals.received === null ? "—" : formatMoney(totals.received)}
+          </div>
+          <div className="mt-1 text-[11px] text-slate-400">
+            {totals.received === null
+              ? "平台帳期未生成，對帳後自動補上"
+              : totals.basis === "period"
+                ? "平台帳期實際到帳（補貼後，平台官方口徑）"
+                : `平台實際到帳總和（已配對 ${totals.settledCount} 張${
+                    totals.pendingCount > 0
+                      ? `，另 ${totals.pendingCount} 張未對帳`
+                      : ""
+                  }）`}
+          </div>
+        </div>
+
+        {/* ③ 差額率（＝平台抽成比例） */}
+        <div className="px-4 py-3">
+          <div className="text-[11.5px] font-semibold text-slate-500">平台差額率</div>
+          <div
+            className={`mt-1 truncate text-xl font-bold tabular-nums ${
+              totals.feeRate === null ? "text-amber-600" : theme.feeValue
+            }`}
+          >
+            {totals.feeRate === null
+              ? "待對帳"
+              : `${(totals.feeRate * 100).toFixed(1)}%`}
+          </div>
+          {totals.feeRate === null ? (
+            <div className="mt-1 text-[11px] text-slate-400">
+              冇實收就計唔到差額率（唔會用 0 濫竽充數）
+            </div>
+          ) : (
+            <>
+              {/* 比例條：左邊實收（淺）、右邊平台抽成（深） */}
+              <div className="mt-1.5 flex h-1.5 overflow-hidden rounded-full bg-slate-100">
+                <span
+                  className={`block ${theme.barLight}`}
+                  style={{ width: `${(1 - totals.feeRate) * 100}%` }}
+                />
+                <span
+                  className={`block ${theme.barDark}`}
+                  style={{ width: `${totals.feeRate * 100}%` }}
+                />
+              </div>
+              <div className="mt-1 text-[11px] text-slate-400">
+                1 − {totals.received !== null ? formatMoney(totals.received) : "—"} ÷{" "}
+                {formatMoney(totals.receivable)}
+                {totals.basis === "period"
+                  ? "（帳期口徑）"
+                  : totals.pendingCount > 0
+                    ? "（只計已對帳嗰批）"
+                    : ""}
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+// P0/P1（2026-09-24）：線上單對數警示 ＋ 補建入口。
+// ⚠️ 補建函式（`ledger-pos-bridge`）刻意用**動態 import** —— 佢係大模組，
+//    唔應該為咗一個罕用按鈕而加進報表頁嘅初始 bundle。
+import { OnlineReconcileBanner } from "@/components/online-reconcile-banner";
+import { InfoBubble } from "@/components/info-bubble";
+import { reconcileOnlineOrders } from "@/lib/pos/online-reconcile";
+import { posDeviceAuthHeaders, refreshPosDeviceTokenIfNeeded } from "@/lib/pos/pos-sync-auth";
+import { readNetworkOnline } from "@/lib/use-network-online";
+import { evaluatePollGate } from "@/lib/pos/poll-gate-client";
+import type { PosOrder, PosLocalSettings } from "@/lib/types";
+// 退款淨額口徑（毛 / 淨兩個數並存）—— 算法住喺 .ts，方便 node --test 直接載入。
+import { netOf, refundOrderCountOf, refundTotalOf } from "@/lib/refund-net";
+import Link from "next/link";
+
+// 篩選順序統一：今天 / 昨天 / 7天 / 30天 / 全部 / 自訂（置右上）
+const FILTERS: Array<{ key: ReportRangeKey; label: string }> = [
+  { key: "today", label: "今天" },
+  { key: "yesterday", label: "昨天" },
+  { key: "7d", label: "7天" },
+  { key: "30d", label: "30天" },
+  { key: "all", label: "全部" },
+  { key: "custom", label: "自訂" },
+];
+
+/** 由 selection 取 UI chip 用嘅 key。 */
+function reportRangeKeyOf(range: ReportRangeArg): ReportRangeKey {
+  return splitReportRangeArg(range).key;
+}
+
+/** 由 selection 取已套用嘅自訂區間（冇 → null）。 */
+function reportRangeCustomOf(range: ReportRangeArg): CustomDateRange | null {
+  return splitReportRangeArg(range).custom;
+}
+
+function macauHour(iso: string): number {
+  try {
+    const s = new Intl.DateTimeFormat("en-GB", {
+      timeZone: "Asia/Macau",
+      hour: "2-digit",
+      hour12: false,
+    }).format(new Date(iso));
+    return parseInt(s, 10) || 0;
+  } catch {
+    return new Date(iso).getHours();
+  }
+}
+
+interface DishRow {
+  /** 聚合 key：`menuItemId|下單當時菜品名`。快閃餐改名／改價（ID 不變）時唔同名稱各自一行。 */
+  key: string;
+  /** 下單當時快照菜品名（唔強制對應返當前餐牌名稱）。 */
+  name: string;
+  offlineQty: number;
+  onlineQty: number;
+  revenue: number;
+}
+
+interface TableRow {
+  tableId: string;
+  name: string;
+  orders: number;
+  covers: number;
+}
+
+interface ServingStats {
+  count: number;
+  avgMin: number;
+  medianMin: number;
+  p95Min: number;
+  /** true = 部分樣本缺時間戳，以落單→結帳/updatedAt 估算 */
+  estimated: boolean;
+}
+
+/** 堂食/外賣流程每個步驟嘅統計（avg / median / P95 / 樣本數 / 估算標記）。 */
+interface StepStats {
+  count: number;
+  avgMin: number;
+  medianMin: number;
+  p95Min: number;
+  estimated: boolean;
+}
+
+/** 堂食（無出餐概念）：以「下單 → 送廚 → 結帳 → 整體」三段呈現。 */
+interface DineInServingBreakdown {
+  orderToKitchen: StepStats;
+  kitchenToSettle: StepStats;
+  total: StepStats;
+}
+
+/** 快餐 / 外賣（有明確出餐）：「下單 → 送廚 → 出餐 → 完成 → 整體」四段呈現。 */
+interface QuickServingBreakdown {
+  orderToKitchen: StepStats;
+  kitchenToServed: StepStats;
+  servedToSettled: StepStats;
+  total: StepStats;
+}
+
+/** 單張單嘅出餐分鐘數。有 sentToKitchenAt + servedAt 即實測；否則估算（落單→結帳）。 */
+function servingMinutes(o: PosOrder): { ms: number; estimated: boolean } | null {
+  const sent = o.sentToKitchenAt ? Date.parse(o.sentToKitchenAt) : null;
+  const served = o.servedAt ? Date.parse(o.servedAt) : null;
+  if (sent && served) return { ms: Math.max(0, served - sent), estimated: false };
+  const s = sent ?? Date.parse(o.createdAt);
+  // 0057：結帳時間優先用 `settledAt`（裝置鐘、server 永不覆蓋），舊單落返 originalSettledAt／updatedAt。
+  const e =
+    served ??
+    (o.settledAt
+      ? Date.parse(o.settledAt)
+      : o.originalSettledAt
+        ? Date.parse(o.originalSettledAt)
+        : Date.parse(o.updatedAt));
+  if (!Number.isFinite(s) || !Number.isFinite(e)) return null;
+  return { ms: Math.max(0, e - s), estimated: true };
+}
+
+function emptyStepStats(): StepStats {
+  return { count: 0, avgMin: 0, medianMin: 0, p95Min: 0, estimated: false };
+}
+
+/** 收集「落單 → 送廚」、「送廚 → 出餐」、「出餐 → 結帳」、「整體」嘅樣本，傳回每段統計。 */
+function quickStepsForOrder(o: PosOrder): {
+  orderToKitchen: { ms: number; estimated: boolean } | null;
+  kitchenToServed: { ms: number; estimated: boolean } | null;
+  servedToSettled: { ms: number; estimated: boolean } | null;
+  total: { ms: number; estimated: boolean } | null;
+} {
+  const created = Date.parse(o.createdAt);
+  const sent = o.sentToKitchenAt ? Date.parse(o.sentToKitchenAt) : null;
+  const served = o.servedAt ? Date.parse(o.servedAt) : null;
+  // 0057：結帳時間優先用 `settledAt`（裝置鐘、server 永不覆蓋），舊單落返舊鏈。
+  const settled = o.settledAt
+    ? Date.parse(o.settledAt)
+    : o.originalSettledAt
+      ? Date.parse(o.originalSettledAt)
+      : o.status === "settled" || o.status === "partially_refunded" || o.status === "refunded"
+        ? Date.parse(o.updatedAt)
+        : NaN;
+  return {
+    orderToKitchen:
+      sent && Number.isFinite(created) ? { ms: Math.max(0, sent - created), estimated: false } : null,
+    kitchenToServed:
+      sent && served ? { ms: Math.max(0, served - sent), estimated: false } : null,
+    servedToSettled:
+      served && Number.isFinite(settled) ? { ms: Math.max(0, settled - served), estimated: false } : null,
+    total:
+      Number.isFinite(created) && Number.isFinite(settled)
+        ? { ms: Math.max(0, settled - created), estimated: false }
+        : null,
+  };
+}
+
+/** 堂食：下單 → 送廚 → 結帳 → 整體。缺時間戳嘅步驟用 fallback 估算。 */
+function dineInStepsForOrder(o: PosOrder): {
+  orderToKitchen: { ms: number; estimated: boolean } | null;
+  kitchenToSettle: { ms: number; estimated: boolean } | null;
+  total: { ms: number; estimated: boolean } | null;
+} {
+  const created = Date.parse(o.createdAt);
+  const sent = o.sentToKitchenAt ? Date.parse(o.sentToKitchenAt) : null;
+  // 0057：結帳時間優先用 `settledAt`（裝置鐘、server 永不覆蓋），舊單落返舊鏈。
+  const settled = o.settledAt
+    ? Date.parse(o.settledAt)
+    : o.originalSettledAt
+      ? Date.parse(o.originalSettledAt)
+      : o.status === "settled" || o.status === "partially_refunded" || o.status === "refunded"
+        ? Date.parse(o.updatedAt)
+        : NaN;
+  return {
+    orderToKitchen:
+      sent && Number.isFinite(created) ? { ms: Math.max(0, sent - created), estimated: false } : null,
+    kitchenToSettle:
+      sent && Number.isFinite(settled) ? { ms: Math.max(0, settled - sent), estimated: false } : null,
+    total:
+      Number.isFinite(created) && Number.isFinite(settled)
+        ? { ms: Math.max(0, settled - created), estimated: false }
+        : null,
+  };
+}
+
+function summarizeSteps(samples: Array<{ ms: number; estimated: boolean }>): StepStats {
+  if (samples.length === 0) return emptyStepStats();
+  const sortedMs = samples.map((s) => s.ms).sort((a, b) => a - b);
+  const total = sortedMs.reduce((s, v) => s + v, 0);
+  return {
+    count: samples.length,
+    avgMin: total / samples.length / 60000,
+    medianMin: medianOf(sortedMs) / 60000,
+    p95Min: p95Of(sortedMs) / 60000,
+    estimated: samples.some((s) => s.estimated),
+  };
+}
+
+function medianOf(sortedMs: number[]): number {
+  const n = sortedMs.length;
+  if (n === 0) return 0;
+  if (n % 2 === 1) return sortedMs[(n - 1) / 2];
+  return (sortedMs[n / 2 - 1] + sortedMs[n / 2]) / 2;
+}
+
+function p95Of(sortedMs: number[]): number {
+  const n = sortedMs.length;
+  if (n === 0) return 0;
+  const idx = Math.min(n - 1, Math.max(0, Math.ceil(0.95 * n) - 1));
+  return sortedMs[idx];
+}
+
+interface Agg {
+  /**
+   * 營業額（原口徑）= **已結帳（`settled`／`paid`）訂單總額**，退款單整張唔計。
+   * ⚠️ 呢個數**唔等於實收**：賣 100 退 30 時佢顯示 100，但實際落袋 70。
+   * 保留原口徑係為咗同歷史數字可比，UI 必須同時展示 {@link Agg.netRevenue}。
+   */
+  revenue: number;
+  /** 🔴 2026-09-17 新增：淨營業額 = `revenue − refundTotal`（＝實收落袋）。 */
+  netRevenue: number;
+  /** 🔴 2026-09-17 新增：本區間退款總額（`refunded` / `partially_refunded` 單嘅累計退款）。 */
+  refundTotal: number;
+  /** 🔴 2026-09-17 新增：本區間有退款紀錄嘅單數（`refunded` / `partially_refunded`）。 */
+  refundCount: number;
+  count: number;
+  covers: number;
+  discount: number;
+  voidQty: number;
+  voidAmt: number;
+  dishes: DishRow[];
+  tables: TableRow[];
+  byHour: number[];
+  onlineRevenue: number;
+  offlineRevenue: number;
+  totalSoldQty: number;
+  /** 兼容舊 serving 欄位（出餐分鐘數），保留以便其他模塊用。 */
+  serving: ServingStats;
+  /** 堂食時長：下單 → 送廚 → 結帳 → 整體 */
+  dineInServing: DineInServingBreakdown;
+  /** 外賣 / 快餐時長：下單 → 送廚 → 出餐 → 完成 → 整體 */
+  quickServing: QuickServingBreakdown;
+  /**
+   * 應收金額合計 —— **唯一真源 = 訂單明細每一行嘅「應收」加總**：
+   * ① 本店雲端單（`pos_orders`，**包括帶 `onlineOrderId` 嘅線上投影單**）逐張
+   *    `Σ item.price × quantity + serviceCharge + tax`；
+   * ② 未入 POS DB 嘅 Ledger 純線上單逐張 `subtotalBeforeDiscount`（缺就用 paid）。
+   *
+   * 🔴 2026-09-14（商家口徑「實收＝實際收到嘅錢」，已用截圖核實）：**唔可以**改用 Ledger RPC
+   * `order_paid_avos`（定義係「**已完成**且已付款」）—— 客人已付款但未推 `completed` 嘅單會靜默少計，
+   * 令「應收／實收金額合計」細過訂單明細加總（實案：2,984 vs 3,022，差 38；嗰筆錢係真嘅）。
+   * 呢兩個欄位必須同 `orderDetails` **同源同批**，否則三張表（KPI／明細／支付方式分項）夾唔到數。
+   */
+  receivableTotal: number;
+  /** 實收金額合計（同上一批單，逐張 `order.total`／Ledger `paidAmount`）＝ 實際收到嘅錢。 */
+  paidTotal: number;
+  /** 同上但**只計線下 POS 單**（`!onlineOrderId`）—— 供 KPI 副標題拆「線下 / 線上」。 */
+  offlineReceivableTotal: number;
+  /** Ledger 純線上單（未入 POS DB）嘅實收小計／張數 —— 供拆「線上」部分。 */
+  ledgerOnlyPaidTotal: number;
+  ledgerOnlyCount: number;
+  /**
+   * 支付方式分項：POS 用 `order.paymentMethod`、Ledger 用 `paymentModeLabel`（餘額扣點／到店付款…）。
+   * **與訂單明細同一批單、同一口徑** ⇒ Σ 各 bucket = `paidTotal` = 明細加總。
+   */
+  paymentBreakdown: PaymentBreakdown;
+  /**
+   * 訂單明細（逐筆）：與支付方式分項同一批訂單（線下 in-range 已結帳 + Ledger 純線上單），
+   * 按結賬時間倒序。欄位見 {@link OrderDetailRow}。
+   */
+  orderDetails: OrderDetailRow[];
+}
+
+/** 一行支付方式統計：應收 / 實收 / 訂單數。 */
+interface PaymentMethodBucket {
+  receivable: number;
+  paid: number;
+  count: number;
+}
+type PaymentBreakdown = Record<string, PaymentMethodBucket>;
+
+interface MenuMeta {
+  /** menuItemId → MenuItem */
+  itemMap: Map<string, { categoryId: string; name: string }>;
+  /** categoryId → category name */
+  categoryMap: Map<string, string>;
+  /** 菜名 → MenuItem（fallback 配對用） */
+  nameMap: Map<string, { categoryId: string; name: string }>;
+  /** 正規化菜名 → MenuItem（去空白小寫 fallback） */
+  normalizedNameMap: Map<string, { categoryId: string; name: string }>;
+  /** 原始 bootstrap 摘要，用於診斷 */
+  boot: {
+    storeId: string;
+    storeName: string;
+    menuItemCount: number;
+    categoryCount: number;
+    lastUpdatedAt: string;
+    sampleMenuItemIds: string[];
+    sampleCategoryIds: string[];
+    /** 當前餐牌菜品名樣本（前 12 個），用嚟同「未匹配菜品名」肉眼對照 */
+    sampleMenuItemNames: string[];
+  };
+}
+
+function buildMenuMeta(): MenuMeta {
+  const boot = loadBootstrapCache();
+  const items = boot?.menuItems ?? [];
+  const categories = boot?.categories ?? [];
+  const itemMap = new Map<string, { categoryId: string; name: string }>();
+  const nameMap = new Map<string, { categoryId: string; name: string }>();
+  const normalizedNameMap = new Map<string, { categoryId: string; name: string }>();
+  for (const m of items) {
+    if (!itemMap.has(m.id)) itemMap.set(m.id, { categoryId: m.categoryId, name: m.name });
+    if (!nameMap.has(m.name)) nameMap.set(m.name, { categoryId: m.categoryId, name: m.name });
+    const key = normalizeMenuName(m.name);
+    if (key && !normalizedNameMap.has(key)) normalizedNameMap.set(key, { categoryId: m.categoryId, name: m.name });
+  }
+  return {
+    itemMap,
+    categoryMap: new Map(categories.map((c) => [c.id, c.name])),
+    nameMap,
+    normalizedNameMap,
+    boot: {
+      storeId: boot?.storeId ?? "",
+      storeName: boot?.storeName ?? "",
+      menuItemCount: items.length,
+      categoryCount: categories.length,
+      lastUpdatedAt: boot?.lastUpdatedAt ?? "",
+      sampleMenuItemIds: items.slice(0, 5).map((m) => m.id),
+      sampleCategoryIds: categories.slice(0, 5).map((c) => c.id),
+      sampleMenuItemNames: items.slice(0, 12).map((m) => m.name),
+    },
+  };
+}
+
+/** 菜名正規化：去掉所有空白 + 轉小寫。只用作 fallback 配對。 */
+function normalizeMenuName(value: string): string {
+  return value.replace(/\s+/g, "").toLowerCase();
+}
+
+/** 按 menuItemId → name → normalized name 嘅順序，喺 bootstrap 搵對應嘅 MenuItem。
+ *  用嚟處理 Ledger 明細帶冇前綴 product id、但本地 bootstrap 用 `ledger-` 前綴 id 嘅情況。 */
+function resolveMenuMetaItem(
+  menuItemId: string,
+  itemName: string,
+  meta: MenuMeta,
+): { categoryId: string; name: string; matchedBy: "id" | "name" | "normalized" | null } {
+  const byId = meta.itemMap.get(menuItemId);
+  if (byId) return { ...byId, matchedBy: "id" };
+  const byName = meta.nameMap.get(itemName);
+  if (byName) return { ...byName, matchedBy: "name" };
+  const key = normalizeMenuName(itemName);
+  const byNorm = key ? meta.normalizedNameMap.get(key) : undefined;
+  if (byNorm) return { ...byNorm, matchedBy: "normalized" };
+  return { categoryId: "", name: "", matchedBy: null };
+}
+
+/** 判斷訂單是否應計入銷售統計（菜品 / 營業額 / 桌台 / 尖峰時段）。
+ *  - 線下 POS 單：只統計 settled。
+ *  - 帶 onlineOrderId 的單（不論單據嚟自 POS 定 Ledger 同步）：settled 或 paid 都計。
+ *  - 退款狀態（refunded / partially_refunded）一律不計入銷售。
+ *  export：admin panel「全部商家」彙總報表（admin-all-report）沿用同一口徑。 */
+export function isSaleCountable(o: PosOrder): boolean {
+  if (o.status === "refunded" || o.status === "partially_refunded") return false;
+  if (o.status === "settled" || o.status === "paid") return true;
+  return false;
+}
+
+/**
+ * 🔴 2026-09-17：退款單「未退部分」仍然係真金白銀收過嘅錢，唔應該隨退款一齊消失。
+ *
+ * 【問題】`isSaleCountable()` 將退款單**整張排除** ⇒ 「賣 100、退 30」正確實收 70，
+ * 但報表當 0 → 實收**偏低 30**。交班側（`shift-page.tsx`）2026-09-17 已改為淨額口徑，
+ * 呢度必須同步，否則兩頁夾唔到數（商家明確要求兩頁見同一套數）。
+ *
+ * 【口徑】**淨營業額 = 已計銷售單實收 − 退款總額**。
+ * 因為退款只會喺已計銷售（settled / paid）嘅單上發生，所以兩種寫法等價：
+ *   `Σ(countable.total) − Σ(refundedAmount)` ≡ `Σ(countable 未退部分)`
+ * 呢度用前者（改動最小），並喺 UI 明確標示「已扣退款」。
+ *
+ * ⚠️ 實際算法喺 `src/lib/refund-net.ts` —— 呢度只做 re-export，令既有 import 唔會斷。
+ * **唔可以**喺本檔（`.tsx`）重新實作一次：`node --test` 唔支援 `.tsx` 副檔名
+ * （`ERR_UNKNOWN_FILE_EXTENSION`），純計算邏輯寫入元件檔會令佢無法被單元測試。
+ */
+export { refundTotalOf } from "@/lib/refund-net";
+
+/** 訂單狀態碼 → 中文標籤（報表提示文案同狀態分佈顯示用）。 */
+const POS_ORDER_STATUS_LABELS: Record<string, string> = {
+  draft: "未送單",
+  sent_to_kitchen: "已送廚房（未結帳）",
+  paid: "已付款",
+  settled: "已結帳",
+  reopened: "已重開",
+  cancelled: "已作廢",
+  partially_refunded: "部分退款",
+  refunded: "已退款",
+};
+
+function statusLabelOf(status: string): string {
+  return POS_ORDER_STATUS_LABELS[status] ?? status;
+}
+
+/** 掃描 localStorage 內 macau-pos/stores/&#123;storeId&#125;/orders 同 macau-pos/orders 嘅單數，
+ *  用嚟排查「舊分店（60000003 等）資料殘留」嘅來源。
+ *  - storageOrdersByStore：分店 ID → 訂單數
+ *  - legacyOrdersCount：macau-pos/orders 舊全域 key 嘅單數（v1 之前嘅 unscoped 殘留） */
+function scanStorageOrders(): {
+  storageOrdersByStore: Record<string, number>;
+  legacyOrdersCount: number;
+} {
+  const result: { storageOrdersByStore: Record<string, number>; legacyOrdersCount: number } = {
+    storageOrdersByStore: {},
+    legacyOrdersCount: 0,
+  };
+  if (typeof window === "undefined") return result;
+  try {
+    const prefix = "macau-pos/stores/";
+    const suffix = "/orders";
+    for (let i = 0; i < window.localStorage.length; i++) {
+      const k = window.localStorage.key(i);
+      if (!k) continue;
+      if (k === `macau-pos/orders`) {
+        try {
+          const raw = window.localStorage.getItem(k);
+          const arr = raw ? (JSON.parse(raw) as unknown[]) : [];
+          result.legacyOrdersCount = Array.isArray(arr) ? arr.length : 0;
+        } catch {
+          // ignore parse error
+        }
+        continue;
+      }
+      if (k.startsWith(prefix) && k.endsWith(suffix)) {
+        const storeId = k.slice(prefix.length, k.length - suffix.length);
+        try {
+          const raw = window.localStorage.getItem(k);
+          const arr = raw ? (JSON.parse(raw) as unknown[]) : [];
+          result.storageOrdersByStore[storeId] = Array.isArray(arr) ? arr.length : 0;
+        } catch {
+          result.storageOrdersByStore[storeId] = -1; // 標記 parse 失敗
+        }
+      }
+    }
+  } catch {
+    // localStorage 可能喺 SSR / 私隱模式存取失敗
+  }
+  return result;
+}
+
+/** Ledger 線上單明細（訂單 + 菜品快照），畀菜品銷售排行 / 時長統計用。 */
+type OnlineDishSource = { order: LedgerOnlineOrder; items: LedgerOrderDetailItem[] };
+
+/** 線上單 fulfillmentType → 餐台欄顯示標籤（線上單冇實體餐台號）。 */
+function onlineFulfillmentLabel(fulfillmentType?: string): string {
+  const t = String(fulfillmentType ?? "").toLowerCase();
+  if (t === "dine_in") return "線上·堂食";
+  if (t === "takeaway" || t === "delivery") return "線上·外賣";
+  if (t === "pickup" || t === "self_pickup") return "線上·自取";
+  return "線上";
+}
+
+/** PosOrder → 訂單明細行（訂單號 / 折扣備註 / 餐台 / 應收 / 優惠金額 / 實收 / 收款類型 / 收銀員 / 結賬時間）。 */
+function posOrderToDetailRow(o: PosOrder, receivable: number): OrderDetailRow {
+  return {
+    id: o.id,
+    orderNo: o.localOrderNo,
+    table: o.tableName || o.tableId,
+    receivable,
+    paid: o.total,
+    // 🔴 同 `aggregate()` 嘅 breakdown key **必須同一個函式**，否則分項表同明細表對唔到。
+    method: posPaymentMethodLabel(o.paymentMethod),
+    cashier: o.settledByName ?? o.settledBy ?? "未記錄",
+    // 🔴 2026-09-18 需求：「返結後，訂單明細內的時間應該更新到最新時間。」
+    // 口徑同交班明細完全一致（`shift-page.tsx` 同一行）：
+    //   有返結過 → 顯示最近返結時間；否則首次結帳時間；否則退回 `updatedAt`。
+    // 詳見 `shift-page.tsx` 該處註解（含「為何唔直接用 updatedAt」同
+    // 「originalSettledAt 仍作首次結帳審計保留喺訂單詳情頁」）。
+    // 2026-09-24 · 0057：`o.settledAt`（最近一次結帳，server 永不覆蓋）排最前；舊單落返舊鏈。
+    settledAt: o.settledAt ?? o.reopenedAt ?? o.originalSettledAt ?? o.updatedAt,
+    // 折扣 / 免單 / 抹零備註（2026-09-11 需求 #2）：推導邏輯集中喺 order-notes，
+    // 同交班明細、訂單紀錄用同一套，確保三處完全一致。
+    notes: buildOrderDetailNotes(o),
+    // 🔴 2026-09-18：「已返結 ×N」標籤（訂單號右側）。
+    // 傳次數而唔係 boolean —— 計數單調遞增，重結完仍然在，標籤永久保留。
+    reopenCount: o.reopenCount ?? 0,
+  };
+}
+
+function aggregate(orders: PosOrder[], range: ReportRangeArg, onlineWithItems?: OnlineDishSource[]): Agg {
+  const counted = orders.filter((o) => isSaleCountable(o));
+  const inRange = counted.filter((o) => orderMatchesReportRange(o, range));
+
+  let revenue = 0;
+  let covers = 0;
+  let discount = 0;
+  let voidQty = 0;
+  let voidAmt = 0;
+  let onlineRevenue = 0;
+  let offlineRevenue = 0;
+  let totalSoldQty = 0;
+  // 🔴 金額一律「逐張單加總」＝實際收到嘅錢（同 `orderDetails` / `paymentBreakdown` 同源）。
+  // 唔可以改用 Ledger RPC（`order_paid_avos` 只認「已完成」，會令 KPI 細過明細加總）。
+  let receivableTotal = 0;
+  let paidTotal = 0;
+  let offlineReceivableTotal = 0;
+  let ledgerOnlyPaidTotal = 0;
+  let ledgerOnlyCount = 0;
+
+  const dishMap = new Map<string, DishRow>();
+  const tableMap = new Map<string, TableRow>();
+  const byHour = new Array<number>(24).fill(0);
+  const paymentBreakdown: PaymentBreakdown = {};
+  const orderDetails: OrderDetailRow[] = [];
+
+  for (const o of inRange) {
+    revenue += o.total;
+    discount += o.discountAmount;
+    covers += o.partySize ?? 0;
+    const isOnline = !!o.onlineOrderId;
+    if (isOnline) onlineRevenue += o.total;
+    else offlineRevenue += o.total;
+
+    // 應收 = Σ(item.price × quantity) + serviceCharge + tax
+    //  - item.price = 落單時嘅 base price（未套單品 discountRate），已包含 voided 菜品的原價
+    //  - 服務費 + 稅都按未優惠前嘅 subtotal 計，所以原價合計 + service + tax = 「原價金額」
+    // 實收 = o.total（已扣全單 discount + 抹零 + 服務費 + 稅 後商家實際收嘅）
+    const itemsGross = o.items.reduce((sum, it) => sum + it.price * it.quantity, 0);
+    const orderReceivable =
+      itemsGross + (o.serviceChargeAmount ?? 0) + (o.taxAmount ?? 0);
+    // 🔴 全部本店單都要入帳（包括帶 `onlineOrderId` 嘅線上投影單，例如掃碼／排位／快餐採納單）：
+    // 佢哋係喺店內真金白銀收過嘅錢，只係同步來源係 Ledger。Ledger 側同一張單唔會喺下面
+    // 「純線上單」迴圈重複計（`posOnlineIds` 已去重）。
+    receivableTotal += orderReceivable;
+    paidTotal += o.total;
+    if (!isOnline) offlineReceivableTotal += orderReceivable;
+    // 🔴 2026-10-07：唔可以直接用 `o.paymentMethod` 做 breakdown key。
+    // 線上單投影（`ledger-pos-bridge.ts`）把 Ledger enum **原文**寫入 `pos_orders.payment_method`
+    // （`in_store` / `balance`…）⇒ 未翻譯就會喺「支付方式分項」出現英文行。
+    // 統一真源：`posPaymentMethodLabel()`（連 Ledger 純線上單都經同一個函式 ⇒ 兩邊夾得返）。
+    const method = posPaymentMethodLabel(o.paymentMethod);
+    const bucket = paymentBreakdown[method] ?? { receivable: 0, paid: 0, count: 0 };
+    bucket.receivable += orderReceivable;
+    bucket.paid += o.total;
+    bucket.count += 1;
+    paymentBreakdown[method] = bucket;
+
+    // 訂單明細（逐筆）：同支付方式分項同一口徑
+    orderDetails.push(posOrderToDetailRow(o, orderReceivable));
+
+    byHour[macauHour(o.createdAt)] += 1;
+
+    const tr =
+      tableMap.get(o.tableId) ?? { tableId: o.tableId, name: o.tableName, orders: 0, covers: 0 };
+    tr.orders += 1;
+    tr.covers += o.partySize ?? 0;
+    tableMap.set(o.tableId, tr);
+
+    for (const it of o.items) {
+      if (it.voided) {
+        voidQty += it.quantity;
+        voidAmt += it.price * it.quantity;
+        continue;
+      }
+      totalSoldQty += it.quantity;
+
+      // 按「下單當時快照」聚合：menuItemId + 訂單內記錄嘅菜品名（快照）。
+      // 快閃餐只改名／改價（Ledger 菜品 ID 不變）時，唔同名稱／價格各自一行：
+      // 今天叫 A 餐、明天叫 B 餐 → 報表顯示「A餐 X 份、B餐 Y 份」，
+      // 唔會強制對應返當前餐牌名稱，歷史訂單亦唔會因改名而「失蹤」。
+      // 金額用訂單內快照價 it.price（落單當時賣出嘅價錢）。
+      const key = `${it.menuItemId}|${it.name}`;
+      const d =
+        dishMap.get(key) ?? { key, name: it.name, offlineQty: 0, onlineQty: 0, revenue: 0 };
+      d.revenue += it.price * it.quantity;
+      if (isOnline) d.onlineQty += it.quantity;
+      else d.offlineQty += it.quantity;
+      dishMap.set(key, d);
+    }
+  }
+
+  // Ledger 純線上單菜品明細（get_order_detail 攞返嚟，可能從未入 POS DB）：
+  // 以「線上」渠道併入菜品銷售排行。聚合 key 同 POS 快照一致（menuItemId|名稱），
+  // 名稱用 Ledger 明細快照，唔強制對應當前餐牌。
+  for (const { order: onlineOrder, items } of onlineWithItems ?? []) {
+    // Ledger 純線上單（**未入 POS DB**，`posOnlineIds` 已去重）：逐張入帳，
+    // 令 KPI／訂單明細／支付方式分項三張表同源同批（＝實際收到嘅錢）。
+    // ⚠️ 唔可以用 RPC `order_paid_avos` 代替：嗰個只認「已完成」，已付款未完成嘅單會消失（差 38 實案）。
+    const orderPaid = Number(onlineOrder.total ?? onlineOrder.paidAmount ?? 0);
+    const orderReceivable = Number(
+      onlineOrder.subtotalBeforeDiscount ?? onlineOrder.total + (onlineOrder.discountAmount ?? 0),
+    );
+    // 應收 fallback：若 subtotalBeforeDiscount 同 discountAmount 都冇，就退而用 paid
+    const safeReceivable = Number.isFinite(orderReceivable) && orderReceivable > 0 ? orderReceivable : orderPaid;
+    // 支付方式：同上面 POS 單行**用同一個函式**（`posPaymentMethodLabel`）——
+    // 分別只喺 fallback（呢邊冇值叫「線上單」，POS 單叫「未記錄」）。
+    const method = posPaymentMethodLabel(onlineOrder.paymentMode, "線上單");
+    receivableTotal += safeReceivable;
+    paidTotal += orderPaid;
+    ledgerOnlyPaidTotal += orderPaid;
+    ledgerOnlyCount += 1;
+    const bucket = paymentBreakdown[method] ?? { receivable: 0, paid: 0, count: 0 };
+    bucket.receivable += safeReceivable;
+    bucket.paid += orderPaid;
+    bucket.count += 1;
+    paymentBreakdown[method] = bucket;
+
+    // 訂單明細（逐筆）：Ledger 純線上單冇餐台號 → 用履約方式標籤；收銀員 = 下單客人
+    orderDetails.push({
+      id: onlineOrder.id,
+      // 線上單冇 localOrderNo → 第一列顯示「線上單」+ 取餐碼
+      pickupCode: onlineOrder.pickupCode,
+      table: onlineFulfillmentLabel(onlineOrder.fulfillmentType),
+      receivable: safeReceivable,
+      paid: orderPaid,
+      method,
+      cashier: "客人",
+      settledAt: onlineOrder.updatedAt ?? onlineOrder.createdAt ?? "",
+      // 線上單折扣：Ledger 側只有金額冇原因文字 → 統一顯示「線上優惠」chip。
+      notes: buildOnlineOrderDetailNotes(onlineOrder.discountAmount),
+    });
+
+    for (const it of items) {
+      const name = it.name || "(未知菜品)";
+      const qty = Math.max(0, Number(it.qty) || 0);
+      if (qty === 0) continue;
+      const price = Number(it.unitPrice ?? 0);
+      const key = `${it.menuItemId ?? name}|${name}`;
+      const d = dishMap.get(key) ?? { key, name, offlineQty: 0, onlineQty: 0, revenue: 0 };
+      d.onlineQty += qty;
+      d.revenue += price * qty;
+      dishMap.set(key, d);
+    }
+  }
+
+  /*
+   * 🔴 2026-10-05（J 拍板）：菜品排行排序由「銷量倒序」改為「**金額倒序**」。
+   *    理由：銷量序會令「賣得多但平」嘅品項（例如凍檸茶）排前，睇唔出邊款菜
+   *    對營業額貢獻最大。金額 = Σ price×qty，同 Ledger 側 `dishes[]` 口徑一致。
+   *    ⚠️ Ledger 側排序真源喺 SQL（migration 0060 嘅 `order by revenue_avos desc`），
+   *       呢度只係 POS 本機聚合（Ledger 線上單細項併入後）嘅同一口徑，
+   *       兩邊必須一致，否則同一份報表兩個入口會排出唔同次序。
+   *    ⚠️ 並列時按名稱升序（同 SQL `dname asc` 一致）——保持穩定、可重現。
+   */
+  const dishes = Array.from(dishMap.values()).sort(
+    (a, b) => b.revenue - a.revenue || a.name.localeCompare(b.name),
+  );
+  const tables = Array.from(tableMap.values()).sort((a, b) => b.orders - a.orders);
+
+  const servingSamples: number[] = [];
+  let servingEstimated = false;
+  const dineInOrderToKitchen: Array<{ ms: number; estimated: boolean }> = [];
+  const dineInKitchenToSettle: Array<{ ms: number; estimated: boolean }> = [];
+  const dineInTotal: Array<{ ms: number; estimated: boolean }> = [];
+  const quickOrderToKitchen: Array<{ ms: number; estimated: boolean }> = [];
+  const quickKitchenToServed: Array<{ ms: number; estimated: boolean }> = [];
+  const quickServedToSettled: Array<{ ms: number; estimated: boolean }> = [];
+  const quickTotal: Array<{ ms: number; estimated: boolean }> = [];
+  for (const o of inRange) {
+    const sm = servingMinutes(o);
+    if (sm) {
+      servingSamples.push(sm.ms);
+      if (sm.estimated) servingEstimated = true;
+    }
+    if (o.tableId === "counter") {
+      // 快餐 / 自取 / 外賣：有明確出餐概念
+      const steps = quickStepsForOrder(o);
+      if (steps.orderToKitchen) quickOrderToKitchen.push(steps.orderToKitchen);
+      if (steps.kitchenToServed) quickKitchenToServed.push(steps.kitchenToServed);
+      if (steps.servedToSettled) quickServedToSettled.push(steps.servedToSettled);
+      if (steps.total) quickTotal.push(steps.total);
+    } else {
+      // 堂食：無出餐，以「送廚 → 結帳」當作整體服務時間
+      const steps = dineInStepsForOrder(o);
+      if (steps.orderToKitchen) dineInOrderToKitchen.push(steps.orderToKitchen);
+      if (steps.kitchenToSettle) dineInKitchenToSettle.push(steps.kitchenToSettle);
+      if (steps.total) dineInTotal.push(steps.total);
+    }
+  }
+
+  // Ledger 純線上單（可能從未入 POS DB）：冇送廚／出餐時間戳，
+  // 只可以用「下單 createdAt → 付款完成 updatedAt」估算整體時長（標記 estimated）。
+  // 依 fulfillmentType 分桶：dine_in → 堂食；其他（takeaway / delivery）→ 快餐 / 外賣。
+  for (const { order: o } of onlineWithItems ?? []) {
+    const created = Date.parse(o.createdAt ?? "");
+    const done = Date.parse(o.updatedAt ?? "");
+    if (!Number.isFinite(created) || !Number.isFinite(done)) continue;
+    const sample = { ms: Math.max(0, done - created), estimated: true };
+    if (String(o.fulfillmentType ?? "").toLowerCase() === "dine_in") dineInTotal.push(sample);
+    else quickTotal.push(sample);
+  }
+  servingSamples.sort((a, b) => a - b);
+  const servingCount = servingSamples.length;
+  const serving: ServingStats = {
+    count: servingCount,
+    avgMin: servingCount ? servingSamples.reduce((s, v) => s + v, 0) / servingCount / 60000 : 0,
+    medianMin: medianOf(servingSamples) / 60000,
+    p95Min: p95Of(servingSamples) / 60000,
+    estimated: servingEstimated,
+  };
+
+  const dineInServing: DineInServingBreakdown = {
+    orderToKitchen: summarizeSteps(dineInOrderToKitchen),
+    kitchenToSettle: summarizeSteps(dineInKitchenToSettle),
+    total: summarizeSteps(dineInTotal),
+  };
+  const quickServing: QuickServingBreakdown = {
+    orderToKitchen: summarizeSteps(quickOrderToKitchen),
+    kitchenToServed: summarizeSteps(quickKitchenToServed),
+    servedToSettled: summarizeSteps(quickServedToSettled),
+    total: summarizeSteps(quickTotal),
+  };
+
+  // 🔴 2026-09-17 退貨修復（口徑 D）：報表同交班頁必須見同一套數。
+  // 「revenue」＝**已結帳（settled）訂單總額**，保持原口徑唔動（＝歷史數字可比）。
+  // 但退款單（refunded／partially_refunded）原本被 isSaleCountable() 整張剔走 ⇒
+  // 「賣 100 退 30」報表顯示 0，實際落袋 70。呢度補一個淨額口徑：
+  //   netRevenue = revenue − 退款總額
+  // ⚠️ 退款總額要由**全量 orders**（唔止 inRange）計，因為退款紀錄可能落喺
+  //    已結帳但結帳時間唔喺本區間嘅單上（跨日退貨）。
+  const refundTotal = refundTotalOf(orders);
+  const refundCount = refundOrderCountOf(orders);
+  const netRevenue = netOf(revenue, refundTotal);
+
+  return {
+    revenue,
+    netRevenue,
+    refundTotal,
+    refundCount,
+    count: inRange.length,
+    covers,
+    discount,
+    voidQty,
+    voidAmt,
+    dishes,
+    tables,
+    byHour,
+    onlineRevenue,
+    offlineRevenue,
+    totalSoldQty,
+    serving,
+    dineInServing,
+    quickServing,
+    receivableTotal,
+    paidTotal,
+    offlineReceivableTotal,
+    ledgerOnlyPaidTotal,
+    ledgerOnlyCount,
+    paymentBreakdown,
+    // 結賬時間倒序（最新單喺最上）；缺時間戳嘅排尾
+    orderDetails: orderDetails.sort((a, b) => {
+      const ta = a.settledAt ? Date.parse(a.settledAt) : 0;
+      const tb = b.settledAt ? Date.parse(b.settledAt) : 0;
+      return tb - ta;
+    }),
+  };
+}
+
+type Suggestion = { level: "r" | "o" | "i"; title: string; action: string };
+
+const LEVEL_LABEL: Record<Suggestion["level"], string> = { r: "立即", o: "關注", i: "資訊" };
+
+/** 持續訂閱 authSession 變化，確保切換店鋪後 merchantId 即時更新。
+ *  解決 root cause：React 唔會自動訂閱 localStorage，直接喺 render call loadAuthSession()
+ *  可能會喺切換帳號後短暫讀取舊店 merchantId。 */
+function useReportMerchantId(): string | null {
+  const [merchantId, setMerchantId] = useState<string | null>(() => loadAuthSession()?.merchantId ?? null);
+  useEffect(() => {
+    function sync() {
+      setMerchantId(loadAuthSession()?.merchantId ?? null);
+    }
+    window.addEventListener("pos-auth-changed", sync);
+    return () => window.removeEventListener("pos-auth-changed", sync);
+  }, []);
+  return merchantId;
+}
+
+/** 報表 backfill 需要嘅最大時間區間：
+ *  - today / yesterday / 7d / 30d / custom：按實際區間拉，減少 payload 同確保唔會被分頁截斷。
+ *  - all：用 365 日滾動窗口（同 Ledger RPC 一致；足夠覆蓋絕大多數餐廳營運週期）。 */
+function backfillRangeFor(range: ReportRangeArg, now = new Date()): { start: string; end: string } | null {
+  return resolveReportRange(range, now);
+}
+
+export type RestaurantDailyReportProps = {
+  /** admin panel 模式：覆寫 merchantId（唔經 auth session / POS 登入）。
+   *  傳入即視為「admin 模式」：Ledger 會員類 RPC（需要 merchant JWT）會跳過，
+   *  POS 訂單數據（/api/pos/state?storeId=）照常拉取——該 API 係 server service-role。 */
+  merchantIdOverride?: string;
+  /** admin 模式：顯示用店名（admin 裝置冇該店 bootstrap cache，fallback「本店」冇意義）。 */
+  storeNameOverride?: string;
+  /** admin「全部」模式：唔指定 merchantId，跨店彙總所有商家嘅 POS 訂單。
+   *  訂單由 adminOrderFetcher 提供；本機 fallback / 店鋪過濾全部停用。 */
+  allStoresMode?: boolean;
+  /** admin 模式訂單 fetcher（GET /api/admin/orders，需 admin token，由 admin 頁面注入）。
+   *  帶 `storeId` = 單店；唔帶 = 跨店彙總（「全部商家」模式）。 */
+  adminOrderFetcher?: (params: {
+    storeId?: string;
+    start?: string;
+    end?: string;
+    limit: number;
+    offset: number;
+  }) => Promise<PosOrder[]>;
+  /** 初始報表範圍（唔傳 = "today"）。
+   *  admin 報表頁嘅「重新載入」用 remount（key 帶 refreshSeq）重置本組件全部 state，
+   *  靠呢個 prop 喺 remount 後還原用戶已選嘅範圍（今日/昨日/7天/30天/全部），
+   *  否則刷新完會彈返「今日」。 */
+  initialRange?: ReportRangeArg;
+  /** 範圍變更通知上一層 —— 畀 admin 頁面記住用戶選擇，remount 後用 initialRange 還原。 */
+  onRangeChange?: (range: ReportRangeArg) => void;
+  /** 軟刷新信號（自動刷新用）：值一變即重跑 POS 訂單 / Ledger 線上單 / Ledger 彙總三條
+   *  fetch effect，**唔 remount、唔清舊數據** → 畫面上一直有數字，新數據返嚟先換。
+   *  由外殼 `RestaurantDailyReport` 注入；直接使用本組件（唔經外殼）時唔傳即可。 */
+  refreshToken?: number;
+  /** 載入狀態通知：true = 至少有個數據源仲載入緊（初次 mount 亦為 true）。 */
+  onBusyChange?: (busy: boolean) => void;
+  /** 載入錯誤摘要（POS 訂單 / Ledger 線上單 / 線上單明細 / Ledger 彙總），冇錯傳 null。 */
+  onLoadError?: (message: string | null) => void;
+};
+
+/** 報表自動刷新間隔（只喺分頁可見時執行）。 */
+/**
+ * 2026-09-21 egress 優化：3 分鐘 → **10 分鐘**。
+ *
+ * 為咩：報表係「對數」用途，唔需要 3 分鐘新鮮度；而每次刷新要拉
+ * 最多 10 頁 × 2000 單 × 3 條時間腿（實測 Supabase log：`limit=2000` 三腿一組），
+ * 屬本專案第二大 egress 來源。改 10 分鐘直接令呢條路徑成本變 1/3。
+ *
+ * 唔影響：切返分頁 / 按「重新整理」仍然會即刻刷新（見下面 `onVisibility` 同
+ * `bump()` 嘅手動入口），所以商家想睇最新數字隨時撳得到。
+ * 要還原舊行為：改返 `3 * 60 * 1000`。
+ */
+const AUTO_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
+/** 兩次刷新之間嘅最短間隔 —— 去抖（避免 interval 同 visibilitychange 撞埋一齊）。 */
+const MIN_REFRESH_GAP_MS = 20 * 1000;
+
+/**
+ * 自動刷新外殼（2026-09-10）。
+ *
+ * ## 點解要有
+ *
+ * 報表只在 mount 時拉一次數據，**補推／結帳之後畫面唔會自己更新**。
+ * 2026-09-10 生產實例：對賬守護 17:51 已經把 3 張殭屍單補推上雲、DB 只剩 1 張未結帳，
+ * 但商家 18:02 睇住嘅報表仍然寫「未結帳 3 張」—— 商家就係憑住一個過期畫面
+ * 嚟問「點解 iPad 同步唔到」，白白浪費一輪排查。
+ *
+ * ## 做法：軟刷新（唔 remount）
+ *
+ * 原本想用 admin「重新載入」嗰套 `key` remount —— 但**唔得**：remount 會令
+ * `dataReady` 由 false 重新嚟過，全頁 11 張卡一齊變 skeleton，每個刷新週期閃一次
+ * （週期見 `AUTO_REFRESH_INTERVAL_MS`，2026-09-21 起 10 分鐘）；
+ * 而且會丟失滾動位置同正在編輯嘅欄位（毛利率 inline edit）。自動刷新係背景行為，
+ * 唔應該搶走用戶手上嘅畫面。
+ *
+ * 所以改為傳 `refreshToken` 落主體，由主體**加落三條數據 effect 嘅依賴陣列**
+ * （POS 訂單 backfill / Ledger 線上單 / Ledger 彙總）。範圍經
+ * `initialRange` / `onRangeChange` 保住（其實唔 remount 都唔會丟）。
+ *
+ * ## 🔴 2026-09-15 更新：refresh 期間改為顯示整頁 loading（商家要求）
+ *
+ * 上面「舊數據一直留在畫面上，直到新數據返嚟先換」係 2026-09-10 嘅設計，
+ * 但商家 2026-09-15 明確推翻：「refresh 期間顯示 loading 指示，等新數據
+ * （含 ledger 與線下數據）完整取得並合併後才更新畫面，避免更新過程中出現
+ * 內容閃動或數據不完整」。
+ *
+ * 原因：四條 fetch 係**各自獨立**返回（線上單明細逐張 RPC，可以慢過 Ledger 彙總
+ * 幾十秒），所以「各自返嚟先換」會見到 KPI／明細／支付分項**逐格跳**。
+ * 而家由 `fullPageLoading`（派生值）統一擋住，四源齊全先一次過換畫面。
+ *
+ * ⚠️ 但**仍然唔可以**用 `key` remount：
+ * ① remount 會丟失滾動位置同正在編輯嘅欄位（毛利率 inline edit）；
+ * ② remount 會令 `restoreLedgerSession()` 等重新跑，比軟刷新慢；
+ * ③ 軟刷新保留 `orders` 等 state 做 fallback，remount 期間係全空。
+ * ⇒ 只係改「幾時顯示」嘅閘，**唔改觸發方式**（仍然係 `refreshToken`）。
+ *
+ * ## 幾時刷
+ *
+ * - 每 `AUTO_REFRESH_INTERVAL_MS`（3 分鐘）一次，**只喺分頁可見時**；
+ * - 分頁由隱藏變可見（商戶切返嚟）→ 即刻刷（`MIN_REFRESH_GAP_MS` 去抖）。
+ *
+ * ⚠️ **離線時唔刷**：離線下報表會 fallback 讀本機暫存訂單，把一個正常嘅雲端畫面
+ * 刷成「本機版」係降級唔係更新。等 `online` 事件 + 下一個 interval 自然會追上。
+ */
+export function RestaurantDailyReport(props: RestaurantDailyReportProps = {}) {
+  // 每次 +1 = 要求主體軟刷新一次（見上方「做法」）。
+  const [refreshToken, setRefreshToken] = useState(0);
+  // 範圍提升到外殼：主體唔再 remount，但 keep 住呢個提升冇壞處
+  // （admin 頁面自己 remount 我哋時，`initialRange` 仍然要有人記住）。
+  const [range, setRange] = useState<ReportRangeArg>(props.initialRange ?? "today");
+  const lastRefreshRef = useRef(0);
+  const onRangeChange = props.onRangeChange;
+
+  const bump = useCallback(() => {
+    const now = Date.now();
+    if (now - lastRefreshRef.current < MIN_REFRESH_GAP_MS) return;
+    lastRefreshRef.current = now;
+    setRefreshToken((t) => t + 1);
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (document.visibilityState !== "visible") return;
+      if (!readNetworkOnline()) return;
+      // 🔴 2026-09-21 輪詢閘（`@/lib/pos/poll-gate`）：
+      //    J 嘅要求係「關店後仍然可以入報表對數，但只准**一次**查詢，唔可以不停打」。
+      //    所以：兩條接單通路都關／已收工／冇人用 ≥5 分鐘 → **停自動刷新**；
+      //    入頁同手動撳「更新」照樣即刻打（`kind` 唔關事，`bump()` 完全唔受影響）。
+      //    要還原舊行為：刪走 `evaluatePollGate` 呢句。
+      if (!evaluatePollGate({ tag: "reports/auto-refresh" }).poll) return;
+      bump();
+    }, AUTO_REFRESH_INTERVAL_MS);
+
+    const onVisibility = () => {
+      if (document.visibilityState !== "visible") return;
+      if (!readNetworkOnline()) return;
+      bump();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    // 網絡由斷變通：即刻補一次（唔使等最多 3 分鐘嘅 interval）。
+    const onOnline = () => bump();
+    window.addEventListener("online", onOnline);
+
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("online", onOnline);
+    };
+  }, [bump]);
+
+  const handleRange = useCallback(
+    (next: ReportRangeArg) => {
+      setRange(next);
+      onRangeChange?.(next);
+    },
+    [onRangeChange],
+  );
+
+  return (
+    <RestaurantDailyReportBody
+      {...props}
+      refreshToken={refreshToken}
+      initialRange={range}
+      onRangeChange={handleRange}
+    />
+  );
+}
+
+function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
+  // initialRange 只用作初始值；之後由用戶喺 UI 切。admin 頁面重新載入（remount）
+  // 時會把上次嘅範圍傳返入嚟，避免刷新後彈返「今日」。
+  const [range, setRange] = useState<ReportRangeArg>(props.initialRange ?? "today");
+  // 初始 orders 設為空：避免 hydration / 切店時短暫讀取錯誤 scope 嘅 localStorage。
+  // 真正訂單由下方 backfill effect 喺確認 merchantId 後拉取。
+  const [orders, setOrders] = useState<PosOrder[]>([]);
+  const [ledger, setLedger] = useState<{
+    sel: LedgerReportSummary | null;
+    d7: LedgerReportSummary | null;
+    yest: LedgerReportSummary | null;
+  }>({ sel: null, d7: null, yest: null });
+  const [purchase, setPurchase] = useState<{ sel: PurchaseSummary | null; yest: PurchaseSummary | null }>({
+    sel: null,
+    yest: null,
+  });
+  /**
+   * 🔴 2026-09-25：進貨（PurchaseSummary）「讀唔到」同「讀到但係 0」係兩回事。
+   * 三種情況會讀唔到：① admin 模式（冇商戶身份，刻意跳過）② account 配對唔到
+   * expenseRecorder 店戶（`matched:false`）③ 表未建 / expense client 未設定
+   * （`schemaReady:false`、503）。三者舊寫法一律 `?? 0` ⇒ cogs = 0 ⇒
+   * **毛利＝營業額、毛利率 100%**，報表講大話。而家分開記住，UI 要標示。
+   */
+  const [purchaseUnavailable, setPurchaseUnavailable] = useState(false);
+  const [lowStock, setLowStock] = useState<
+    Array<{ name: string; qty: number; unit: string; par: number }> | null
+  >(null);
+  const [ledgerError, setLedgerError] = useState<string | null>(null);
+  // 整體載入門檻：POS 訂單補載 + Ledger 彙總都完成過至少一次，先唔顯示真實資料。
+  // 切店 / 切帳號時重置，令報表先顯示 skeleton 再載入新店資料（杜絕閃現舊店）。
+  const [backfillDone, setBackfillDone] = useState(false);
+  const [ledgerDone, setLedgerDone] = useState(false);
+  const [dataReady, setDataReady] = useState(false);
+  useEffect(() => {
+    if (backfillDone && ledgerDone) setDataReady(true);
+  }, [backfillDone, ledgerDone]);
+  /** Ledger 線上單每小時計數（澳門時區），用以把尖峰時段圖合併 POS 線下單。 */
+  const [onlineByHour, setOnlineByHour] = useState<number[]>(() => new Array<number>(24).fill(0));
+  /** 當前範圍內可計入（paid、非 cancelled、區間內）嘅 Ledger 線上單，
+   *  用以補入「當日人流」同「時長統計」（呢啲單可能從未入 POS DB）。 */
+  const [onlineOrders, setOnlineOrders] = useState<LedgerOnlineOrder[]>([]);
+  /** Ledger 線上單明細（order + 菜品快照），畀「菜品銷售排行」線上部分用。 */
+  const [onlineDishSource, setOnlineDishSource] = useState<OnlineDishSource[]>([]);
+  /** 線上單明細抓取狀態（診斷用）。 */
+  const [onlineDetailInfo, setOnlineDetailInfo] = useState<{
+    total: number;
+    ok: number;
+    failed: number;
+    status: "idle" | "loading" | "success" | "error";
+    lastError: string | null;
+  }>({ total: 0, ok: 0, failed: 0, status: "idle", lastError: null });
+  /** 最近一次「線上單分鐘小時抓取」嘅筆數／狀態，畀診斷面板睇。 */
+  const [onlineFetchInfo, setOnlineFetchInfo] = useState<{
+    fetched: number;
+    counted: number;
+    outOfRange: number;
+    cancelled: number;
+    unpaid: number;
+    status: "idle" | "loading" | "success" | "error" | "skipped";
+    lastError: string | null;
+  }>({
+    fetched: 0,
+    counted: 0,
+    outOfRange: 0,
+    cancelled: 0,
+    unpaid: 0,
+    status: "idle",
+    lastError: null,
+  });
+
+  /**
+   * 🔴 2026-09-15（商家要求）：報表改為「**全有或全無**」渲染。
+   *
+   * ## 為何
+   *
+   * 舊寫法每個區塊各自 `loading={!dataReady}`，而 `dataReady = backfillDone && ledgerDone`
+   * **唔包含**「線上單抓取」同「線上單明細抓取」。所以嗰兩條（最慢、逐張 RPC，最多 200 張）
+   * 仲跑緊嘅時候，KPI 帶已經用**未併入線上單明細**嘅 `agg` 渲染出街 ——
+   * `aggregate()` 嘅「應收／實收金額合計」「訂單明細」「支付方式分項」全部靠
+   * `onlineDishSource` 補線上單金額（見下面 `aggregate` 嘅「Ledger 純線上單」迴圈），
+   * 數據一到就跟住變 → **數字陸續跳動**。
+   * 商家原話：「數據陸續載入後畫面內容位移跳動，造成困惑」。
+   *
+   * ## 口徑
+   *
+   * `freshLoading` = **只要有任何一個數據源仲未攞齊**就為 `true`：
+   * POS 訂單 backfill／Ledger 彙總／Ledger 線上單／線上單明細／低庫存。
+   *
+   * ⚠️ 同 `dataReady` 嘅分別：`dataReady` 係**單調遞增**（`useState(false)` + 只會 set `true`），
+   * 所以自動刷新（`refreshToken` 令四條 fetch effect 重跑）期間 `dataReady` 一直係 `true`
+   * → 舊資料留在畫面上、新資料返嚟逐個區塊換 → 仍然跳動。
+   * `freshLoading` 係**派生值**，refresh 一開始就 `true`，全部返齊先 `false`。
+   *
+   * ⚠️ **TDZ 陷阱**：呢段一定要喺 `onlineFetchInfo` / `onlineDetailInfo` / `lowStock`
+   * 三個 `useState` **之後**先可以宣告，否則 `tsc` 報 TS2448（used before declaration）。
+   */
+  const freshLoading =
+    !backfillDone ||
+    !ledgerDone ||
+    onlineFetchInfo.status === "loading" ||
+    onlineDetailInfo.status === "loading" ||
+    lowStock === null;
+  /**
+   * 「全有或全無」唯一開關：**初次載入同自動刷新共用**。
+   *
+   * 直接用 `freshLoading` 就夠：佢係純派生值 —— 任何一個數據源未攞齊就 `true`
+   * （初次 mount 五個源全部未齊，必然 `true`）；refresh 一開跑又會即時變返 `true`。
+   * 所以一條式同時滿足商家兩點要求：
+   * ① 初次載入：未合併完成前持續 loading，合併完成才一次性渲染；
+   * ② 自動刷新：refresh 期間照樣 loading，新數據齊全才更新畫面，唔會閃動／半截。
+   *
+   * 🔴 **唔可以**用 `useRef` 記「曾否顯示過」再 OR 落去（本檔試過）：
+   * `react-hooks/refs` 禁**render 期間讀 ref**（`Cannot access refs during render`），
+   * 而呢個閘正正喺 render 用 → 直接 lint error。落 state 亦唔得
+   * （會多一次無意義 render，且同 `freshLoading` 語義重複）。
+   * 呢個純派生寫法零額外狀態、零 lint 問題，語義亦最直接。
+   */
+  const fullPageLoading = freshLoading;
+
+  // merchantId 解析：admin panel 傳入 merchantIdOverride 時以佢為準（admin 唔經
+  // POS auth session）；POS 報表頁維持原本 useReportMerchantId() 行為不變。
+  const sessionMerchantId = useReportMerchantId();
+  const isAdminMode = props.merchantIdOverride !== undefined || props.allStoresMode === true;
+  const merchantId = isAdminMode ? props.merchantIdOverride : sessionMerchantId;
+  // 解構成 primitive / 穩定引用，畀 useEffect 依賴陣列用（避免依賴成個 props 物件）。
+  const adminAllStoresMode = props.allStoresMode === true;
+  const adminOrderFetcher = props.adminOrderFetcher;
+  /** 軟刷新信號（外殼自動刷新注入，見 `refreshToken` prop 說明）。加落下面三條
+   *  fetch effect 嘅依賴陣列；**唔可以**加落「切店/切範圍重置」effect，
+   *  否則會清空 orders → 全頁 skeleton 閃一下（正正就係要避免嘅嘢）。 */
+  const refreshToken = props.refreshToken ?? 0;
+  /**
+   * 自動補建後嘅軟刷新信號（2026-09-24 引入 · 2026-09-27 改為自動觸發）。
+   *
+   * **唔另開請求路徑** —— 只係令下面三條 fetch effect 重跑一次（同外殼 `refreshToken`
+   * 完全同一個機制）。
+   *
+   * 🔴 2026-09-27：補建已改為**系統自動**（見 `use-adopt-completed-ledger-orders`），
+   * 所以刷新信號改為訂閱 `pos-orders-changed`（`saveOrders()` 會派發）——
+   * 自動補建一寫入本機，呢頁就自動重算，提示條隨之消失，商家唔需要撳任何掣。
+   * ⚠️ 呢個 listener 零成本（只加一個計數），冇補建時等於唔存在。
+   */
+  const [reconcileRefresh, setReconcileRefresh] = useState(0);
+  useEffect(() => {
+    function onLocalOrdersChanged() {
+      setReconcileRefresh((count) => count + 1);
+    }
+    window.addEventListener("pos-orders-changed", onLocalOrdersChanged);
+    return () => window.removeEventListener("pos-orders-changed", onLocalOrdersChanged);
+  }, []);
+  /** 合成刷新鍵：外殼軟刷新 ＋ 補建後刷新。三條 fetch effect 一律依賴呢個。 */
+  const refreshKey = refreshToken * 1000 + reconcileRefresh;
+  const merchantIdForQuery = merchantId ?? ""; // 穩定型別用，空字串代表 dev 模式不帶 storeId
+  const monthKey = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Macau" }).format(new Date()).substring(0, 7);
+  const bom: BomEntry[] = useMemo(() => loadBom(merchantId ?? ""), [merchantId]);
+
+  // 雲端訂單補載序號：改變佢會強制重跑 backfill effect（切店 / 手動重新拉取）。
+  const [backfillSeq, setBackfillSeq] = useState(0);
+
+  // 🔴 2026-09-29：報表三格改「一律逐單」，`computeSettlementTotals` 已移除
+  //    帳期 fallback ⇒ 唔再喺呢度讀 / 存平台帳期級金額（避免死碼 ＋ 無謂 API）。
+
+  // 切店 / 首次確認 merchantId 時立即清空舊店數據，杜絕閃現外店資料。
+  // 切店 / 切範圍 / 切帳號時重置，杜絕閃現舊店／舊範圍資料（2026-09-06 加 range）。
+  // 舊版只 merchantId 變化時重置 → 切「全部」→「今天」期間 orders 仍殘留「全部」嘅結果，
+  // 新一輪 fetch 尚未返回嘅空窗 UI 顯示舊資料；改為 merchantId / range / adminAllStoresMode
+  // 任一變化即清空 + backfillSeq++ 強制重跑 backfill effect。
+  useEffect(() => {
+    setOrders([]);
+    setBackfillDone(false);
+    setLedgerDone(false);
+    setDataReady(false);
+    // 切店 / 切範圍 = 一輪全新載入 → 五個數據源全部重設為「未齊」
+    // （`lowStock` 歸 null = 未讀取），`fullPageLoading` 隨之變 true。
+    setLowStock(null);
+    setOnlineOrders([]);
+    setOnlineByHour(new Array<number>(24).fill(0));
+    setOnlineDishSource([]);
+    setOnlineDetailInfo({ total: 0, ok: 0, failed: 0, status: "idle", lastError: null });
+    setOnlineFetchInfo({
+      fetched: 0,
+      counted: 0,
+      outOfRange: 0,
+      cancelled: 0,
+      unpaid: 0,
+      status: "idle",
+      lastError: null,
+    });
+    setBackfillSeq((n) => n + 1);
+  }, [merchantId, range, adminAllStoresMode]);
+
+  // 🔴 2026-09-29：平台帳期讀取 effect 已移除 —— 報表三格改「一律逐單」，
+  //    唔再需要 `/api/pos/platform-settlements` 嘅帳期保底（見 computeSettlementTotals）。
+
+  // 菜品銷售排行「更多」彈窗
+  const [dishModalOpen, setDishModalOpen] = useState(false);
+  const [dishModalPage, setDishModalPage] = useState(1);
+  /**
+   * 訂單明細預設收合（2026-09-10）。
+   *
+   * 訂單明細已移到 KPI 帶**正下方**（用戶要求），而佢係逐筆列表 —— 一間旺場餐廳
+   * 一日幾百張單，全部展開會令下面所有區塊被推到很遠。所以預設只出頭
+   * `ORDER_DETAIL_PREVIEW` 行，按「顯示全部」才展開。
+   */
+  const [orderDetailExpanded, setOrderDetailExpanded] = useState(false);
+  const ORDER_DETAIL_PREVIEW = 10;
+  const DISHES_PER_PAGE = 20;
+
+  const consRange = useMemo(
+    () => computeIngredientConsumption(orders, (o) => orderMatchesReportRange(o, range), bom),
+    [orders, range, bom],
+  );
+  const consMonth = useMemo(
+    () => computeIngredientConsumption(orders, (o) => inMacauMonth(o, monthKey), bom),
+    [orders, monthKey, bom],
+  );
+
+  const storeName = useMemo(
+    () => props.storeNameOverride ?? loadBootstrapCache(merchantId ?? undefined)?.storeName ?? "本店",
+    [merchantId, props.storeNameOverride],
+  );
+  const todayKey = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Macau" }).format(new Date());
+
+  // ── 雲端訂單補載（root-cause 修復）─────────────────────────────────────
+  // 報表原本只讀 localStorage 訂單（loadOrders()）。換機 / 清 cache / 首次開啟時
+  // localStorage 空 → 營業額、毛利、菜品排行、線上佔比全部空白；只有「會員充值」正常，
+  // 因為嗰個係直接讀 Ledger 雲端（getMerchantReportSummary），唔經 localStorage。
+  // 呢度喺 mount / authSession 變更時從 `/api/pos/state` 拉本店訂單。
+  //
+  // 注意三點：
+  // 1) 唔套 filterResurrectedOrders —— 嗰個係收銀工作台用嚟防止舊終態單「復活」佔枱；
+  //    報表正正需要已結帳 / 退款單做營收口徑，所以只過濾本機已真刪除嘅 tombstone。
+  // 2) 唔用 mergeOrderLists(loadOrders(), fetched) —— 切換帳號時本機 orders 可能
+  //    殘留舊 store scope 嘅單，硬 merge 會把兩間店資料混埋。雲端係單一可信源。
+  // 3) 只 setOrders（記憶體），唔 saveOrders 寫返 localStorage —— 避免污染收銀端嘅
+  //    「本機工作清單」語義（docs/52 收銀端故意唔復活 server 單邊終態單）。
+  //
+  // 兜底：雲端 fetch 完全失敗（例如離線）時，先 fallback 用本機 orders（過 tombstone），
+  // 等下次 online 再補。但係，雲端有返「空陣列」（fetched.length === 0）就**唔可以**
+  // 視為失敗——可能該店真係冇單，要顯示空狀態而唔係 fallback 到可能嘅舊 store 殘留。
+
+  // DevTools debug panel state：用嚟喺瀏覽器直接觀察報表載入流程。
+  const [debugOpen, setDebugOpen] = useState(false);
+  const [debugInfo, setDebugInfo] = useState<{
+    status: "idle" | "loading" | "success" | "error";
+    /**
+     * 呢一版數字嘅**來源**（2026-09-10 加）。
+     *
+     * 以前只有 `fetched.length > 0 ? 雲端 : (cloudFailed ? 本機 : 空)` 一行分流，
+     * 但**冇任何地方顯示用咗邊個來源** —— 同一個「未結帳 N 張」KPI，
+     * 可能係 DB 嘅數，亦可能係某台機 localStorage 嘅數，畫面上一模一樣。
+     * 商家無從分辨，排查亦無從入手。
+     *
+     * - `cloud`：雲端為真源（正常）
+     * - `cloud-partial`：雲端中途失敗，只拉到部分訂單 → **數字偏少、唔可信**
+     * - `local-fallback`：雲端完全讀唔到，改用本機 localStorage 訂單 → **唔係 DB 數字**
+     * - `empty`：雲端成功，但該店該區間真係冇單
+     */
+    dataSource: "idle" | "cloud" | "cloud-partial" | "local-fallback" | "empty";
+    merchantId: string | null;
+    currentRange: ReportRangeArg;
+    fetchedCount: number;
+    localCount: number;
+    finalCount: number;
+    matchedCurrentRange: number;
+    matchedYesterday: number;
+    lastUrl: string;
+    lastHttpStatus: number | null;
+    lastPayloadOk?: boolean;
+    lastError: string | null;
+    durationMs: number | null;
+    statusBreakdown: Record<string, number>;
+    countedStatus: number;
+    sampleDates: string[];
+    rangeStart?: string;
+    rangeEnd?: string;
+    /** 各 storeId 嘅訂單數量統計（用嚟排查 60000003 殘留）。key = storeId，value = 數量。 */
+    storeIdBreakdown: Record<string, number>;
+    /** 本機 orders 內 storeId 唔等於當前 merchantId 嘅單數。 */
+    foreignStoreCount: number;
+    /** 命中當前菜單大類嘅菜品類別數（用嚟判斷「菜單不匹配」嘅比例）。 */
+    matchedCategoryCount: number;
+    /** 冇命中當前菜單嘅菜品類別數（fallback 用菜品 ID 當 key）。 */
+    unmatchedCategoryCount: number;
+    /** localStorage 內所有 macau-pos/stores/&#123;storeId&#125;/orders key 嘅快照（storeId → 單數）。 */
+    storageOrdersByStore: Record<string, number>;
+    /** localStorage 內 macau-pos/orders legacy unscoped key 嘅單數。 */
+    legacyOrdersCount: number;
+    /** 當前 bootstrap cache 摘要（用嚟排查「未匹配當前菜單」係因為冇匯入 Ledger 餐牌定 ID 唔對）。 */
+    bootstrapSummary: {
+      storeId: string;
+      storeName: string;
+      menuItemCount: number;
+      categoryCount: number;
+      lastUpdatedAt: string;
+      sampleMenuItemIds: string[];
+      sampleCategoryIds: string[];
+      sampleMenuItemNames: string[];
+    };
+    /** 菜品配對方式統計：id / name / normalized / unmatched。 */
+    dishMatchBreakdown: Record<string, number>;
+    /** 完全對照唔到當前餐牌嘅菜品名 → 出現次數（用嚟直接睇「邊啲舊菜品變咗孤兒」）。 */
+    unmatchedItemNames: Record<string, number>;
+  }>({
+    status: "idle",
+    dataSource: "idle",
+    merchantId: merchantId ?? null,
+    currentRange: "today",
+    fetchedCount: 0,
+    localCount: 0,
+    finalCount: 0,
+    matchedCurrentRange: 0,
+    matchedYesterday: 0,
+    lastUrl: "",
+    lastHttpStatus: null,
+    lastError: null,
+    durationMs: null,
+    statusBreakdown: {},
+    countedStatus: 0,
+    sampleDates: [],
+    storeIdBreakdown: {},
+    foreignStoreCount: 0,
+    matchedCategoryCount: 0,
+    unmatchedCategoryCount: 0,
+    storageOrdersByStore: {},
+    legacyOrdersCount: 0,
+    bootstrapSummary: {
+      storeId: "",
+      storeName: "",
+      menuItemCount: 0,
+      categoryCount: 0,
+      lastUpdatedAt: "",
+      sampleMenuItemIds: [],
+      sampleCategoryIds: [],
+      sampleMenuItemNames: [],
+    },
+    dishMatchBreakdown: {},
+    unmatchedItemNames: {},
+  });
+
+  // ── 向上一層回報：範圍 / 載入狀態 / 載入錯誤 ────────────────────────────
+  // admin「營業報表」頁右上角嘅「重新載入」係靠 remount（key 帶 refreshSeq）重跑本組件
+  // 全部 effect —— 最徹底嘅刷新，但會連用戶已選範圍一齊重置，所以用呢一組 callback
+  // 畀上一層記住 + 還原狀態，同埋知道幾時載入完成 / 失敗。
+  // 三個 callback 都係 optional：POS /reports 唔傳，行為同舊版完全一致。
+  const notifyRange = props.onRangeChange;
+  useEffect(() => {
+    notifyRange?.(range);
+  }, [range, notifyRange]);
+
+  /** chips 變更：更新本體 state；回報上一層由上方 effect 統一處理（唔喺度重複 call）。 */
+  const handleRangeChangeInBody = useCallback((key: ReportRangeKey, custom: CustomDateRange | null) => {
+    setRange(custom ? { key, custom } : key);
+  }, []);
+
+  /** 載入中：POS 訂單補載、Ledger 彙總未完成，或任一線上單抓取仲 loading。
+   *  初次 mount 兩個 done flag 都係 false → busy = true（上一層可按佢 disable 按鈕）。 */
+  const loadBusy =
+    !backfillDone ||
+    !ledgerDone ||
+    onlineFetchInfo.status === "loading" ||
+    onlineDetailInfo.status === "loading";
+  const notifyBusy = props.onBusyChange;
+  useEffect(() => {
+    notifyBusy?.(loadBusy);
+  }, [loadBusy, notifyBusy]);
+
+  /** 錯誤摘要：任一個數據源報錯就整段文章畀上一層統一顯示。 */
+  const notifyError = props.onLoadError;
+  useEffect(() => {
+    if (!notifyError) return;
+    const parts: string[] = [];
+    // admin「全部商家」模式嘅 POS 訂單錯誤已經由上一層嘅 adminOrderFetcher 直接 set state，
+    // 呢度唔再重複推上去，避免同一個原因喺提示卡彈兩行。
+    if (debugInfo.status === "error" && debugInfo.lastError && !adminOrderFetcher) {
+      parts.push(`POS 訂單：${debugInfo.lastError}`);
+    }
+    if (onlineFetchInfo.status === "error" && onlineFetchInfo.lastError) parts.push(`Ledger 線上單：${onlineFetchInfo.lastError}`);
+    if (onlineDetailInfo.status === "error" && onlineDetailInfo.lastError) parts.push(`線上單明細：${onlineDetailInfo.lastError}`);
+    if (ledgerError) parts.push(ledgerError);
+    notifyError(parts.length > 0 ? parts.join("；") : null);
+  }, [
+    debugInfo.status,
+    debugInfo.lastError,
+    onlineFetchInfo.status,
+    onlineFetchInfo.lastError,
+    onlineDetailInfo.status,
+    onlineDetailInfo.lastError,
+    ledgerError,
+    adminOrderFetcher,
+    notifyError,
+  ]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function backfillOrders() {
+      setDebugInfo((prev) => ({
+        ...prev,
+        status: "loading",
+        merchantId: merchantId ?? null,
+        currentRange: range,
+        lastError: null,
+        durationMs: null,
+        statusBreakdown: {},
+        matchedCurrentRange: 0,
+        matchedYesterday: 0,
+        countedStatus: 0,
+        sampleDates: [],
+      }));
+      const start = performance.now();
+
+      // 🛡️ 跨店隔離 fail-safe（2026-09-06 修）：冇 merchantId（未登入 / 切店中途）一律唔拉。
+      // 舊版呢度會 fetch /api/pos/state 唔帶 storeId → API 返**全部店**訂單，
+      // 加上 belongsToStore 對 null merchantId 放行 → 報表顯示晒所有店嘅數據
+      // （「同一個 local 就全部顯示」bug 嘅讀取端入口）。寧願空白，都唔跨店。
+      // 例外：admin「全部」模式（allStoresMode）——訂單經 adminOrderFetcher
+      // （GET /api/admin/orders，admin token 把關）跨店拉取，屬合法全店視角。
+      if (!merchantId && !adminAllStoresMode) {
+        setOrders([]);
+        setDebugInfo((prev) => ({
+          ...prev,
+          status: "error",
+          fetchedCount: 0,
+          localCount: 0,
+          finalCount: 0,
+          lastUrl: "",
+          lastError: "未登入（merchantId 缺失）—— 已封鎖跨店讀取，請先登入店舖帳號",
+          durationMs: Math.round(performance.now() - start),
+          statusBreakdown: {},
+          storeIdBreakdown: {},
+          foreignStoreCount: 0,
+          sampleDates: [],
+        }));
+        setBackfillDone(true);
+        return;
+      }
+
+      // 依所選範圍 [start, end] 喺 SQL layer 做日期過濾（`/api/pos/state` 已支援，
+      // 同時 `eq("store_id", storeId)` 過濾本店；雙重保險：前端再加 `o.storeId === merchantId`）。
+      // - today / yesterday / 7d / 30d → 拉對應 Macau 邊界內嘅單。
+      // - all → 用 365 日滾動窗口（同 Ledger RPC 一致），避免唔設 end 拉爆 10000 上限。
+      // 分頁 PAGE=2000、MAX_PAGES=10 → 上限 20000 單，足夠覆蓋繁忙餐廳一年歷史。
+      const period = backfillRangeFor(range);
+      const PAGE = 2000;
+      const MAX_PAGES = 10;
+      const fetched: PosOrder[] = [];
+      let cloudFailed = false;
+      let lastUrl = "";
+      let lastHttpStatus: number | null = null;
+      let lastPayloadOk: boolean | undefined;
+      let lastError: string | null = null;
+      try {
+        if (adminOrderFetcher) {
+          // admin 模式：訂單由注入 fetcher 提供（GET /api/admin/orders，admin session token
+          // 把關）。**帶 storeId = 單店；唔帶 = 跨店彙總**（「全部商家」模式）。分頁語意同下。
+          //
+          // ⚠️ 2026-09-10 修（admin 選商家後報「POS 訂單：HTTP 401」）：
+          // 單店 admin 模式**唔可以**行下面 `/api/pos/state?storeId=` 嗰條路。該 API 自
+          // P0-4 起要求 POS 終端憑證（或 admin token），但 admin 裝置冇 POS 登入 →
+          // `posDeviceAuthHeaders()` 係空 → server 一律 401。admin 面板一律行 admin 通道。
+          const storeIdParam = adminAllStoresMode ? undefined : merchantId ?? undefined;
+          for (let page = 0; page < MAX_PAGES; page++) {
+            const offset = page * PAGE;
+            lastUrl = `adminOrderFetcher(/api/admin/orders${storeIdParam ? "?storeId=" : ""})`;
+            const rows = await adminOrderFetcher({
+              storeId: storeIdParam,
+              start: period?.start,
+              end: period?.end,
+              limit: PAGE,
+              offset,
+            });
+            if (cancelled) return;
+            fetched.push(...rows);
+            if (rows.length < PAGE) break; // 最後一頁
+          }
+        } else for (let page = 0; page < MAX_PAGES; page++) {
+          const offset = page * PAGE;
+          const rangeQs = period
+            ? `&start=${encodeURIComponent(period.start)}&end=${encodeURIComponent(period.end)}`
+            : "";
+          const url = merchantId
+            ? `/api/pos/state?storeId=${encodeURIComponent(merchantId)}&limit=${PAGE}&offset=${offset}&ordersOnly=1${rangeQs}`
+            : `/api/pos/state?limit=${PAGE}&offset=${offset}&ordersOnly=1${rangeQs}`;
+          lastUrl = url;
+          // 2026-09-10 P0-4：/api/pos/state 需要 POS 終端憑證（先續期，否則 401）。admin 模式
+          // （adminOrderFetcher 分支）行另一條 service-role 通道，唔受影響。
+          await refreshPosDeviceTokenIfNeeded();
+          const res = await fetch(url, { headers: { ...posDeviceAuthHeaders() } });
+          lastHttpStatus = res.status;
+          if (!res.ok) {
+            cloudFailed = true;
+            // 讀 server 嘅 `error` 文字，唔好只顯示 `HTTP 401` ——
+            // 淨睇 status 分唔出「憑證過期 / 未授權 / 區間參數錯 / 資料庫未配置」，
+            // 2026-09-10 admin 單店模式嘅 401 就係因為只見到一句 HTTP 401 而排查咗一輪。
+            let detail = "";
+            try {
+              const body = (await res.json()) as { error?: string };
+              if (body?.error) detail = `：${body.error}`;
+            } catch {
+              /* 非 JSON（例如 gateway 502 嘅 HTML）→ 維持純 status */
+            }
+            lastError = `HTTP ${res.status} ${res.statusText}${detail}`;
+            break;
+          }
+          const payload = (await res.json()) as { ok?: boolean; orders?: PosOrder[] };
+          lastPayloadOk = payload.ok;
+          if (cancelled || !payload.ok || !Array.isArray(payload.orders)) {
+            cloudFailed = !payload.ok;
+            lastError = payload.ok ? "payload.orders 不是陣列" : "payload.ok = false";
+            break;
+          }
+          fetched.push(...payload.orders);
+          if (payload.orders.length < PAGE) break; // 最後一頁
+        }
+      } catch (err) {
+        // 中途失敗：下面仍會用已成功拉到嘅部分（best-effort），唔會因一頁失敗而全丟。
+        cloudFailed = true;
+        lastError = err instanceof Error ? err.message : String(err);
+      }
+      if (cancelled) return;
+
+      const deletedIds = new Set(loadDeletedOrderIds());
+      // 帶 merchantId 讀本機 orders，避免 hydration / 切店嗰陣讀到錯誤 scope 嘅 localStorage。
+      const localOrders = merchantId ? loadOrders(merchantId) : [];
+
+      // 嚴格店鋪隔離：只顯示 storeId 同當前 merchantId 一致嘅訂單。
+      // 舊版 migration 遺留嘅 undefined storeId 單喺多店環境下無法判斷所屬店，
+      // 寧願丟失都唔可以顯示喺錯誤店鋪（呢啲單通常係早期測試髒資料）。
+      const belongsToStore = (o: PosOrder) => {
+        // admin「全部」模式：全店視角，放行全部（訂單已由 server 端 admin API 把關）。
+        if (adminAllStoresMode) return true;
+        // 🛡️ 冇 merchantId 一律唔放行（舊版「dev 模式未登入：放行」係跨店後門，
+        // 2026-09-06 收口；effect 頂部已對 null merchantId 提前 bail，呢度係第二道保險）。
+        if (!merchantId) return false;
+        return o.storeId === merchantId;
+      };
+
+      // 雲端有單 → 以雲端為唯一可信源。
+      // 雲端空 + 失敗 → fallback 本機 orders（離線模式仍可用）。
+      // 雲端空 + 成功 → 該店確實冇單，顯示空狀態（**唔可以用本機 orders 覆蓋**——可能係舊 store 殘留）。
+      let final: PosOrder[];
+      let dataSource: "cloud" | "cloud-partial" | "local-fallback" | "empty";
+      if (fetched.length > 0) {
+        final = fetched.filter((o) => !deletedIds.has(o.id) && belongsToStore(o));
+        // 拉到嘢、但中途有頁失敗（例如第 2 頁 500）→ 只有部分訂單，數字偏少。
+        // 以前呢種情況完全靜默（status 仍然 "success"），係一個靜默失真源。
+        dataSource = cloudFailed ? "cloud-partial" : "cloud";
+      } else if (cloudFailed) {
+        // ⚠️ 雲端完全讀唔到 → 改用本機 localStorage 訂單（離線模式仍可用）。
+        // 但呢啲**唔係 DB 數字**，必須喺畫面明確講清楚，否則商家會拿住
+        // 某台機嘅暫存數字去同人對數。
+        final = localOrders.filter((o) => !deletedIds.has(o.id) && belongsToStore(o));
+        dataSource = "local-fallback";
+      } else {
+        final = [];
+        dataSource = "empty";
+      }
+      setOrders(final);
+
+      // 診斷用：拆解訂單狀態同日期分佈；同時統計被前端過濾走嘅外店單數。
+      const statusBreakdown: Record<string, number> = {};
+      const storeIdBreakdown: Record<string, number> = {};
+      let foreignStoreCount = 0;
+      for (const o of final) {
+        statusBreakdown[o.status] = (statusBreakdown[o.status] ?? 0) + 1;
+        const sid = o.storeId ?? "(undefined)";
+        storeIdBreakdown[sid] = (storeIdBreakdown[sid] ?? 0) + 1;
+      }
+      for (const o of fetched) {
+        if (merchantId && o.storeId !== undefined && o.storeId !== merchantId) {
+          foreignStoreCount += 1;
+        }
+      }
+      for (const o of localOrders) {
+        if (merchantId && o.storeId !== undefined && o.storeId !== merchantId) {
+          foreignStoreCount += 1;
+        }
+      }
+      const counted = final.filter((o) => isSaleCountable(o));
+      const matchedCurrentRange = counted.filter((o) => orderMatchesReportRange(o, range)).length;
+      const matchedYesterday = counted.filter((o) => orderMatchesReportRange(o, "yesterday")).length;
+      const sampleDates = final.slice(0, 5).map((o) => `${o.status} | createdAt=${o.createdAt} | updatedAt=${o.updatedAt} | total=${o.total} | storeId=${o.storeId ?? "(null)"}`);
+
+      // 菜品匹配診斷：只計「可計入銷售」嘅訂單（settled / paid），
+      // 排除 cancelled 測試單 —— 呢啲單唔會出現喺菜品銷售排行，
+      // 計入去只會令「未匹配名單」出現髒資料假象。
+      const meta = buildMenuMeta();
+      const matchedCategorySet = new Set<string>();
+      const unmatchedCategorySet = new Set<string>();
+      const dishMatchBreakdown: Record<string, number> = {};
+      const unmatchedItemNames: Record<string, number> = {};
+      for (const o of counted) {
+        for (const it of o.items) {
+          if (it.voided) continue;
+          const resolved = resolveMenuMetaItem(it.menuItemId, it.name, meta);
+          const cid = resolved.categoryId || it.menuItemId;
+          if (resolved.matchedBy) {
+            matchedCategorySet.add(cid);
+            dishMatchBreakdown[resolved.matchedBy] = (dishMatchBreakdown[resolved.matchedBy] ?? 0) + 1;
+          } else {
+            unmatchedCategorySet.add(cid);
+            dishMatchBreakdown.unmatched = (dishMatchBreakdown.unmatched ?? 0) + 1;
+            const label = `${it.name}(${it.menuItemId.slice(0, 20)}…)`;
+            unmatchedItemNames[label] = (unmatchedItemNames[label] ?? 0) + it.quantity;
+          }
+        }
+      }
+      const matchedCategoryCount = matchedCategorySet.size;
+      const unmatchedCategoryCount = unmatchedCategorySet.size;
+      const { storageOrdersByStore, legacyOrdersCount } = scanStorageOrders();
+
+      setDebugInfo({
+        // 只要有任何一個雲端請求失敗就算 "error" —— 以前只有「完全失敗且零筆」
+        // 才當錯誤，令「部分失敗」靜默出一個偏少嘅數字（2026-09-10 修）。
+        status: cloudFailed ? "error" : "success",
+        dataSource,
+        merchantId: merchantId ?? null,
+        currentRange: range,
+        fetchedCount: fetched.length,
+        localCount: localOrders.length,
+        finalCount: final.length,
+        matchedCurrentRange,
+        matchedYesterday,
+        lastUrl,
+        lastHttpStatus,
+        lastPayloadOk,
+        lastError,
+        durationMs: Math.round(performance.now() - start),
+        statusBreakdown,
+        countedStatus: counted.length,
+        sampleDates,
+        rangeStart: period?.start,
+        rangeEnd: period?.end,
+        storeIdBreakdown,
+        foreignStoreCount,
+        matchedCategoryCount,
+        unmatchedCategoryCount,
+        storageOrdersByStore,
+        legacyOrdersCount,
+        bootstrapSummary: meta.boot,
+        dishMatchBreakdown,
+        unmatchedItemNames,
+      });
+      setBackfillDone(true);
+    }
+    void backfillOrders();
+    return () => {
+      cancelled = true;
+    };
+  }, [merchantId, backfillSeq, range, adminAllStoresMode, adminOrderFetcher, refreshKey]);
+
+  // 訂閱 authSession 變更：切換帳號時重置 orders 並強制重跑 backfill。
+  // root cause 修復（2026-09-04）：React 唔會自動訂閱 localStorage，冇呢個 listener
+  // 嘅話切換帳號後 React state 仍係舊店嘅 orders。
+  useEffect(() => {
+    function onAuthChanged() {
+      setOrders([]);
+      setBackfillDone(false);
+      setLedgerDone(false);
+      setDataReady(false);
+      setBackfillSeq((n) => n + 1);
+    }
+    window.addEventListener("pos-auth-changed", onAuthChanged);
+    return () => {
+      window.removeEventListener("pos-auth-changed", onAuthChanged);
+    };
+  }, []);
+
+  // 尖峰時段：抓 Ledger 線上單（依「下單時間」createdAt）並按澳門時區嘅鐘頭分組，
+  // 疊加到 POS 線下單嘅 byHour 上。線上單可能從未入 POS DB（直接由 Ledger / 外送平台落單），
+  // 所以必須額外抓一次，避免尖峰時段圖只反映線下收銀。
+  useEffect(() => {
+    let cancelled = false;
+    async function loadOnlineByHour() {
+      // 切換範圍時即刻清走舊範圍嘅線上單，避免新數據 fetch 完成前顯示舊資料。
+      setOnlineOrders([]);
+      setOnlineByHour(new Array<number>(24).fill(0));
+      const period = backfillRangeFor(range);
+      const rangeStartMs = period ? Date.parse(period.start) : null;
+      const rangeEndMs = period ? Date.parse(period.end) : null;
+
+      // 🚀 2026-09-07 修（root cause）：admin 模式改用 service-role 跨店讀 Ledger 線上單，
+      // 唔使商戶 JWT（admin 裝置本來就冇商戶身份）。舊版直接 skip → onlineOrders 永遠空
+      // → 用戶「線上有好多單但完全睇唔到」。改為經 /api/admin/ledger/orders 讀取後，
+      // 沿用同非 admin 一樣嘅 range / cancel / unpaid 過濾邏輯計 byHour 同 kept。
+      if (isAdminMode) {
+        try {
+          setOnlineFetchInfo((prev) => ({ ...prev, status: "loading", lastError: null }));
+          const rows = await fetchAdminLedgerOrders({
+            merchantId: merchantId ?? null,
+            start: period?.start ?? null,
+            end: period?.end ?? null,
+          });
+          if (cancelled) return;
+          let outOfRange = 0;
+          let cancelledCount = 0;
+          let unpaidCount = 0;
+          let counted = 0;
+          const byHour = new Array<number>(24).fill(0);
+          const kept: LedgerOnlineOrder[] = [];
+          for (const o of rows) {
+            // 🔴 同非 admin 路徑同一口徑（`updatedAt` 優先）。admin 通道 server 端亦已同步改為
+            // 以 `updated_at` 篩區間，兩邊必須一致，否則 admin 報表仍會漏線上單。
+            const t = orderEventInstant(o);
+            if (t <= 0) continue;
+            if (rangeStartMs != null && t < rangeStartMs) {
+              outOfRange++;
+              continue;
+            }
+            if (rangeEndMs != null && t > rangeEndMs) {
+              outOfRange++;
+              continue;
+            }
+            if (String(o.status ?? "").toLowerCase().includes("cancel")) {
+              cancelledCount++;
+              continue;
+            }
+            if (o.paymentStatus !== "paid") {
+              unpaidCount++;
+              continue;
+            }
+            const hour = macauHour(orderEventISO(o));
+            byHour[hour] += 1;
+            counted++;
+            kept.push(o);
+          }
+          if (cancelled) return;
+          setOnlineByHour(byHour);
+          setOnlineOrders(kept);
+          setOnlineFetchInfo({
+            fetched: rows.length,
+            counted,
+            outOfRange,
+            cancelled: cancelledCount,
+            unpaid: unpaidCount,
+            status: "success",
+            lastError: null,
+          });
+        } catch (err) {
+          if (cancelled) return;
+          setOnlineByHour(new Array<number>(24).fill(0));
+          setOnlineOrders([]);
+          setOnlineFetchInfo({
+            fetched: 0,
+            counted: 0,
+            outOfRange: 0,
+            cancelled: 0,
+            unpaid: 0,
+            status: "error",
+            lastError: err instanceof Error ? err.message : String(err),
+          });
+        }
+        setLedgerDone(true);
+        return;
+      }
+      if (!merchantId) {
+        // 未登入 Ledger 商戶 → 唔抓線上單。
+        setOnlineByHour(new Array<number>(24).fill(0));
+        setOnlineOrders([]);
+        setOnlineFetchInfo({
+          fetched: 0,
+          counted: 0,
+          outOfRange: 0,
+          cancelled: 0,
+          unpaid: 0,
+          status: "skipped",
+          lastError: "merchantId 未設定",
+        });
+        return;
+      }
+      setOnlineFetchInfo((prev) => ({ ...prev, status: "loading", lastError: null }));
+      try {
+        const restored = await restoreLedgerSession();
+        if (!restored) {
+          if (cancelled) return;
+          setOnlineByHour(new Array<number>(24).fill(0));
+        setOnlineOrders([]);
+          setOnlineFetchInfo({
+            fetched: 0,
+            counted: 0,
+            outOfRange: 0,
+            cancelled: 0,
+            unpaid: 0,
+            status: "skipped",
+            lastError: "尚未登入 Ledger",
+          });
+          return;
+        }
+
+        // 用 cursor-based pagination 撈齊 [rangeStart, rangeEnd] 區間內嘅線上單。
+        // RPC 預設 limit=50，呢度調大到 500／頁，並用 since+sinceId 行 cursor。
+        // period / rangeStartMs / rangeEndMs 喺函數頂部已計過（admin / 非 admin 共用）。
+        const PAGE = 500;
+        const MAX_PAGES = 8; // 上限 4000 單，足以覆蓋繁忙餐廳 30 日滾動窗口
+        const collected: LedgerOnlineOrder[] = [];
+        let cursorSince: string | null = period?.start ?? null;
+        let cursorSinceId: string | null = null;
+        let outOfRange = 0;
+        let cancelledCount = 0;
+        let unpaidCount = 0;
+        let counted = 0;
+        const byHour = new Array<number>(24).fill(0);
+        const kept: LedgerOnlineOrder[] = [];
+
+        outer: for (let page = 0; page < MAX_PAGES; page++) {
+          const rows = await listMerchantOrders({
+            merchantId,
+            limit: PAGE,
+            since: cursorSince,
+            sinceId: cursorSinceId,
+          });
+          if (cancelled) return;
+          if (rows.length === 0) break;
+
+          for (const o of rows) {
+            // 🔴 時間口徑必須同 RPC 排序鍵（`updated_at` DESC）一致，否則下面嘅
+            // `break outer` 會誤殺：一張「昨日落單、今日完成」嘅預約單會令翻頁提早中止，
+            // 之後嘅線上單全部靜默消失（2026-09-24 取餐碼 001 實案）。
+            const t = orderEventInstant(o);
+            if (t <= 0) continue;
+
+            // 篩掉超出範圍嘅單 + cancelled + unpaid。
+            if (rangeStartMs != null && t < rangeStartMs) {
+              // 由於 RPC 按 updatedAt DESC 排序，遇到 t < rangeStartMs 即可視為已過期。
+              outOfRange++;
+              // 如果確定已過 range 起點，後續無需再翻頁。
+              break outer;
+            }
+            if (rangeEndMs != null && t > rangeEndMs) {
+              outOfRange++;
+              continue;
+            }
+            if (String(o.status ?? "").toLowerCase().includes("cancel")) {
+              cancelledCount++;
+              continue;
+            }
+            if (o.paymentStatus !== "paid") {
+              unpaidCount++;
+              continue;
+            }
+            // 尖峰時段分組：同上面「歸屬邊一日」用**同一個**口徑（`orderEventISO` = updatedAt 優先），
+            // 唔可以各自解讀，否則同一張單嘅「歸屬日」同「鐘頭」會讀唔同欄位。
+            const hour = macauHour(orderEventISO(o));
+            byHour[hour] += 1;
+            counted++;
+            kept.push(o);
+          }
+          collected.push(...rows);
+
+          // 已經走到範圍起點之前、或本頁未填滿 → 結束。
+          if (rows.length < PAGE) break;
+          const last = rows[rows.length - 1];
+          cursorSince = last.updatedAt ?? last.createdAt ?? cursorSince;
+          cursorSinceId = last.id;
+        }
+        if (cancelled) return;
+
+        setOnlineByHour(byHour);
+        setOnlineOrders(kept);
+        setOnlineFetchInfo({
+          fetched: collected.length,
+          counted,
+          outOfRange,
+          cancelled: cancelledCount,
+          unpaid: unpaidCount,
+          status: "success",
+          lastError: null,
+        });
+      } catch (err) {
+        if (cancelled) return;
+        setOnlineByHour(new Array<number>(24).fill(0));
+        setOnlineOrders([]);
+        setOnlineFetchInfo({
+          fetched: 0,
+          counted: 0,
+          outOfRange: 0,
+          cancelled: 0,
+          unpaid: 0,
+          status: "error",
+          lastError: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    void loadOnlineByHour();
+    return () => {
+      cancelled = true;
+    };
+  }, [merchantId, range, isAdminMode, refreshKey]);
+
+  useEffect(() => {
+    async function safeLedger(r: ReportRangeArg): Promise<LedgerReportSummary | null> {
+      try {
+        const restored = await restoreLedgerSession();
+        if (!restored) return null;
+        return await getMerchantReportSummary(r);
+      } catch {
+        return null;
+      }
+    }
+
+    let cancelled = false;
+    /**
+     * 低庫存預警：讀本店 inv_products，current_qty <= reorder_level（par）即低庫存。
+     *
+     * 🔴 2026-09-15：抽成獨立函式並**放喺 `Promise.all` 一齊跑**（舊寫法喺攞完 Ledger
+     * 之後 sequential await）。原因：全頁「全有或全無」閘把 `lowStock === null`
+     * 當成「未攞齊」——若佢仲係 sequential，`ledgerDone` 會遲遲唔 set，
+     * 白白拖長 loading。並行之後三組請求同一輪完成。
+     */
+    async function loadLowStock() {
+      try {
+        const storeParam = merchantIdForQuery || (typeof window !== "undefined" ? loadAuthSession()?.merchantId ?? "" : "");
+        if (!storeParam) {
+          setLowStock([]);
+          return;
+        }
+        const invRes = await fetch(`/api/inventory/products?store=${encodeURIComponent(storeParam)}`);
+        const invJson = await invRes.json();
+        if (cancelled) return;
+        if (invJson?.ok && Array.isArray(invJson.products)) {
+          const low = invJson.products
+            .filter((p: { current_qty: number; reorder_level: number }) => p.reorder_level > 0 && p.current_qty <= p.reorder_level)
+            .map((p: { name: string; current_qty: number; unit: string; reorder_level: number }) => ({
+              name: p.name,
+              qty: Number(p.current_qty) || 0,
+              unit: p.unit ?? "份",
+              par: Number(p.reorder_level) || 0,
+            }))
+            .sort((a: { qty: number }, b: { qty: number }) => a.qty - b.qty);
+          setLowStock(low);
+        } else {
+          setLowStock([]);
+        }
+      } catch {
+        // 讀唔到庫存 → 當「空」而唔係 `null`。`null` 喺 UI 上係「未讀取」，
+        // 會令全頁 loading 永遠唔完（舊寫法 catch 都 set null）。
+        if (!cancelled) setLowStock([]);
+      }
+    }
+
+    async function load() {
+      if (isAdminMode) {
+        // admin 模式：getMerchantReportSummary / fetchPurchaseSummary 都係按
+        // 「當前登入商戶 JWT」取數，admin 裝置冇商戶身份 → 跳過（KPI 大數
+        // 改由 POS 訂單聚合提供）。低庫存 API 係 server service-role by store
+        // 參數，照常抓。會員充值 / 線上渠道等 Ledger 類模塊會顯示為零值。
+        await loadLowStock();
+        if (cancelled) return;
+        setLedger({ sel: null, d7: null, yest: null });
+        setPurchase({ sel: null, yest: null });
+        setPurchaseUnavailable(true);
+        setLedgerError(null);
+        setLedgerDone(true);
+        return;
+      }
+      setLedgerError(null);
+      // 三組請求並行：Ledger 彙總 / 進貨成本 / 低庫存。
+      const [sel, d7, yest] = await Promise.all([
+        safeLedger(range),
+        safeLedger("7d"),
+        range === "today" ? safeLedger("yesterday") : Promise.resolve(null),
+      ]);
+
+      const acc = loadAuthSession()?.account;
+      const [purSel, purYest] = await Promise.all([
+        acc ? fetchPurchaseSummary(acc, range) : Promise.resolve(null),
+        range === "today" && acc ? fetchPurchaseSummary(acc, "yesterday") : Promise.resolve(null),
+        loadLowStock(),
+      ]);
+
+      if (cancelled) return;
+      setLedger({ sel, d7, yest });
+      // 讀唔到（null／matched:false／schemaReady:false）→ 一律當「未能讀取」，
+      // 唔可以當進貨 = 0（否則毛利會等如營業額）。
+      const selUnavailable = !purSel || purSel.matched === false || purSel.schemaReady === false;
+      const yestUnavailable = !purYest || purYest.matched === false || purYest.schemaReady === false;
+      setPurchaseUnavailable(selUnavailable);
+      setPurchase({ sel: selUnavailable ? null : purSel?.summary ?? null, yest: yestUnavailable ? null : purYest?.summary ?? null });
+
+      if (!sel && !d7) setLedgerError("尚未連線 Ledger，會員/線上數據未能讀取（其餘模塊正常）。");
+      setLedgerDone(true);
+    }
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [range, merchantId, merchantIdForQuery, isAdminMode, refreshKey]);
+
+  // Ledger 純線上單入報表前，先剔除已經同步入 POS DB 嘅單（以 POS onlineOrderId ↔ Ledger id 對應），
+  // 避免人流 / 時長統計雙重計算。剩低嘅就係「從未入 POS DB」嘅線上單。
+  /**
+   * 「已經入過 POS」嘅 Ledger 單 id 集合 —— 用嚟剔除 Ledger 純線上單
+   * （避免雙計、亦避免誤報「漏帳」）。
+   *
+   * 🔴 2026-09-24 修正（事故）：**唔可以只用當前 range 嘅 `orders`**。
+   * 較早日期嘅 POS 單唔喺今日 range ⇒ 該 Ledger 單會被誤判「未入 POS」，後果三重：
+   *   ① 今日報表雙計（嗰張單**昨日**已經計過）；
+   *   ② 橙色警示誤報；
+   *   ③ 更嚴重：被「補建」覆蓋 ⇒ 舊日報表少一張、今日多一張
+   *      （實案：取餐碼 002／003 由 09-23 被移到 09-24，金額亦被 Ledger 明細覆蓋）。
+   *
+   * ⇒ 補上**本機全量**（`loadOrders()`，**零請求**）。本機係唯一有「當前 range 以外」
+   *   歷史單嘅地方；換機時本機冇歷史係已知邊界，但一定唔會比「唔補」差。
+   */
+  const posOnlineIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const o of orders) if (o.onlineOrderId) ids.add(o.onlineOrderId);
+    for (const o of loadOrders()) if (o.onlineOrderId) ids.add(o.onlineOrderId);
+    return ids;
+    // `refreshKey`：軟刷新／補建後要重算（本機 orders 已變）。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orders, refreshKey]);
+  const countableOnlineOrders = useMemo(
+    () => onlineOrders.filter((o) => !posOnlineIds.has(o.id)),
+    [onlineOrders, posOnlineIds],
+  );
+
+  /**
+   * P0 對數（2026-09-24）：邊幾張「Ledger 已付款」單 POS 訂單庫完全冇記錄。
+   *
+   * 🔴 **零新請求** —— 純由上面已經抓到嘅 `onlineOrders` / `orders` 推導。
+   * 呢個就係 2026-09-24 取餐碼 001 漏帳嘅可視化入口（之前完全冇提示）。
+   */
+  const onlineReconcile = useMemo(
+    () => reconcileOnlineOrders({ ledgerOrders: countableOnlineOrders, posOrders: orders }),
+    [countableOnlineOrders, orders],
+  );
+
+  /**
+   * 2026-09-27 改（商家口徑：「商家不應該需要按這個」）。
+   *
+   * 舊寫法喺呢度有個手動「補建入 POS」按鈕（`handleBackfillUnadopted`）＋ busy／message
+   * 兩個 state。補建已改由**系統自動**完成：
+   *   - (a) 主動採納：見 `online-orders.tsx`／`quick-online-orders-panel.tsx` 嘅自動採納 effect；
+   *   - (b) 被動兜底：見 `/api/pos/reconcile-online` ＋ `pos-app.tsx` 嘅對數節拍。
+   * ⇒ 呢頁只保留**純提示**（`OnlineReconcileBanner`），按鈕已移除。
+   *
+   * ⚠️ `posOnlineIds` / `countableOnlineOrders` 嘅「併本機全量」防線**唔可以拆**
+   *    （2026-09-24 事故，見上面註釋）—— 佢係防止「舊日單被誤判漏帳」嘅唯一保障。
+   */
+
+  // Ledger 線上單明細：對「可計入」嘅線上單逐張抓 get_order_detail，
+  // 令菜品銷售排行可以涵蓋從未入 POS DB 嘅線上單（快閃餐／線上點餐）。
+  // 以 onlineDishKey（訂單 ID 串接）做穩定觸發，避免 countableOnlineOrders
+  // 每次 render 產生新 reference 造成無限重抓。
+  const onlineDishKey = useMemo(
+    () => countableOnlineOrders.map((o) => o.id).join(","),
+    [countableOnlineOrders],
+  );
+  useEffect(() => {
+    let cancelled = false;
+    async function loadOnlineDetails() {
+      if (isAdminMode || !merchantId || countableOnlineOrders.length === 0) {
+        setOnlineDishSource([]);
+        setOnlineDetailInfo({ total: 0, ok: 0, failed: 0, status: "idle", lastError: null });
+        return;
+      }
+      setOnlineDetailInfo({
+        total: countableOnlineOrders.length,
+        ok: 0,
+        failed: 0,
+        status: "loading",
+        lastError: null,
+      });
+      // 上限保護：歷史範圍訂單過多時只抓最近 200 張明細，避免打爆 RPC。
+      const MAX_DETAILS = 200;
+      const targets = countableOnlineOrders.slice(0, MAX_DETAILS);
+      const collected: OnlineDishSource[] = [];
+      let failed = 0;
+      for (const o of targets) {
+        try {
+          const detail = await getOrderDetail(o.id);
+          if (cancelled) return;
+          collected.push({ order: o, items: detail.items ?? [] });
+        } catch {
+          if (cancelled) return;
+          // 🔴 2026-09-15（同交班「線上」夾數）：明細抓唔到，**唔可以連張單嘅錢一齊掉**。
+          // `aggregate()` 嘅「Ledger 純線上單」迴圈係逐張把 `orderPaid` 計入
+          // 應收／實收／支付方式分項／訂單明細（＝`ledgerOnlyPaidTotal`），
+          // `items` 只用嚟砌菜品銷售排行。以前 catch 直接唔 push ⇒ 嗰筆錢喺 KPI 靜默消失，
+          // 報表「線上」就會少過交班（交班只讀 `list_merchant_orders`，完全唔需要明細）。
+          failed += 1;
+          collected.push({ order: o, items: [] });
+        }
+      }
+      if (cancelled) return;
+      setOnlineDishSource(collected);
+      setOnlineDetailInfo({
+        total: countableOnlineOrders.length,
+        ok: collected.length - failed,
+        failed,
+        status: collected.length === 0 ? "idle" : failed === collected.length ? "error" : "success",
+        lastError:
+          failed > 0 ? `${failed} 單明細抓取失敗（金額已計入，僅菜品明細未併入）` : null,
+      });
+    }
+    void loadOnlineDetails();
+    return () => {
+      cancelled = true;
+    };
+    // countableOnlineOrders 由 onlineDishKey 代表；key 變咗先重抓。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [merchantId, onlineDishKey]);
+
+  const agg = useMemo(
+    () => aggregate(orders, range, onlineDishSource),
+    [orders, range, onlineDishSource],
+  );
+  const aggYest = useMemo(() => (range === "today" ? aggregate(orders, "yesterday") : null), [orders, range]);
+  const agg7d = useMemo(() => aggregate(orders, "7d"), [orders]);
+
+  /**
+   * docs/任務：當日人流改為完全由訂單自動計算，唔再由使用者手動輸入。
+   * - 堂食（tableId !== "counter"）→ partySize 加總
+   * - 快餐 / 外賣 / 自取（tableId === "counter"）→ 一單 = 1 人
+   * 純參考數字，唔影響營業額 / 結帳口徑。
+   */
+  const posFootfall = useMemo(() => computeFootfallFromOrders(orders, range), [orders, range]);
+  // 人流 = POS 訂單人流 + Ledger 純線上單（線上單冇 partySize，一單 = 1 人）。
+  const footfallTotal = posFootfall + countableOnlineOrders.length;
+  const conversion = footfallTotal > 0 && agg.covers > 0 ? agg.covers / footfallTotal : null;
+
+  // 拆開堂食 / 快餐 / 線上 三類人流，令 total 同 breakdown 可互相解釋。
+  // 線上單（Ledger 純線上、冇入 POS DB）一單 = 1 人，計入「快餐 / 外賣 / 線上」。
+  const footfallBreakdown = useMemo(() => {
+    const terminal = orders.filter((o) => isSaleCountable(o));
+    const inRange = terminal.filter((o) => orderMatchesReportRange(o, range));
+    let dineIn = 0;
+    let counter = 0;
+    for (const o of inRange) {
+      if (o.tableId === "counter") counter += 1;
+      else dineIn += Math.max(1, o.partySize ?? 1);
+    }
+    const online = countableOnlineOrders.length;
+    return { dineIn, counter, online };
+  }, [orders, range, countableOnlineOrders]);
+
+  /*
+   * 🔴 2026-10-05（J 拍板）：成本口徑由「已付（`paid`，現金流）」改為「**買貨總額（`total`，已付＋未付）**」。
+   *    理由：只用「已付」會漏計月結／賒數貨 ⇒ 入咗貨但未付嘅期間毛利被高估。
+   *    改用 `total` ＝「入貨當期認成本」，同 `gpSubtitle` 文字一致。
+   *    ⚠️ 仍然**未扣存貨變動**（入大批貨當期毛利會偏低；冇入貨當期會偏高）——
+   *       呢個係已知限制，UI 有寫明；要更準可手動輸入毛利率。
+   */
+  const grossProfit = useMemo(() => {
+    const cogs = purchase.sel?.total ?? 0;
+    return agg.revenue - cogs;
+  }, [agg.revenue, purchase.sel]);
+
+  const grossProfitYest = useMemo(() => {
+    if (!aggYest) return null;
+    const cogs = purchase.yest?.total ?? 0;
+    return aggYest.revenue - cogs;
+  }, [aggYest, purchase.yest]);
+
+  // 「毛利（估）」手動設定毛利率 %：商家填毛利率（例如 50 = 50%），
+  // 毛利估算 = 營業額 × 毛利率%，存落本店 PosLocalSettings（store scope）。
+  const [gpMarginPct, setGpMarginPct] = useState<number | null>(null);
+  const [gpEditing, setGpEditing] = useState(false);
+  const [gpDraft, setGpDraft] = useState("");
+
+  // 切店 / 首次確認 merchantId 時，讀取本店已存嘅毛利率。
+  useEffect(() => {
+    try {
+      const s = loadPosLocalSettings();
+      setGpMarginPct(typeof s.grossProfitMarginPct === "number" ? s.grossProfitMarginPct : null);
+    } catch {
+      setGpMarginPct(null);
+    }
+  }, [merchantId]);
+
+  // 手動毛利率 → 毛利 = 營業額 × 毛利率%；冇設定就用系統估算（營業額 − 進貨成本）。
+  // （displayGrossProfit 依賴 onlineOfflineSplit，喺該 useMemo 宣告後先計算，見下方）
+
+  function saveGpOverride() {
+    const num = Number(gpDraft);
+    // 空 / 非數 → 清走手動設定，返返系統估算；否則夾喺 0–100% 之間。
+    const next = Number.isFinite(num) && gpDraft.trim() !== "" ? Math.min(100, Math.max(0, Math.round(num))) : null;
+    setGpMarginPct(next);
+    setGpEditing(false);
+    try {
+      const s = loadPosLocalSettings();
+      s.grossProfitMarginPct = next;
+      savePosLocalSettings(s);
+    } catch {
+      /* 儲存失敗唔影響當前顯示 */
+    }
+  }
+
+  const ticketMopYest = aggYest && aggYest.count > 0 ? aggYest.revenue / aggYest.count : 0;
+
+  /** 「線下 vs 線上」分拆（2026-09-09 修正口徑）：
+   *  - 線下 = POS 收銀單且 *無* onlineOrderId（純現場收銀），由 POS DB 算；
+   *  - 線上 = Ledger RPC（`orderCount` / `orderPaidMop`），涵蓋：
+   *      · POS 接單的線上單（帶 onlineOrderId —— 呢啲唔會喺上面 offline 重複計）
+   *      · 其他渠道的單（kiosk / 外賣平台 / 微信小程序等不經過 POS DB 的）
+   *  - 總值 = **線下 + 線上相加**。舊實作直接以 Ledger 為總值並「減線下」計線上，
+   *    前提假設「Ledger 覆蓋整店全渠道」——但實際 Ledger 只收線上渠道，
+   *    POS 現場收銀（現金/卡）永遠唔入 Ledger → 營業額長期只顯示線上部分、
+   *    線下收入被隱形（用戶案例：POS 線下 903 vs Ledger 線上 139，營業額錯顯 139）。
+   *    修正後雙計風險為零：offline 已排除 onlineOrderId 行，線上全部經 Ledger 計一次。
+   *  - Ledger 連不上則 fallback POS DB（離線模式仍可用，線上改用 POS 內帶 onlineOrderId 嘅單）。
+   */
+  const onlineOfflineSplit = useMemo(() => {
+    const inRange = orders.filter((o) => isSaleCountable(o)).filter((o) => orderMatchesReportRange(o, range));
+    const offline = inRange.filter((o) => !o.onlineOrderId);
+    const offlineCount = offline.length;
+    const offlineRevenueMop = offline.reduce((s, o) => s + o.total, 0);
+
+    // 🔴 2026-09-14（商家口徑「實收＝實際收到嘅錢」，已用截圖核實）：線上部分**必須**同
+    // `aggregate()` 同一批單推導，唔可以另開來源。舊寫法用 Ledger RPC
+    // （`order_count` = 非取消單數含未完成；`order_paid_avos` = 只認「已完成」）
+    // ⇒「營業額／訂單數」同「應收／實收金額合計」（＝訂單明細加總）各自表述，
+    //   出現 2,984 vs 3,022 差 38（嗰 38 係真收到嘅錢，被 Ledger 口徑食咗）。
+    // 而家：
+    //   · POS 側線上單（帶 onlineOrderId：掃碼／排位／採納）＝ agg.revenue − 線下 revenue
+    //   · Ledger 純線上單（未入 POS DB）＝ agg.ledgerOnlyPaidTotal
+    //   ⇒ 線下 ＋ 線上 ＝ agg.paidTotal ＝ 訂單明細加總。
+    const onlineCount = inRange.length - offlineCount + agg.ledgerOnlyCount;
+    const onlineRevenueMop =
+      Math.round((agg.revenue - offlineRevenueMop + agg.ledgerOnlyPaidTotal) * 100) / 100;
+
+    /**
+     * 🔴 2026-10-01（J 口徑）：營業額改為**直接顯示已扣退款嘅淨額**。
+     *
+     * 【為何】J 要求營業額格唔再單獨出退款拆解，大數直接係淨額（毛 − 退款），
+     * 另加提示球說明「營業額不包含退款金額」。
+     *
+     * 【口徑】退款**只從線下部分扣**：
+     *   `agg.refundTotal` 由 `refundTotalOf(orders)` 計，涵蓋嘅係**有 `refund_records`
+     *   嘅 POS 單**（`pos_orders.refunded_amount`）。Ledger 純線上單（`ledgerOnlyPaidTotal`）
+     *   喺 Ledger 側**冇任何退款欄位**（`list_merchant_orders` 唔回退款，見 `LedgerOrderRow`）
+     *   ⇒ 呢批單嘅退款無從得知，唔可以亂扣。
+     *
+     * ⚠️ 因此 `offlineRevenueMop − refundTotal` 係**唯一正確**嘅扣法：
+     *    - 扣喺 `totalRevenueMop`（大數）上 → 數學上等價，但語意模糊（唔知扣咗邊邊）；
+     *    - 扣喺線上 → 錯（線上根本冇退款資料）。
+     *   而 `netRevenueMop = offlineRevenueMop - refundTotal + onlineRevenueMop`
+     *   同 `totalRevenueMop - refundTotal` 完全相等。
+     *
+     * ⚠️ 底線保護：退款理論上唔會大過線下實收，但資料髒（例如跨日退款、手動改數）時
+     *   可能出現負數 ⇒ `Math.max(0, …)` 防止 UI 出負營業額。
+     */
+    const offlineRevenueNetMop = Math.max(
+      0,
+      Math.round((offlineRevenueMop - agg.refundTotal) * 100) / 100,
+    );
+    const totalRevenueNetMop =
+      Math.round((offlineRevenueNetMop + onlineRevenueMop) * 100) / 100;
+
+    return {
+      offlineCount,
+      offlineRevenueMop,
+      onlineCount,
+      onlineRevenueMop,
+      totalCount: offlineCount + onlineCount,
+      totalRevenueMop: Math.round((offlineRevenueMop + onlineRevenueMop) * 100) / 100,
+      /** 線下營業額（已扣退款）—— 副標題用，令分拆加總 = 大數。 */
+      offlineRevenueNetMop,
+      /** 🔴 營業額大數（已扣退款）＝ 線下淨額 ＋ 線上毛額。 */
+      totalRevenueNetMop,
+      source: "ledger" as const,
+    };
+  }, [orders, range, agg.revenue, agg.ledgerOnlyPaidTotal, agg.ledgerOnlyCount, agg.refundTotal]);
+
+  /**
+   * 外賣平台（MFOOD / 澳覓）結算統計 —— 報表 10 格下方「MFOOD 區塊」用。
+   *
+   * ── 為咩要獨立一組（2026-09-26 使用者需求）──────────────────────────
+   * 原本 10 格嘅「營業額」係**客付**金額，平台單嘅錢其實係**平台收**，
+   * 商家真正落袋嘅係扣費後過數嘅錢。兩個數唔同，差額＝平台抽成。
+   * 使用者要一眼睇到「平台食幾多」⇒ 應收／實收／差額率三格。
+   *
+   * ── 口徑（使用者原話）──────────────────────────────────────────────
+   *   「第三格為實收與營業額的差額率，例如營業額 100、實收 50 即 50%」
+   *   ⇒ `1 − 實收 ÷ 應收`。
+   *
+   * ── ⚠️ 唔放入原本 10 格 ────────────────────────────────────────────
+   * KPI 帶固定 5 欄、格數必須係 5 嘅倍數（2026-09-10 / 09-11 中過兩次），
+   * 加格會令尾行殘缺。所以另開獨立區塊。
+   *
+   * ── 🔴 部分對帳嘅陷阱 ─────────────────────────────────────────────
+   * `computeMfoodTotals()` 內部已處理「分子分母要同一批」（見該函式註釋）。
+   * 呢度只負責餵「已計入銷售嘅平台單」。
+   */
+  const mfoodSettlement = useMemo(() => {
+    // 只計 MFOOD 來源平台單，且要同報表口徑一致：
+    // 已計入銷售 ＋ 命中查詢區間。（未結帳／已作廢嘅平台單唔應該計。）
+    const platformOrders = orders
+      .filter((o) => isSaleCountable(o))
+      .filter((o) => orderMatchesReportRange(o, range))
+      // 🔴 `o.source` 嘅 TS 型別未包含平台值（"aomi"/"mfood"），但 runtime 確實有，
+      //    故 cast 成 string 做比對（同原本 `isPlatformOrderSource` 收 unknown 嘅做法一致）。
+      .filter((o) => (o.source as string | undefined) === "mfood");
+
+    // 🔴 2026-09-29：一律逐單（computeSettlementTotals 已移除帳期 fallback），
+    //    三格永遠以 POS 同步單為準，平台帳期數字唔再蓋過。
+    return computeSettlementTotals(platformOrders, (o) => {
+      // 由訂單拎佢嘅結算金額。冇（未對帳）→ null。
+      const net = o.platformNetAmount;
+      const sub = o.platformSubsidyNet;
+      if (net === undefined && sub === undefined) return null;
+      return { netAmount: net ?? null, subsidyNet: sub ?? null };
+    });
+  }, [orders, range]);
+
+  const aomiSettlement = useMemo(() => {
+    // 只計 澳覓（aomi）來源平台單，其餘口徑同上。
+    const platformOrders = orders
+      .filter((o) => isSaleCountable(o))
+      .filter((o) => orderMatchesReportRange(o, range))
+      .filter((o) => (o.source as string | undefined) === "aomi");
+
+    // 🔴 2026-09-29：一律逐單（computeSettlementTotals 已移除帳期 fallback）。
+    return computeSettlementTotals(platformOrders, (o) => {
+      const net = o.platformNetAmount;
+      const sub = o.platformSubsidyNet;
+      if (net === undefined && sub === undefined) return null;
+      return { netAmount: net ?? null, subsidyNet: sub ?? null };
+    });
+  }, [orders, range]);
+
+  /**
+   * 未結帳訂單統計（2026-09-07 新增）。
+   *
+   * 背景：admin「營業報表」曾出現「API 成功回傳 N 筆訂單、但報表全空」嘅假象——
+   * 因為 `isSaleCountable()` 只計 `settled` / `paid`（正確嘅收入認列口徑），
+   * 而實際資料入面大量訂單停喺 `sent_to_kitchen`（已送廚房、未收款）。
+   * 呢啲單唔應該計入營業額，但亦唔可以靜默消失，否則使用者只會見到一片空白、
+   * 無從判斷係「今日冇單」定「有單但未結帳」。
+   *
+   * 用途：
+   * - KPI 帶顯示「未結帳訂單」筆數 + 金額，令資料可見；
+   * - 當區間內有單但 0 筆可計入銷售時，頂部顯示琥珀色提示條解釋原因。
+   *
+   * 排除：cancelled / refunded / partially_refunded（作廢或已退，唔屬於待收款）。
+   * 包含：draft / sent_to_kitchen / reopened。
+   */
+  const pendingSplit = useMemo(() => {
+    const inRange = orders.filter((o) => orderMatchesReportRange(o, range));
+    const pending = inRange.filter(
+      (o) =>
+        !isSaleCountable(o) &&
+        o.status !== "cancelled" &&
+        o.status !== "refunded" &&
+        o.status !== "partially_refunded",
+    );
+    const statusBreakdown: Record<string, number> = {};
+    for (const o of pending) statusBreakdown[o.status] = (statusBreakdown[o.status] ?? 0) + 1;
+    return {
+      totalInRange: inRange.length,
+      count: pending.length,
+      amountMop: pending.reduce((s, o) => s + o.total, 0),
+      statusBreakdown,
+    };
+  }, [orders, range]);
+
+  /** 區間內「有單但全部未結帳」→ 需要明確提示，避免使用者誤以為報表壞咗。 */
+  const showUnsettledNotice =
+    dataReady && pendingSplit.totalInRange > 0 && onlineOfflineSplit.totalCount === 0;
+
+  const unsettledStatusLabel =
+    Object.entries(pendingSplit.statusBreakdown)
+      .map(([status, n]) => `${statusLabelOf(status)} ${n} 張`)
+      .join("、") || "—";
+
+  // 手動毛利率 → 毛利 = 營業額 × 毛利率%；冇設定就用系統估算（營業額 − 進貨成本）。
+  const displayGrossProfit =
+    gpMarginPct != null ? (onlineOfflineSplit.totalRevenueMop * gpMarginPct) / 100 : grossProfit;
+
+  // 🔴 2026-10-05（J 拍板）：成本口徑改為「**買貨總額（已付 ＋ 未付）**」。
+  // 比舊嘅「當日已付收據」準（月結／賒數貨唔會漏計），但仍**未扣存貨變動**。
+  // 讀唔到進貨數據時更要明講，否則用戶會以為毛利率真係 100%。
+  const gpSubtitle =
+    gpMarginPct != null
+      ? `毛利率 ${gpMarginPct}%（營業額 × ${gpMarginPct}%）`
+      : purchaseUnavailable
+        ? "注意：進貨數據未能讀取，未扣成本（＝營業額），僅供參考"
+        : "系統估算：營業額 − 買貨總額（已付 ＋ 未付）";
+
+  /**
+   * 沽清菜品清單。
+   *
+   * 🔴 2026-10-01 修復（J 截圖：卡面倒出 `ledger-074cf1d4-...` 原始 UUID）：
+   *    舊寫法 `names.get(k) ?? k` 搵唔到名就直接顯示原始 key；而沽清狀態喺本機
+   *    localStorage **只增不減**，菜品被刪／換機／清快取後舊 ID 就變孤兒。
+   *    ⇒ 對照邏輯抽到純函式 `@/lib/pos/soldout-display`（可被 `node --test` 直接測），
+   *      顯示層跳過孤兒、資料層順手清除寫回。
+   *    ⚠️ `soldOut.length` 由「含孤兒總數」變成「**真實仍在賣嘅沽清菜品數**」—— 呢個才啱。
+   */
+  const soldOut = useMemo(() => {
+    const { items, orphans } = resolveSoldOutDisplay(
+      loadSoldOutState(),
+      loadBootstrapCache()?.menuItems ?? [],
+    );
+
+    if (orphans.length > 0) {
+      const current = loadSoldOutState();
+      const next = dropSoldOutKeys(current, orphans);
+      // `dropSoldOutKeys` 冇改動時回原參照 ⇒ 唔會無謂寫入。
+      if (next !== current && typeof window !== "undefined") {
+        saveSoldOutState(next);
+        window.dispatchEvent(new CustomEvent("pos-soldout-changed", { detail: { soldOutMap: next } }));
+      }
+    }
+
+    return items;
+  }, []);
+
+  const onlineShare = agg.revenue > 0 ? agg.onlineRevenue / agg.revenue : 0;
+  const onlineShare7d = agg7d.revenue > 0 ? agg7d.onlineRevenue / agg7d.revenue : 0;
+  const discountRatio = agg.revenue > 0 ? agg.discount / agg.revenue : 0;
+  const voidRate = agg.totalSoldQty > 0 ? agg.voidQty / agg.totalSoldQty : 0;
+  const rev7dAvg = agg7d.revenue / 7;
+  const topup7dAvg = (ledger.d7?.topupMop ?? 0) / 7;
+
+  const suggestions = useMemo<Suggestion[]>(() => {
+    const out: Suggestion[] = [];
+
+    if (soldOut.length >= 3) {
+      out.push({
+        level: "r",
+        title: `已沽清 ${soldOut.length} 款菜品`,
+        action: `即日補貨；優先處理高銷菜品（${soldOut.slice(0, 2).join("、")}）。`,
+      });
+    }
+    const revDrop = rev7dAvg > 0 && agg.revenue < rev7dAvg * 0.8;
+    if (revDrop) {
+      out.push({
+        level: "r",
+        title: "營業額較 7 日均值跌超過 20%",
+        action: "推限時優惠或喚醒沉睡會員，拉升淡日營收。",
+      });
+    }
+    if (onlineShare - onlineShare7d > 0.05) {
+      out.push({
+        level: "o",
+        title: `線上渠道佔比上升（${Math.round(onlineShare * 100)}%，7 日均值 ${Math.round(onlineShare7d * 100)}%）`,
+        action: "加強線上推廣，並確保廚房產能跟到外送單。",
+      });
+    }
+    if (topup7dAvg > 0 && (ledger.sel?.topupMop ?? 0) < topup7dAvg * 0.7) {
+      out.push({
+        level: "o",
+        title: "會員充值較 7 日均值跌超過 30%",
+        action: "推「限時儲值贈 10%」活動，喚醒會員現金回流。",
+      });
+    }
+    if (voidRate > 0.03) {
+      out.push({
+        level: "o",
+        title: `退菜率 ${Math.round(voidRate * 100)}%（高於 3% 閾值）`,
+        action: "檢視退菜原因，加強落單確認與出餐品質培訓。",
+      });
+    }
+    if (discountRatio > 0.15) {
+      out.push({
+        level: "o",
+        title: `折扣佔比 ${Math.round(discountRatio * 100)}%（高於 15% 閾值）`,
+        action: "檢討優惠門檻，避免無謂折讓蠶食毛利。",
+      });
+    }
+    if (agg.tables.length > 0) {
+      const low = agg.tables[agg.tables.length - 1];
+      out.push({
+        level: "i",
+        title: `「${low.name}」使用偏低（${low.orders} 單）`,
+        action: "檢視該區擺位／排枱，必要時重新規劃或併枱。",
+      });
+    }
+    const order = { r: 0, o: 1, i: 2 } as const;
+    return out.sort((a, b) => order[a.level] - order[b.level]);
+  }, [soldOut, agg, rev7dAvg, onlineShare, onlineShare7d, topup7dAvg, ledger.sel, voidRate, discountRatio]);
+
+  function pct(cur: number, prev: number | null): { arrow: string; cls: string } | null {
+    if (prev === null || prev === 0) return null;
+    const diff = ((cur - prev) / prev) * 100;
+    if (Math.abs(diff) < 0.5) return { arrow: "— 持平", cls: "text-slate-400" };
+    const up = diff > 0;
+    return {
+      arrow: `${up ? "▲" : "▼"} ${Math.abs(Math.round(diff))}% vs 昨日`,
+      cls: up ? "text-emerald-600" : "text-rose-600",
+    };
+  }
+
+  // 尖峰時段合併圖：agg.byHour 來自 POS 本機訂單（含帶 onlineOrderId 嘅 POS 線上單）；
+  // onlineByHour 來自 Ledger 雲端純線上單（可能從未入 POS DB）。兩者相加先係全渠道。
+  // 注意：onlineByHour 可能因 ledger session 過期／網絡失敗而係全 0；UI 嘅 tag 會如實顯示來源。
+  const combinedByHour = useMemo(
+    () => agg.byHour.map((offlineCount, h) => offlineCount + (onlineByHour[h] ?? 0)),
+    [agg.byHour, onlineByHour],
+  );
+  const peakHour = combinedByHour.indexOf(Math.max(...combinedByHour));
+  const maxHour = Math.max(...combinedByHour, 1);
+  /** POS 線下單（不論帶唔帶 onlineOrderId）嘅 byHour，畀 tooltip 分拆。 */
+  const offlineHourOnly = useMemo(() => agg.byHour.slice(), [agg.byHour]);
+
+  function exportCsv() {
+    const rows = orders
+      .filter((o) => orderMatchesReportRange(o, range))
+      .map((o) => ({
+        單號: o.localOrderNo,
+        枱號: o.tableName,
+        渠道: o.onlineOrderId ? "線上" : "線下",
+        狀態: o.status,
+        金額: o.total,
+        折扣: o.discountAmount,
+        入座人數: o.partySize ?? 0,
+        // 🔴 同畫面表同一映射：CSV 係商家拎去做對帳／交數嘅，英文 enum 一樣唔可以漏出去。
+        支付: posPaymentMethodLabel(o.paymentMethod, ""),
+        時間: o.createdAt,
+      }));
+    const headers = Object.keys(rows[0] ?? { 單號: "" });
+    const csv = [
+      headers.join(","),
+      ...rows.map((r) => headers.map((k) => `"${String(r[k as keyof typeof r] ?? "").replace(/"/g, '""')}"`).join(",")),
+    ].join("\n");
+    const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `每日總結_${reportRangeLabel(range).replace(/[\\/:*?"<>|]/g, "-")}_${todayKey}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
+  return (
+    // 問題 4 + 5（2026-09-06 修）：admin 模式唔需要 POS 收銀台側邊欄，身份綁定錯誤
+    // bug 同時消除（POS session 唔再喺 admin 報表頁渲染）。
+    // - admin 模式（merchantIdOverride 或 allStoresMode）：
+    //   - 唔渲染 <AppSidebar /> → 解決問題 5（移除側邊欄）+ 問題 4（唔再顯示「表嫂美食 65273599」）
+    //   - 唔加 md:pl-[72px] → admin 報表撐滿寬度，配合 AdminShell max-w-7xl
+    //   - 內容區用 block（見下方），由 AdminShell 嘅 `h-[100dvh] overflow-y-auto`
+    //     容器負責頁面滾動（避開 globals.css `body { overflow: hidden }` 鎖死）。
+    // - POS 模式（/reports 商家報表）：維持 h-[100dvh] + AppSidebar + md:pl-[72px]，
+    //   內容區係 flex-1 + overflow-y-auto（main 高度固定），title bar 固定、內容獨立滾動。
+    <div className={isAdminMode ? "bg-slate-100" : "h-[100dvh] overflow-hidden bg-slate-100"}>
+      {isAdminMode ? null : <AppSidebar />}
+      <div className={isAdminMode ? "" : "flex h-[100dvh] overflow-hidden md:pl-[72px]"}>
+        <main className={isAdminMode ? "block" : "flex h-full flex-1 flex-col overflow-hidden"}>
+          {/* 標題 + 右上篩選 */}
+          <div className="border-b border-slate-200 bg-white px-4 py-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <div className="text-lg font-semibold text-slate-900">店鋪每日營運總結</div>
+                <div className="mt-1 text-sm text-slate-500">
+                  {storeName} · {todayKey}（澳門）· 篩選影響全部模塊
+                  {/* 自動刷新提示（2026-09-10）：唔講明嘅話，商家見到數字自己變咗會以為壞咗。
+                      ⚠️ 2026-09-21：改為**由常數推導**（原本寫死「每 3 分鐘」）——
+                      頻率調整成 10 分鐘之後，寫死嘅文案就會同實際行為唔一致（會誤導商家）。
+                      推導之後無論日後改幾多，畫面都會自動跟。 */}
+                  <span className="text-slate-400">
+                    {" "}
+                    · 每 {Math.round(AUTO_REFRESH_INTERVAL_MS / 60_000)} 分鐘自動更新
+                  </span>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  className="rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold text-white"
+                  onClick={exportCsv}
+                  type="button"
+                >
+                  導出 CSV
+                </button>
+                <DateRangeFilterChips
+                  options={FILTERS}
+                  value={reportRangeKeyOf(range)}
+                  custom={reportRangeCustomOf(range)}
+                  onChange={handleRangeChangeInBody}
+                  size="sm"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* 內容區滾動策略（2026-09-07 第二修）：
+              - admin 模式：main 係 block、冇固定高度 parent → 內容自然展開，
+                由 AdminShell 嘅 `h-[100dvh] overflow-y-auto` 負責整頁滾動 → 用 block。
+              - POS 模式（/reports 商家報表）：main 係 `h-full flex-col overflow-hidden`，
+                內容 wrapper 必須係 flex-1 + overflow-y-auto 先有自己嘅滾動容器；
+                f1cc8ad 曾一刀切改成 block，令 POS 模式內容超出視口被裁切、成頁滾唔到。
+                加 min-h-0 防止 flex item 預設 min-height:auto 令 overflow 失效。 */}
+          <div className={isAdminMode ? "block p-4" : "min-h-0 flex-1 overflow-y-auto p-4"}>
+            {/*
+              🔴 2026-09-15（商家要求）：**全有或全無** 渲染閘。
+              數據未齊（POS 訂單 backfill／Ledger 彙總／Ledger 線上單／線上單明細／低庫存
+              任一未完成）→ 只出一個整頁 loading，**唔渲染任何部分內容**；
+              全部攞齊合併完成先一次性出完整報表。
+
+              為何連「警示條」都要 gate：警示條本身都係數據派生
+              （`debugInfo.dataSource` 由 backfill 結果決定）。未載入完就出，
+              會見到「先出正常畫面 → 再彈警示」嘅二次跳動。
+            */}
+            {fullPageLoading ? (
+              <ReportFullPageLoading />
+            ) : (
+              <>
+            {ledgerError ? (
+              <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                {ledgerError}
+              </div>
+            ) : null}
+
+            {/* 2026-09-10 新增：數據來源可見性。
+                同一個「未結帳 N 張」KPI，雲端 / 本機 fallback 兩種來源嘅可信度差天共地，
+                但以前畫面**一模一樣** —— 商家會拿住某台機嘅暫存數字去同人對數，
+                或者把一個偏少嘅數字當成事實嚟追問「點解同步唔到」。
+                - cloud-partial：拉到單但中途有頁失敗 → 數字偏少，係靜默失真源。
+                - local-fallback：雲端完全讀唔到 → 全部係本機 localStorage 訂單，唔係 DB 數字。 */}
+            {debugInfo.dataSource === "cloud-partial" ? (
+              <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-900">
+                <div className="font-semibold">⚠️ 雲端數據只讀到一部分，以下數字未能作準</div>
+                <div className="mt-1 text-[13px] text-amber-800">
+                  部分分頁讀取失敗（{debugInfo.lastError ?? "網絡不穩"}），未結帳筆數與營業額都會偏少。
+                  系統會自動重試，亦可稍後自行重新載入。
+                </div>
+              </div>
+            ) : null}
+
+            {debugInfo.dataSource === "local-fallback" ? (
+              <div className="mb-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2.5 text-sm text-rose-900">
+                <div className="font-semibold">⚠️ 雲端讀取失敗，以下為本機暫存資料，並非資料庫實際數字</div>
+                <div className="mt-1 text-[13px] text-rose-800">
+                  目前顯示的是本機快取的訂單，只反映本機畫面，可能與後台或其他裝置不一致。
+                  請檢查網絡後重新載入；確認資料是否已上雲，可到 POS 設定頁的「同步健康」。
+                </div>
+              </div>
+            ) : null}
+
+            {/* 2026-09-07 新增：區間內有訂單但全部未結帳 → 明確解釋「點解營業額係 0」，
+                避免使用者見到一片空白以為報表壞咗（收入認列只計 settled / paid 係正確口徑）。 */}
+            {showUnsettledNotice ? (
+              <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-900">
+                <div className="font-semibold">
+                  ⚠️ 本區間有 {pendingSplit.totalInRange} 張訂單，但尚未有任何一張結帳，故營業額顯示為 0
+                </div>
+                <div className="mt-1 text-[13px] text-amber-800">
+                  未結帳 {pendingSplit.count} 張 · 金額 {formatMoney(pendingSplit.amountMop)} · 狀態分佈：
+                  {unsettledStatusLabel}
+                </div>
+                <div className="mt-1 text-xs text-amber-700">
+                  營業額只統計「已結帳 / 已付款」的訂單（收入認列口徑）。訂單送廚房後需於收銀台結帳，
+                  結帳後即會計入本報表。
+                </div>
+              </div>
+            ) : null}
+
+            {/* 2026-09-07 修：admin 模式嘅 Ledger 數據可見性分兩層。
+                - 線上單（public.orders）：已經改用 service-role 跨店讀取（/api/admin/ledger/orders），
+                  人流 / 尖峰時段 / 線上單計數都會反映。
+                - 會員充值 / 扣點等彙總 KPI：來自 getMerchantReportSummary RPC，商戶由
+                  auth.uid() 推導、連 merchantId 參數都冇，admin 裝置冇商戶身份 → 仍顯示為空。 */}
+            {isAdminMode ? (
+              <div className="mb-3 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2.5 text-sm text-sky-900">
+                <div className="font-semibold">ℹ️ 管理後台模式：線上單經 service-role 讀取已啟用</div>
+                <div className="mt-1 text-[13px] text-sky-800">
+                  人流、尖峰時段、線上單計數已包含 Ledger 線上單（跨店 / 指定商家均可）。
+                  但會員充值 / 扣點等彙總 KPI 來自需要商戶身份（JWT）的 RPC，管理後台帳號冇商戶身份，
+                  故此類數字暫時唔會顯示（並非冇數據）。
+                </div>
+                <div className="mt-1 text-xs text-sky-700">
+                  要睇完整會員類 KPI，請用該店商戶帳號登入 POS 後開啟報表；或為 Ledger 加上支援
+                  <code className="mx-1 rounded bg-sky-100 px-1">p_merchant_id</code>
+                  參數嘅 admin 版 RPC。
+                </div>
+              </div>
+            ) : null}
+
+            {/* DevTools debug panel：暫時由 UI 隱藏 */}
+            {false}
+
+            {/* 核心 KPI 帶 — 一律一行 5 格（10 格 → 5-5）
+                ⚠️ 2026-09-15：原本外面有一層 `{dataReady ? … : skeleton}`；
+                而家由最外層 `fullPageLoading` 統一負責（`dataReady` 唔包含線上單／明細
+                抓取，留佢會令 KPI 用未齊嘅 `agg` 先渲染）。呢度只保留內容本身。 */}
+            <>
+                {/*
+                  核心 KPI：**一律一行 5 格**（10 格 → 5-5），iPad 與電腦版排法一致。
+                  ⚠️ 原先寫 `md:grid-cols-3 xl:grid-cols-5`，iPad 橫向內容區約 976px
+                  落 `md`（3 格）→ 殘成 3-3-3-1；電腦 ≥1280 落 `xl`（5 格）。
+                  家陣固定 5 欄，兩邊都係 5-5（2026-09-10 iPad 版面對齊）。
+                */}
+                <div className="mb-3 grid grid-cols-5 gap-3">
+                  <Kpi
+                    label="營業額"
+                    /*
+                     * 🔴🔴 2026-10-01（J 口徑）：大數由**毛**改為**淨**（已扣退款）。
+                     *     J 明確要求：營業額格唔再單獨顯示「退款拆解」，直接出已扣退款嘅淨額，
+                     *     另加提示球說明「營業額不包含退款金額」。
+                     * ⚠️ 副標題嘅線下分拆**必須同步扣退款**（`offlineRevenueNetMop`），
+                     *    否則「線下 ＋ 線上 ≠ 大數」，商家會覺得夾唔埋。
+                     */
+                    value={<Money amount={onlineOfflineSplit.totalRevenueNetMop} />}
+                    highlight
+                    delta={pct(onlineOfflineSplit.totalRevenueNetMop, aggYest?.netRevenue ?? aggYest?.revenue ?? null)}
+                    subtitle={`線下 ${formatMoney(onlineOfflineSplit.offlineRevenueNetMop)} · 線上 ${formatMoney(onlineOfflineSplit.onlineRevenueMop)}`}
+                    /*
+                     * 🔴 2026-09-28（J 口徑）：退款資訊由常駐橫幅收埋成呢個小球。
+                     * 🔴 2026-10-01（J 口徑）：由 `action` 改為 `info` —— 三張金額卡
+                     *    （營業額／應收／實收）統一用 `info` 槽出球，樣式、大小、
+                     *    位置邏輯全部一致（同一顆 `InfoBubble`）。
+                     * 🔴🔴 2026-10-01（J 口徑·最新）：球內容**唔再出「退款拆解」算式**，
+                     *    改為解釋大數口徑。J 原話：營業額欄位唔需要再單獨顯示退款拆解或
+                     *    退款明細，只要提示「營業額不包含退款金額」。
+                     */
+                    info={
+                      <>
+                        <span className="block font-semibold text-slate-800">營業額（已扣退款）</span>
+                        <span className="mt-1 block">
+                          此數<span className="font-semibold">不包含退款金額</span>
+                          ：＝線下＋線上嘅收款 − 退款總額。
+                        </span>
+                        <span className="mt-1 block tabular-nums text-slate-600">
+                          收款（毛）{formatMoney(onlineOfflineSplit.totalRevenueMop)}
+                          <br />− 退款總額 {formatMoney(agg.refundTotal)}
+                          <br />＝ {formatMoney(onlineOfflineSplit.totalRevenueNetMop)}
+                        </span>
+                        <span className="mt-1 block text-[11px] text-slate-500">
+                          退款只涵蓋 POS 訂單（含線上單嘅本地投影）。
+                        </span>
+                        <span className="mt-1 block text-[11px] text-slate-500">
+                          ⚠️ Ledger 純線上單嘅退款目前冇資料來源，未計入呢個數。
+                        </span>
+                      </>
+                    }
+                  />
+                  {/* 🔴 2026-09-14：三張表（KPI／訂單明細／支付方式分項）**必須同源同批** ——
+                      一律 = 逐張單加總（線下 ＋ 線上投影單 ＋ Ledger 純線上單）。
+                      唔可以用 Ledger RPC `order_paid_avos`（只認「已完成」）：已付款未完成嘅單會消失
+                      （實案：KPI 2,984 vs 訂單明細 3,022，差 38 —— 嗰 38 係真收到嘅錢）。 */}
+                  <Kpi
+                    label="應收金額合計"
+                    value={<Money amount={agg.receivableTotal} />}
+                    delta={null}
+                    /* 🔴 2026-10-01（J 口徑）：原本寫「原價合計 + 服務費 + 稅」，但本店冇啟用
+                       服務費／稅（兩欄永遠 0），顯示出嚟係噪音 ⇒ 拿走。同時 J 指出「應收」
+                       一詞含糊：定義係「未扣任何優惠前嘅原價」，唔講清會同「實收」混淆。
+                       ⇒ 口徑解釋收埋入右上角提示球（`info`），card 面只留數字分拆。
+                       ⚠️ 計法**完全冇改**（`agg.receivableTotal`），只改呈現。 */
+                    subtitle={`線下 ${formatMoney(agg.offlineReceivableTotal)} · 線上 ${formatMoney(agg.receivableTotal - agg.offlineReceivableTotal)}`}
+                    info={
+                      <>
+                        <span className="block font-semibold text-slate-800">應收金額合計</span>
+                        <span className="mt-1 block">
+                          ＝<span className="font-semibold">未扣任何優惠前</span>嘅原價（單品原價 × 數量），
+                          同下面「訂單明細」逐行加總一致。
+                        </span>
+                        <span className="mt-1 block text-[11px] text-slate-500">
+                          同「實收金額合計」嘅差額 ＝ 全單優惠折扣 + 抹零。
+                          應收<span className="font-semibold">未扣</span>優惠，實收<span className="font-semibold">已扣</span>優惠。
+                        </span>
+                      </>
+                    }
+                  />
+                  {/* 🔴 2026-09-17 退貨修復（口徑 D）：退款單原本被 isSaleCountable() 整張剔走，
+                      「賣 100 退 30」報表顯示 0，實際落袋 70 ⇒ 實收偏低。
+                      ⚠️ 呢度**唔可以另開卡片**：KPI 帶係固定 5 欄，格數必須係 5 嘅倍數
+                      （否則尾行殘缺；2026-09-10 / 09-11 兩次中過）。所以將「退款 / 淨額」
+                      拆解寫入呢格嘅 subtitle，**格數維持 10 格不變**。
+                      商家要嘅「淨額」同時喺下面「訂單明細」上方嘅退款摘要區有完整呈現。 */}
+                  {/* 🔴 2026-09-19 口徑修正（商家對數一致性）：
+                      卡片價值**改綁毛實收 `agg.paidTotal`**，唔再綁 `agg.netRevenue`。
+                      成因：三大指標本身就係毛口徑 —— 營業額／客單價／毛利用 `agg.revenue`、
+                      應收用 `agg.receivableTotal`、下面「訂單明細」逐行加總亦係毛。
+                      唯獨呢張卡綁淨額 ⇒ 一旦有退款，「實收 vs 明細」就夾唔到數，
+                      而退款橫幅又係 `refundCount > 0` 才出 ⇒ **冇橫幅時靜默變淨額、零提示**。
+                      依家：卡 = 毛（同明細加總一致）；淨額同退款拆解一律喺下面橫幅交代。 */}
+                  <Kpi
+                    label="實收金額合計"
+                    value={<Money amount={agg.paidTotal} />}
+                    delta={null}
+                    highlight={agg.refundTotal > 0}
+                    subtitle={`線下 ${formatMoney(onlineOfflineSplit.offlineRevenueMop)} · 線上 ${formatMoney(onlineOfflineSplit.onlineRevenueMop)}`}
+                    info={
+                      <>
+                        <span className="block font-semibold text-slate-800">實收金額合計</span>
+                        <span className="mt-1 block">
+                          ＝<span className="font-semibold">已扣優惠後</span>實際收到嘅錢
+                          （原價 − 全單優惠折扣 − 抹零），同下面「訂單明細」逐行加總一致。
+                        </span>
+                        <span className="mt-1 block text-[11px] text-slate-500">
+                          同「應收金額合計」嘅差額 ＝ 全單優惠折扣 + 抹零。
+                          呢個數係<span className="font-semibold">毛</span>（未扣退款）；
+                          扣退款後嘅落袋金額見「營業額」格嘅退款拆解。
+                        </span>
+                      </>
+                    }
+                  />
+                  <Kpi
+                    label="訂單數"
+                    value={String(onlineOfflineSplit.totalCount)}
+                    delta={pct(onlineOfflineSplit.totalCount, aggYest?.count ?? null)}
+                    subtitle={`線下 ${onlineOfflineSplit.offlineCount} 單 · 線上 ${onlineOfflineSplit.onlineCount} 單`}
+                    info={
+                      <>
+                        <span className="block font-semibold text-slate-800">訂單數</span>
+                        <span className="mt-1 block">
+                          只計<span className="font-semibold">已結帳</span>嘅可入帳單
+                          （含帶 onlineOrderId 嘅線上投影單）。
+                        </span>
+                        <span className="mt-1 block text-[11px] text-slate-500">
+                          未結帳（送廚中／未付款）嘅單唔會計入，請見下面「未結帳訂單」格。
+                        </span>
+                      </>
+                    }
+                  />
+                  <Kpi
+                    label="客單價"
+                    value={
+                      <Money
+                        amount={
+                          onlineOfflineSplit.totalCount > 0
+                            ? onlineOfflineSplit.totalRevenueMop / onlineOfflineSplit.totalCount
+                            : 0
+                        }
+                      />
+                    }
+                    delta={pct(
+                      onlineOfflineSplit.totalCount > 0
+                        ? onlineOfflineSplit.totalRevenueMop / onlineOfflineSplit.totalCount
+                        : 0,
+                      ticketMopYest,
+                    )}
+                    /* 🔴 2026-10-05（J 拍板·版面重組）：「未結帳訂單」原本佔 KPI 帶一格，
+                       令 KPI 帶變 10 格（5-5）。重組後 KPI 帶只留 5 格，未結帳資訊
+                       併入「客單價」嘅副標題 ＋ 提示球，唔再另佔一格。 */
+                    subtitle={
+                      pendingSplit.count > 0
+                        ? `未結帳 ${pendingSplit.count} 張 · ${formatMoney(pendingSplit.amountMop)} · ${unsettledStatusLabel}`
+                        : "冇待收款訂單"
+                    }
+                    info={
+                      <>
+                        <span className="block font-semibold text-slate-800">客單價</span>
+                        <span className="mt-1 block">
+                          ＝營業額 ÷ 訂單數（兩邊同源，都係線下 + 線上）。
+                        </span>
+                        <span className="mt-1 block text-[11px] text-slate-500">
+                          用嘅係毛營業額，唔係扣除退款後嘅淨額。
+                        </span>
+                        <span className="mt-1 block border-t border-slate-100 pt-1 font-semibold text-slate-800">
+                          未結帳訂單
+                        </span>
+                        <span className="mt-1 block">
+                          已落單但<span className="font-semibold">未結帳</span>嘅單
+                          （送廚中／已出餐／未付款等）：{pendingSplit.count} 張 ·
+                          {formatMoney(pendingSplit.amountMop)} · {unsettledStatusLabel}。
+                        </span>
+                        <span className="mt-1 block text-[11px] text-slate-500">
+                          呢啲單唔計入營業額／應收／實收 —— 錢未收到。
+                        </span>
+                      </>
+                    }
+                  />
+                </div>
+
+                {/*
+                  ── 成本與毛利（2026-10-05 J 拍板·獨立 4 格）──────────────────────
+                  🔴 為何獨立成 4 格而**唔併入上面 KPI 帶**：KPI 帶固定 5 欄，
+                     格數必須係 5 嘅倍數。加 4 格落去會變 9 格（尾行殘缺，
+                     2026-09-10 / 09-11 中過兩次）⇒ 另開一個 `lg:grid-cols-4` 區塊。
+                  ⚠️ 用 `grid-cols-2 lg:grid-cols-4`（唔用 `md:`）：iPad 直向／窄螢幕
+                     一卡資料較長，2 欄比 4 欄好讀；≥1024px（iPad 橫向）才 4 欄一行。
+                */}
+                <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
+                  <Kpi
+                    label="買貨總額"
+                    value={
+                      purchaseUnavailable ? (
+                        <span className="text-slate-400">—</span>
+                      ) : (
+                        <Money amount={purchase.sel?.total ?? 0} />
+                      )
+                    }
+                    delta={null}
+                    subtitle={`共 ${purchase.sel?.count ?? 0} 張收據 · 含未付`}
+                    info={
+                      <>
+                        <span className="block font-semibold text-slate-800">買貨總額</span>
+                        <span className="mt-1 block">
+                          ＝本期間所有進貨收據嘅總額（已付 ＋ 未付）。
+                        </span>
+                        <span className="mt-1 block text-[11px] text-slate-500">
+                          呢個係「入貨當期認成本」嘅口徑，比只睇「已付」準
+                          （月結貨唔會漏計）。但仍未扣存貨變動。
+                          破折號（—）＝庫存系統未能讀取。
+                        </span>
+                      </>
+                    }
+                  />
+                  <Kpi
+                    label="已付支出"
+                    value={
+                      purchaseUnavailable ? (
+                        <span className="text-slate-400">—</span>
+                      ) : (
+                        <Money amount={purchase.sel?.paid ?? 0} />
+                      )
+                    }
+                    delta={null}
+                    subtitle="本期間現金已付出嘅貨款"
+                    info={
+                      <>
+                        <span className="block font-semibold text-slate-800">已付支出</span>
+                        <span className="mt-1 block">
+                          ＝本期間已付款嘅進貨收據總額（現金流口徑）。
+                        </span>
+                        <span className="mt-1 block text-[11px] text-slate-500">
+                          係獨立參考數，**唔可以**同上面「應收／實收」加減 ——
+                          貨款（尤其月結）唔係當日營業額嘅扣減項。
+                        </span>
+                      </>
+                    }
+                  />
+                  <Kpi
+                    label="未付支出"
+                    value={
+                      purchaseUnavailable ? (
+                        <span className="text-slate-400">—</span>
+                      ) : (
+                        <Money amount={purchase.sel?.unpaid ?? 0} />
+                      )
+                    }
+                    delta={null}
+                    subtitle="本期間已入貨但未付款嘅貨款"
+                    info={
+                      <>
+                        <span className="block font-semibold text-slate-800">未付支出</span>
+                        <span className="mt-1 block">
+                          ＝本期間已入貨（收據已開）但<span className="font-semibold">未付款</span>嘅金額。
+                        </span>
+                        <span className="mt-1 block text-[11px] text-slate-500">
+                          月結／賒數貨一般落呢邊。呢筆錢遲啲要付，
+                          但唔影響當日現金流。
+                        </span>
+                      </>
+                    }
+                  />
+                  <Kpi
+                    label="毛利（估）"
+                    value={
+                      gpEditing ? (
+                        <span className="flex items-center gap-1">
+                          <span className="text-[11px] font-medium text-slate-400">毛利率</span>
+                          <input
+                            autoFocus
+                            type="number"
+                            value={gpDraft}
+                            onChange={(e) => setGpDraft(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") saveGpOverride();
+                              if (e.key === "Escape") setGpEditing(false);
+                            }}
+                            className="w-full min-w-0 rounded-md border border-orange-300 px-1 py-0.5 text-2xl font-bold text-orange-600 outline-none focus:ring-1 focus:ring-orange-300"
+                          />
+                          <span className="text-sm font-medium text-slate-400">%</span>
+                        </span>
+                      ) : (
+                        <Money amount={displayGrossProfit} />
+                      )
+                    }
+                    highlight
+                    delta={
+                      gpMarginPct != null || purchaseUnavailable
+                        ? null
+                        : grossProfitYest === null
+                          ? null
+                          : pct(grossProfit, grossProfitYest)
+                    }
+                    subtitle={gpSubtitle}
+                    info={
+                      <>
+                        <span className="block font-semibold text-slate-800">毛利（估）</span>
+                        <span className="mt-1 block">
+                          {gpMarginPct != null
+                            ? `手動設定毛利率：營業額 × ${gpMarginPct}%。`
+                            : "系統估算：營業額 − 買貨總額（已付 ＋ 未付）。"}
+                        </span>
+                        <span className="mt-1 block text-[11px] text-slate-500">
+                          成本用嘅係<span className="font-semibold">買貨總額</span>（含未付），
+                          ＝入貨當期認成本 —— 比只用「已付」準（月結貨唔會漏計）。
+                          但仍<span className="font-semibold">未扣存貨變動</span>
+                          （入大批貨當期毛利會偏低；冇入貨當期會偏高）。
+                          要更準可撳右上角 edit 直接輸入毛利率。
+                        </span>
+                      </>
+                    }
+                    action={
+                      gpEditing ? (
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={saveGpOverride}
+                            className="text-[11px] font-semibold text-orange-600 hover:underline"
+                          >
+                            儲存
+                          </button>
+                          <button
+                            onClick={() => setGpEditing(false)}
+                            className="text-[11px] text-slate-400 hover:underline"
+                          >
+                            取消
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => {
+                            setGpDraft(gpMarginPct != null ? String(gpMarginPct) : "50");
+                            setGpEditing(true);
+                          }}
+                          className="flex items-center gap-0.5 rounded-md px-1.5 py-0.5 text-[11px] text-slate-400 transition-colors hover:bg-orange-50 hover:text-orange-600"
+                          title="編輯毛利預估值"
+                        >
+                          <svg viewBox="0 0 16 16" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="1.5">
+                            <path d="M11 2l3 3L6 13l-3.5.5L3 10z" strokeLinejoin="round" />
+                          </svg>
+                          edit
+                        </button>
+                      )
+                    }
+                  />
+                </div>
+
+                {/*
+                  ── 會員錢包（2026-10-05 J 拍板·摺疊）──────────────────────────
+                  🔴 為何收起：`餘額總額` / `會員充值` / `會員扣點` 三個都係
+                      **Ledger 負債類**數字（「仲欠客人幾多」、「之前已收嘅錢」），
+                      同營業額唔同層。原本 3 格同上收入層混排，令商家以為佢哋係收入。
+                  ⚠️ 收埋但**唔可以**唔見：摘要行照出三個數，需要時撳一下展開細節。
+                      語意標籤寫明「負債口徑 · 唔屬營業額」。
+                  ⚠️ 用原生 `<details>`（唔用 state）—— 呢個係純顯示開關，
+                      唔需要記住狀態，亦唔應該因為 re-render 而自動彈開。
+                */}
+                <details className="mb-4 rounded-2xl border border-slate-200 bg-white">
+                  <summary className="flex cursor-pointer flex-wrap items-center gap-x-3 gap-y-1 px-4 py-3">
+                    <span className="text-base font-semibold text-slate-900">會員錢包</span>
+                    <span className="text-[11px] text-slate-400">負債口徑 · 唔屬營業額</span>
+                    <span className="ml-auto flex flex-wrap items-baseline gap-x-5 gap-y-1">
+                      <span className="text-[11px] text-slate-400">
+                        餘額總額{" "}
+                        <span className="text-sm font-semibold tabular-nums text-slate-900">
+                          {ledger.sel?.balanceTotalMop != null ? formatMoney(ledger.sel.balanceTotalMop) : "—"}
+                        </span>
+                      </span>
+                      <span className="text-[11px] text-slate-400">
+                        充值{" "}
+                        <span className="text-sm font-semibold tabular-nums text-slate-900">
+                          {formatMoney(ledger.sel?.topupMop ?? 0)}
+                        </span>
+                      </span>
+                      <span className="text-[11px] text-slate-400">
+                        扣點{" "}
+                        <span className="text-sm font-semibold tabular-nums text-slate-900">
+                          {formatMoney(ledger.sel?.deductMop ?? 0)}
+                        </span>
+                      </span>
+                    </span>
+                  </summary>
+                  <div className="grid gap-1 border-t border-slate-100 px-4 py-3">
+                    <div className="flex items-baseline justify-between gap-3 py-1.5">
+                      <span className="text-sm text-slate-700">
+                        餘額總額（仲欠客人幾多）
+                        <span className="ml-2 text-[11px] text-slate-400">負債口徑，唔可以當營業額</span>
+                      </span>
+                      <span className="shrink-0 text-sm font-semibold tabular-nums text-slate-900">
+                        {ledger.sel?.balanceTotalMop != null ? formatMoney(ledger.sel.balanceTotalMop) : "—"}
+                      </span>
+                    </div>
+                    <div className="flex items-baseline justify-between gap-3 py-1.5">
+                      <span className="text-sm text-slate-700">
+                        會員充值
+                        <span className="ml-2 text-[11px] text-slate-400">
+                          實際 {formatMoney(ledger.sel?.topupPaidMop ?? 0)} · 贈送{" "}
+                          {formatMoney(ledger.sel?.topupGiftMop ?? 0)}；只有「實際」算收入
+                        </span>
+                      </span>
+                      <span className="shrink-0 text-sm font-semibold tabular-nums text-slate-900">
+                        {formatMoney(ledger.sel?.topupMop ?? 0)}
+                      </span>
+                    </div>
+                    <div className="flex items-baseline justify-between gap-3 py-1.5">
+                      <span className="text-sm text-slate-700">
+                        會員扣點
+                        <span className="ml-2 text-[11px] text-slate-400">
+                          已付 {formatMoney(ledger.sel?.deductPaidMop ?? 0)} · 贈送{" "}
+                          {formatMoney(ledger.sel?.deductGiftMop ?? 0)}；之前充值时已收，唔再計一次
+                        </span>
+                      </span>
+                      <span className="shrink-0 text-sm font-semibold tabular-nums text-slate-900">
+                        {formatMoney(ledger.sel?.deductMop ?? 0)}
+                      </span>
+                    </div>
+                    <div className="pt-1 text-[11px] text-slate-400">
+                      ⚠️ 會員類數字來自 Ledger，admin 後台模式（冇商戶身份）顯示為 0 或 —；
+                      破折號（—）＝未能讀取會員數據。
+                    </div>
+                  </div>
+                </details>
+            </>
+
+            {/* 🔴 外賣平台結算區塊（2026-09-26 使用者需求）—— 刻意**唔放入**上面 10 格。
+                KPI 帶固定 5 欄、格數必須係 5 嘅倍數（2026-09-10 / 09-11 中過兩次：
+                加一格會令尾行殘缺）。另開獨立區塊既可加三格，又唔會破壞原版面，
+                仲可以喺標題交代「非即時」。
+
+                ⚠️ 只喺區間內**有平台單**時才 render（按 source 各自判斷）——
+                    冇平台單嘅店（只做堂食）完全唔會見到呢個區塊，零視覺影響。
+
+                🔴 2026-09-29：由「單一 MFOOD 區塊」拆成「MFOOD ＋ 澳覓」左右並排，
+                    各自用平台專屬色（MFOOD＝橙 #FB8F01、澳覓＝玫紅 #FF3159）。
+                    窄螢幕自動疊成一欄（同一份元件，唔使另一套 code）。 */}
+            {(() => {
+              const showMfood =
+                mfoodSettlement.receivable > 0 ||
+                mfoodSettlement.settledCount > 0 ||
+                mfoodSettlement.basis === "period";
+              const showAomi =
+                aomiSettlement.receivable > 0 ||
+                aomiSettlement.settledCount > 0 ||
+                aomiSettlement.basis === "period";
+              if (!showMfood && !showAomi) return null;
+              // 兩個平台都有數 → 左右並排（md 以上）；得一個 → 該卡獨佔整行（同改版前外觀）。
+              const both = showMfood && showAomi;
+              return (
+                <div
+                  className={`mb-4 grid gap-3 ${
+                    both ? "grid-cols-1 md:grid-cols-2" : "grid-cols-1"
+                  }`}
+                >
+                  {showMfood ? (
+                    <PlatformSettlementCard
+                      totals={mfoodSettlement}
+                      theme={MFOOD_THEME}
+                      label="MFOOD 結算"
+                    />
+                  ) : null}
+                  {showAomi ? (
+                    <PlatformSettlementCard
+                      totals={aomiSettlement}
+                      theme={AOMI_THEME}
+                      label="澳覓 結算"
+                    />
+                  ) : null}
+                </div>
+              );
+            })()}
+
+            {/* 🔴 2026-09-17 退貨修復（口徑 D）；2026-09-19 **改為無條件顯示**。
+                KPI 帶係固定 5 欄，唔可以為咗退款另開卡片（格數會唔係 5 嘅倍數）。
+                所以退款拆解獨立成呢條橫幅。
+
+                ⚠️ 2026-09-19 改動理由（實案）：原本係 `refundCount > 0` 才顯示。
+                冇退款嗰日，橫幅完全唔出 ⇒ 用戶見到「實收 474」但營業額 512，
+                **冇任何線索**知道差額係乜（實際係另一條 bug：重複計單）。
+                ⇒ 依家永遠顯示「毛 / − 退款 / ＝ 淨額」兩三行，退款 0 就照寫 0。
+                商家唔需要再靠「橫幅有冇出」去推斷口徑。
+
+                ⚠️ 口徑必須同交班頁（`shift-page.tsx` 淨實收）一致：兩頁夾唔到數 = 原本嘅投訴。
+
+                🔴🔴 2026-09-28（J 口徑）：**整條橫幅隱藏** —— 佢佔位又長期顯示「本期間無退款」，
+                對日常營運係噪音。退款資訊改為收喺上面「營業額」格嘅**小提示球**（見 `Kpi`
+                嘅 `action` 槽位）：需要時按下才彈，唔需要時完全唔佔位。
+                ✅ 數值口徑**完全冇變**（`agg.revenue` / `refundTotal` / `netRevenue` 照計），
+                   只係換咗呈現方式；下面「毛利」等區塊完全唔受影響。
+                ⚠️ 還原方法：把下面 `{false ? (...)}` 改成原本嘅 `true`／直接 render。 */}
+            {false ? (
+              <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+                <div className="flex flex-wrap items-baseline gap-x-6 gap-y-1 text-sm">
+                  <span className="font-semibold text-amber-900">
+                    {agg.refundCount > 0 ? `退款拆解（${agg.refundCount} 張退款單）` : "退款拆解（本期間無退款）"}
+                  </span>
+                  <span className="text-amber-800">
+                    營業額（毛）
+                    <span className="ml-1 font-semibold">{formatMoney(agg.revenue)}</span>
+                  </span>
+                  <span className="text-amber-800">
+                    − 退款總額
+                    <span className="ml-1 font-semibold">{formatMoney(agg.refundTotal)}</span>
+                  </span>
+                  <span className="text-amber-900">
+                    ＝ 淨營業額（落袋）
+                    <span className="ml-1 text-base font-bold">{formatMoney(agg.netRevenue)}</span>
+                  </span>
+                </div>
+                <div className="mt-1 flex flex-wrap items-baseline gap-x-6 gap-y-1 text-sm">
+                  <span className="text-amber-800">
+                    毛實收（＝訂單明細加總）
+                    <span className="ml-1 font-semibold">{formatMoney(agg.paidTotal)}</span>
+                  </span>
+                  <span className="text-amber-900">
+                    ＝ 實收金額合計（上面卡片）
+                    <span className="ml-1 font-semibold">{formatMoney(agg.paidTotal)}</span>
+                  </span>
+                </div>
+                <div className="mt-1 text-[11px] text-amber-700">
+                  {agg.refundCount > 0
+                    ? "⚠️ 退款單（含部分退款）原本被排除在營業額之外；「淨營業額」已扣回退款，＝實際落袋金額。"
+                    : "本期間沒有任何退款單，所以「營業額」＝「毛實收」＝「實收金額合計」，三個數必然相同。"}
+                </div>
+              </div>
+            ) : null}
+
+            {/*
+              ── 買貨明細（2026-10-05 J 拍板·新增）────────────────────────────
+              🔴 為何新增：KPI 帶只出「買貨總額／已付／未付」三個大數，
+                 睇唔到「錢花喺邊款貨」。此卡以**庫存品項**為單位排行，
+                 並補付款方式分佈 ＋ 近 6 個月趨勢。
+              ⚠️ 只在有買貨數據時才 render（`purchase.sel.count > 0`）——
+                 冇收據嘅期間完全唔會出現，避免空白卡。
+              ⚠️ 品項細項已喺 API 側截斷（`PURCHASE_ITEMS_PREVIEW`）——
+                 呢度唔可以再拉全量（egress）。
+            */}
+            {purchaseUnavailable ? null : purchase.sel && purchase.sel.count > 0 ? (
+              <div className="mb-4">
+                <Card
+                  title="買貨明細"
+                  tag={`${purchase.sel.count} 張收據 · ${purchase.sel.itemsTotal} 款品項`}
+                >
+                  <div className="mb-4 grid gap-4 lg:grid-cols-2">
+                    {/* 左：貨品細項（按金額倒序，API 已排好） */}
+                    <div>
+                      <div className="mb-2 text-xs font-semibold text-slate-500">
+                        貨品細項（按金額）
+                      </div>
+                      {purchase.sel.items.length === 0 ? (
+                        <div className="text-sm text-slate-400">本期間冇貨品細項資料。</div>
+                      ) : (
+                        <>
+                          <table className="w-full text-sm">
+                            <thead>
+                              <tr className="text-left text-[11px] text-slate-400">
+                                <th className="pb-1 font-medium">品項</th>
+                                <th className="pb-1 text-right font-medium">數量</th>
+                                <th className="pb-1 text-right font-medium">單價</th>
+                                <th className="pb-1 text-right font-medium">金額</th>
+                              </tr>
+                            </thead>
+                            <tbody className="tabular-nums">
+                              {purchase.sel.items.slice(0, 5).map((it) => (
+                                <tr key={it.key} className="border-t border-slate-100">
+                                  <td className="py-1.5 pr-2 text-slate-700">{it.name}</td>
+                                  <td className="py-1.5 text-right text-slate-600">
+                                    {it.qty}
+                                    {it.unit ? ` ${it.unit}` : ""}
+                                  </td>
+                                  <td className="py-1.5 text-right text-slate-600">
+                                    {formatMoney(it.avgPrice)}
+                                  </td>
+                                  <td className="py-1.5 text-right font-semibold text-slate-900">
+                                    {formatMoney(it.amount)}
+                                  </td>
+                                </tr>
+                              ))}
+                              <tr className="border-t-2 border-slate-300 font-semibold text-slate-900">
+                                <td className="py-1.5 pr-2">合計</td>
+                                <td className="py-1.5 text-right text-slate-400">—</td>
+                                <td className="py-1.5 text-right text-slate-400">—</td>
+                                <td className="py-1.5 text-right">
+                                  {formatMoney(purchase.sel.total)}
+                                </td>
+                              </tr>
+                            </tbody>
+                          </table>
+                          <div className="mt-2 text-[11px] text-slate-400">
+                            以庫存「品項」為單位聚合 · 同名品項跨收據合併 · 顯示前{" "}
+                            {Math.min(5, purchase.sel.items.length)} 項
+                            {purchase.sel.itemsTotal > 5 ? `（共 ${purchase.sel.itemsTotal} 款）` : ""}
+                          </div>
+                        </>
+                      )}
+                    </div>
+
+                    {/* 右：付款方式分佈 */}
+                    <div>
+                      <div className="mb-2 text-xs font-semibold text-slate-500">付款方式分佈</div>
+                      {purchase.sel.paymentMethodBreakdown.length === 0 ? (
+                        <div className="text-sm text-slate-400">本期間冇付款方式資料。</div>
+                      ) : (
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="text-left text-[11px] text-slate-400">
+                              <th className="pb-1 font-medium">付款方式</th>
+                              <th className="pb-1 text-right font-medium">張數</th>
+                              <th className="pb-1 text-right font-medium">金額</th>
+                            </tr>
+                          </thead>
+                          <tbody className="tabular-nums">
+                            {purchase.sel.paymentMethodBreakdown.map((pm) => (
+                              <tr key={pm.method} className="border-t border-slate-100">
+                                <td className="py-1.5 pr-2 text-slate-700">{pm.label}</td>
+                                <td className="py-1.5 text-right text-slate-600">{pm.count}</td>
+                                <td className="py-1.5 text-right font-semibold text-slate-900">
+                                  {formatMoney(pm.total)}
+                                </td>
+                              </tr>
+                            ))}
+                            <tr className="border-t-2 border-slate-300 font-semibold text-slate-900">
+                              <td className="py-1.5 pr-2">合計</td>
+                              <td className="py-1.5 text-right">{purchase.sel.count}</td>
+                              <td className="py-1.5 text-right">{formatMoney(purchase.sel.total)}</td>
+                            </tr>
+                          </tbody>
+                        </table>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* 下：近 6 個月買貨支出柱狀圖 */}
+                  {purchase.sel.monthlyExpenses.length > 0 ? (
+                    <div>
+                      <div className="mb-2 text-xs font-semibold text-slate-500">
+                        近 6 個月買貨支出
+                      </div>
+                      <div className="flex items-end gap-2" style={{ height: 96 }}>
+                        {(() => {
+                          const max = Math.max(
+                            ...purchase.sel.monthlyExpenses.map((m) => m.amount),
+                            1,
+                          );
+                          const lastIdx = purchase.sel.monthlyExpenses.length - 1;
+                          return purchase.sel.monthlyExpenses.map((m, idx) => (
+                            <div key={m.key} className="flex flex-1 flex-col items-center gap-1">
+                              <div className="flex w-full flex-1 items-end">
+                                <div
+                                  className={`w-full rounded-t ${idx === lastIdx ? "bg-orange-500" : "bg-slate-300"}`}
+                                  style={{
+                                    height: `${Math.max(4, Math.round((m.amount / max) * 100))}%`,
+                                  }}
+                                  title={formatMoney(m.amount)}
+                                />
+                              </div>
+                              <div className="text-[10px] text-slate-400">{m.name}</div>
+                            </div>
+                          ));
+                        })()}
+                      </div>
+                      <div className="mt-2 text-[11px] text-slate-400">
+                        {purchase.sel.monthlyExpenses
+                          .slice()
+                          .reverse()
+                          .slice(0, 3)
+                          .map((m) => `${m.name} ${formatMoney(m.amount)}`)
+                          .join(" · ")}
+                        {purchase.sel.trend.up + purchase.sel.trend.down > 0
+                          ? ` · 單價上升 ${purchase.sel.trend.up} 款 · 下降 ${purchase.sel.trend.down} 款`
+                          : ""}
+                      </div>
+                    </div>
+                  ) : null}
+                </Card>
+              </div>
+            ) : null}
+
+            {/*
+              訂單明細：逐筆列出已結帳訂單（線下 POS + Ledger 純線上），口徑同支付方式分項。
+              ⚠️ 位置：緊貼 KPI 帶之下（2026-09-10 用戶要求「訂單明細要顯示在格仔下方」）。
+              預設只出頭 ORDER_DETAIL_PREVIEW 行 + 「顯示全部」，否則逐筆列表會佔滿首屏，
+              把下面所有區塊（菜品排行、食材消耗…）推到很遠。
+            */}
+            {/* P0（2026-09-24，2026-09-27 改為純提示）：線上單對數警示。
+                冇警示／冇漏帳時整個元件 render `null` ⇒ 佈局零改動。
+                🔴 補建按鈕已移除（商家口徑「唔應該要商家撳」）—— 自動化路徑見
+                   `use-adopt-completed-ledger-orders`（自動補建）＋
+                   `/api/pos/adopted-online-ids`（雲端交叉核對）。
+
+                🔴🔴 2026-09-28（J 口徑）：**隱藏呢條橙色警示條** —— 自動補建已經令
+                「未入帳」變成短暫過渡狀態，長期掛住一條橙色警示只會嚇到商家。
+                ✅ 自動補建邏輯**完全保留**（hook 照跑、照補、照上雲），只係唔再顯示橫幅。
+                ⚠️ 還原方法：把下面 `{false ? (...)}` 改回直接 render。 */}
+            {false ? (
+              <OnlineReconcileBanner
+                reconcile={onlineReconcile}
+                fetchStatus={onlineFetchInfo.status}
+                fetchError={onlineFetchInfo.lastError}
+              />
+            ) : null}
+
+            <Card
+              title="訂單明細"
+              tag={`共 ${agg.orderDetails.length} 張 · 結賬時間倒序`}
+            >
+              {agg.orderDetails.length === 0 ? (
+                <div className="text-sm text-slate-500">篩選範圍內暫無已結帳訂單。</div>
+              ) : (
+                <>
+                  <div className="max-h-[420px] overflow-auto rounded-xl border border-slate-200 bg-white">
+                    <OrderDetailList
+                      rows={
+                        orderDetailExpanded
+                          ? agg.orderDetails
+                          : agg.orderDetails.slice(0, ORDER_DETAIL_PREVIEW)
+                      }
+                    />
+                  </div>
+                  {agg.orderDetails.length > ORDER_DETAIL_PREVIEW ? (
+                    <button
+                      type="button"
+                      onClick={() => setOrderDetailExpanded((v) => !v)}
+                      className="mt-2 w-full rounded-lg border border-slate-200 bg-slate-50 py-1.5 text-sm font-semibold text-slate-600 hover:bg-slate-100"
+                    >
+                      {orderDetailExpanded ? "收起" : `顯示全部 ${agg.orderDetails.length} 張`}
+                    </button>
+                  ) : null}
+                </>
+              )}
+            </Card>
+
+            {/*
+              菜品銷售排行：緊接訂單明細之下（2026-09-10 用戶要求）。
+              原本同「會員充值 & 會員數」併排喺 `lg:grid-cols-[1.4fr_1fr]`；
+              該卡已整張移除 → 呢邊改為全寬單欄。
+              🔴 2026-10-05（J 拍板）：排序由「銷量倒序」改為「**金額倒序**」，
+                 同 Ledger `dishes[]`（migration 0060）一致。
+            */}
+            <div className="mb-4">
+              <Card title="菜品銷售排行" tag="按下單當時快照名稱 · 線上＋線下 · 按金額由高到低">
+                {agg.dishes.length === 0 ? (
+                  <Empty />
+                ) : (
+                  <div className="grid gap-1">
+                    {onlineDetailInfo.status === "loading" ? (
+                      <div className="mb-1 text-[11px] text-slate-400">
+                        正在抓取 Ledger 線上單明細（{onlineDetailInfo.total} 張）…
+                      </div>
+                    ) : null}
+                    {onlineDetailInfo.status === "error" ? (
+                      <div className="mb-1 rounded bg-rose-50 px-2 py-1.5 text-[11px] text-rose-700">
+                        Ledger 線上單明細抓取失敗：{onlineDetailInfo.lastError ?? "未知錯誤"}，菜品排行暫時只含 POS 單。
+                      </div>
+                    ) : null}
+                    {onlineDetailInfo.status === "success" && onlineDetailInfo.ok > 0 ? (
+                      <div className="mb-1 text-[11px] text-slate-400">
+                        已併入 {onlineDetailInfo.ok} 張 Ledger 線上單明細（未入 POS DB 嘅線上單）
+                        {onlineDetailInfo.failed > 0 ? ` · ${onlineDetailInfo.failed} 張失敗` : ""}。
+                      </div>
+                    ) : null}
+                    {agg.dishes.slice(0, 8).map((d) => (
+                      <DishRowItem key={d.key} d={d} />
+                    ))}
+                    {agg.dishes.length > 8 ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDishModalPage(1);
+                          setDishModalOpen(true);
+                        }}
+                        className="mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 py-1.5 text-sm font-semibold text-slate-600 hover:bg-slate-100"
+                      >
+                        更多（共 {agg.dishes.length} 個）
+                      </button>
+                    ) : null}
+                  </div>
+                )}
+              </Card>
+
+              {/* 菜品銷售排行完整列表彈窗 */}
+              {dishModalOpen ? (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+                  <div className="max-h-[80vh] w-full max-w-2xl overflow-hidden rounded-2xl bg-white p-4 shadow-xl">
+                    <div className="mb-3 flex items-center justify-between">
+                      <div>
+                        <div className="text-base font-semibold text-slate-900">菜品銷售排行</div>
+                        <div className="text-xs text-slate-500">共 {agg.dishes.length} 個菜品 · 每頁 {DISHES_PER_PAGE} 個</div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setDishModalOpen(false)}
+                        className="rounded-lg bg-slate-100 px-3 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-200"
+                      >
+                        關閉
+                      </button>
+                    </div>
+                    <div className="max-h-[55vh] overflow-y-auto pr-1">
+                      {(() => {
+                        const pageDishes = agg.dishes.slice((dishModalPage - 1) * DISHES_PER_PAGE, dishModalPage * DISHES_PER_PAGE);
+                        return (
+                          <div className="grid gap-1">
+                            {pageDishes.map((d, i) => (
+                              <div key={d.key} className="flex items-center justify-between border-b border-slate-100 py-2 last:border-0">
+                                <div className="min-w-0 flex-1">
+                                  <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+                                    <span className="w-6 shrink-0 text-xs text-slate-400">{(dishModalPage - 1) * DISHES_PER_PAGE + i + 1}.</span>
+                                    <span className="truncate">{d.name}</span>
+                                    <ChannelChip
+                                      kind={d.onlineQty > 0 && d.offlineQty > 0 ? "mix" : d.onlineQty > 0 ? "off" : "in"}
+                                    />
+                                  </div>
+                                  <div className="mt-0.5 pl-8 text-xs text-slate-500">
+                                    線下 {d.offlineQty} · 線上 {d.onlineQty}
+                                  </div>
+                                </div>
+                                <div className="shrink-0 text-right">
+                                  <div className="text-sm font-semibold text-slate-900">{d.offlineQty + d.onlineQty} 份</div>
+                                  <div className="text-xs text-slate-400">{formatMoney(d.revenue)}</div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        );
+                      })()}
+                    </div>
+                    {agg.dishes.length > DISHES_PER_PAGE ? (
+                      <div className="mt-3 flex items-center justify-between">
+                        <button
+                          type="button"
+                          disabled={dishModalPage <= 1}
+                          onClick={() => setDishModalPage((p) => Math.max(1, p - 1))}
+                          className="rounded-lg bg-slate-100 px-3 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-200 disabled:opacity-40"
+                        >
+                          上一頁
+                        </button>
+                        <span className="text-sm text-slate-600">
+                          第 {dishModalPage} / {Math.ceil(agg.dishes.length / DISHES_PER_PAGE)} 頁
+                        </span>
+                        <button
+                          type="button"
+                          disabled={dishModalPage >= Math.ceil(agg.dishes.length / DISHES_PER_PAGE)}
+                          onClick={() => setDishModalPage((p) => Math.min(Math.ceil(agg.dishes.length / DISHES_PER_PAGE), p + 1))}
+                          className="rounded-lg bg-slate-100 px-3 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-200 disabled:opacity-40"
+                        >
+                          下一頁
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
+
+            </div>
+
+            {/* 模塊 1 + 模塊 2：食材消耗（BOM 精確化）
+                ⚠️ 位置：由 KPI 帶下方移到呢度（2026-09-10）。KPI 下面嘅第一、二個區塊
+                要係「訂單明細 → 菜品銷售排行」（用戶指定順序），所以食材消耗讓位。 */}
+            <div className="mb-4 grid gap-4 lg:grid-cols-2">
+              <Card title="食材消耗（本月）" tag="BOM × 已售份數">
+                {!consMonth.hasRecipes ? (
+                  <div>
+                    <div className="text-xs text-slate-400">尚未設定菜品配方，模塊顯示空白。</div>
+                    <Link
+                      href="/reports/bom"
+                      className="mt-2 inline-block rounded-lg border border-dashed border-orange-300 px-3 py-1.5 text-xs font-semibold text-orange-600 hover:bg-orange-50"
+                    >
+                      前往「配方管理」填寫 →
+                    </Link>
+                  </div>
+                ) : (
+                  <div>
+                    <div className="text-3xl font-extrabold text-orange-600">{formatMoney(consMonth.totalAmount)}</div>
+                    <div className="mt-1 text-xs text-slate-500">
+                      本月食材成本（至今日）· {consMonth.kinds} 款食材
+                    </div>
+                    <div className="mt-2 text-xs text-slate-400">
+                      選取範圍（{FILTERS.find((f) => f.key === range)?.label}）：{formatMoney(consRange.totalAmount)} ·{" "}
+                      {consRange.kinds} 款
+                    </div>
+                  </div>
+                )}
+              </Card>
+
+              <Card title="食材使用量排行" tag="本月 · 按成本">
+                {!consMonth.hasRecipes ? (
+                  <Empty />
+                ) : consMonth.rows.length === 0 ? (
+                  <div className="text-xs text-slate-400">本月暫無已售菜品配對到配方。</div>
+                ) : (
+                  <div className="grid gap-1">
+                    {consMonth.rows.slice(0, 8).map((r, i) => (
+                      <div
+                        key={r.name}
+                        className="flex items-center justify-between border-b border-slate-100 py-2 last:border-0"
+                      >
+                        <div className="text-sm font-semibold text-slate-900">
+                          <span className="mr-2 text-xs text-slate-400">{i + 1}.</span>
+                          {r.name}
+                        </div>
+                        <div className="text-right">
+                          <div className="text-sm font-semibold text-slate-900">
+                            {r.qty} {r.unit}
+                          </div>
+                          <div className="text-xs text-slate-400">{formatMoney(r.amount)}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </Card>
+            </div>
+
+            {/* 支付方式分項：依每種支付方式列出應收 / 實收金額合計 + 訂單數。
+
+              🔴 2026-10-07 卡片名／tag 修正：舊名「（店內 POS 線下）」**同實際口徑不符**。
+              實際 `aggregate()` 會把三類單一齊入帳（見下面 `orderDetails` 註解）：
+              ① 純線下 POS 單 ② 線上單投影（帶 `onlineOrderId`，錢係喺店內收）
+              ③ Ledger 純線上單（客人自己落單線上付款）。
+              ②③ 之前會令 `in_store` / `balance` 等Ledger enum 出現喺一張「線下」卡裡 = 語意矛盾。
+              改名「店內收款」因為三者都係**本店實際收到嘅錢**，同一批單、同一口徑。*/}
+            <Card
+              title="支付方式分項（店內收款）"
+              tag="涵蓋範圍內所有已結帳單：店內 POS 單＋線上單投影＋Ledger 純線上單（皆為本店實際收款，各單只計一次）。應收 = 未扣優惠前嘅原價 · 實收 = order.total · 已扣退款；各行實收相加 = 上方「實收金額合計」"
+            >
+              {Object.keys(agg.paymentBreakdown).length === 0 ? (
+                <div className="text-sm text-slate-500">篩選範圍內暫無已結帳訂單。</div>
+              ) : (
+                <div className="overflow-auto rounded-xl border border-slate-200">
+                  <table className="w-full border-collapse text-sm">
+                    <thead className="bg-slate-50 text-left text-xs font-semibold text-slate-500">
+                      <tr>
+                        <th className="border-b border-slate-200 px-3 py-2">支付方式</th>
+                        <th className="border-b border-slate-200 px-3 py-2 text-right">訂單數</th>
+                        <th className="border-b border-slate-200 px-3 py-2 text-right">應收金額合計</th>
+                        <th className="border-b border-slate-200 px-3 py-2 text-right">實收金額合計</th>
+                        <th className="border-b border-slate-200 px-3 py-2 text-right">折扣差額</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {Object.entries(agg.paymentBreakdown)
+                        .sort(([, a], [, b]) => b.paid - a.paid)
+                        .map(([method, bucket]) => {
+                          const diff = bucket.receivable - bucket.paid;
+                          return (
+                            <tr key={method} className="border-b border-slate-100 last:border-b-0">
+                              <td className="px-3 py-2 font-semibold text-slate-900">{method}</td>
+                              <td className="px-3 py-2 text-right text-slate-700">{bucket.count}</td>
+                              <td className="px-3 py-2 text-right font-semibold text-slate-900">
+                                {formatMoney(bucket.receivable)}
+                              </td>
+                              <td className="px-3 py-2 text-right font-semibold text-emerald-700">
+                                {formatMoney(bucket.paid)}
+                              </td>
+                              <td
+                                className={`px-3 py-2 text-right ${
+                                  diff > 0.01 ? "text-amber-700" : "text-slate-400"
+                                }`}
+                              >
+                                {diff > 0.01 ? `-${formatMoney(diff)}` : formatMoney(0)}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      {(() => {
+                        // 合計行
+                        const totalCount = Object.values(agg.paymentBreakdown).reduce((s, b) => s + b.count, 0);
+                        const totalReceivable = Object.values(agg.paymentBreakdown).reduce((s, b) => s + b.receivable, 0);
+                        const totalPaid = Object.values(agg.paymentBreakdown).reduce((s, b) => s + b.paid, 0);
+                        return (
+                          <tr className="bg-slate-50 text-sm font-semibold text-slate-900">
+                            <td className="px-3 py-2">合計</td>
+                            <td className="px-3 py-2 text-right">{totalCount}</td>
+                            <td className="px-3 py-2 text-right">{formatMoney(totalReceivable)}</td>
+                            <td className="px-3 py-2 text-right text-emerald-700">{formatMoney(totalPaid)}</td>
+                            <td className="px-3 py-2 text-right text-amber-700">
+                              {totalReceivable - totalPaid > 0.01
+                                ? `-${formatMoney(totalReceivable - totalPaid)}`
+                                : formatMoney(0)}
+                            </td>
+                          </tr>
+                        );
+                      })()}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </Card>
+
+            {/* 模塊 7 + 模塊 8 */}
+            <div className="mb-4 grid gap-4 md:grid-cols-2">
+              <Card title="沽清菜品" tag="即時">
+                <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-bold ${soldOut.length > 0 ? "bg-rose-100 text-rose-700" : "bg-emerald-100 text-emerald-700"}`}>
+                  {soldOut.length} 款沽清
+                </span>
+                {soldOut.length > 0 ? (
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {soldOut.map((n) => (
+                      <span key={n} className="rounded-full border border-rose-200 bg-rose-50 px-2.5 py-1 text-xs text-rose-700">
+                        {n}
+                      </span>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="mt-2 text-xs text-slate-400">暫無沽清菜品。</div>
+                )}
+              </Card>
+
+              <Card title="最熱門桌台排行" tag="單數 · 覆蓋人數">
+                {agg.tables.length === 0 ? (
+                  <Empty />
+                ) : (
+                  <div className="grid gap-1">
+                    {agg.tables.slice(0, 6).map((t, i) => (
+                      <div key={t.tableId} className="flex items-center justify-between border-b border-slate-100 py-2 last:border-0">
+                        <div className="text-sm font-semibold text-slate-900">
+                          <span className="mr-2 text-xs text-slate-400">{i + 1}.</span>
+                          {t.name}
+                        </div>
+                        <div className="text-sm text-slate-700">
+                          {t.orders} 單 · {t.covers} 人
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </Card>
+            </div>
+
+            {/* 補充：尖峰時段 + 出餐時間 + 營運指標 */}
+            <div className="mb-4 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+              <Card
+                title="尖峰時段（每小時訂單）"
+                tag={
+                  onlineFetchInfo.status === "success"
+                    ? `POS+Ledger · 高峰約 ${peakHour}:00`
+                    : onlineFetchInfo.status === "error"
+                      ? `僅 POS · 高峰約 ${peakHour}:00`
+                      : `POS · 高峰約 ${peakHour}:00`
+                }
+              >
+                <div className="grid grid-cols-12 gap-1">
+                  {combinedByHour.map((c, h) => {
+                    const offline = offlineHourOnly[h] ?? 0;
+                    const online = Math.max(0, c - offline);
+                    return (
+                      <div
+                        key={h}
+                        title={`${h}:00 · POS ${offline} 單 + Ledger 線上 ${online} 單 = 共 ${c} 單`}
+                        className="relative flex h-7 items-end justify-center overflow-hidden rounded text-[9px] text-white"
+                        style={{
+                          background: c >= maxHour * 0.7 ? "#ef4444" : c >= maxHour * 0.4 ? "#fb923c" : "#cbd5e1",
+                        }}
+                      >
+                        {/* 線上單疊加層（藍色），上到下垂直堆疊表達「線下 + 線上」總和。 */}
+                        {online > 0 && offline > 0 ? (
+                          <div
+                            className="absolute bottom-0 left-0 right-0 bg-blue-500/70"
+                            style={{ height: `${Math.min(100, (online / c) * 100)}%` }}
+                            aria-hidden
+                          />
+                        ) : null}
+                        <span className="relative z-10">{c > 0 ? c : ""}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="mt-2 grid grid-cols-3 gap-2 text-center">
+                  <Metric label="退菜率" value={`${Math.round(voidRate * 100)}%`} warn={voidRate > 0.03} />
+                  <Metric label="折扣佔比" value={`${Math.round(discountRatio * 100)}%`} warn={discountRatio > 0.15} />
+                  <Metric label="線上佔比" value={`${Math.round(onlineShare * 100)}%`} />
+                </div>
+                {onlineFetchInfo.status === "error" ? (
+                  <div className="mt-2 text-[11px] text-amber-700">
+                    Ledger 線上單抓取失敗：{onlineFetchInfo.lastError ?? "未知錯誤"}，尖峰時段僅含 POS 單。
+                  </div>
+                ) : null}
+                {onlineFetchInfo.status === "success" && onlineFetchInfo.outOfRange > 0 ? (
+                  <div className="mt-1 text-[11px] text-slate-400">
+                    Ledger 抓取 {onlineFetchInfo.fetched} 單 · 入圖 {onlineFetchInfo.counted} · 越界 {onlineFetchInfo.outOfRange}
+                    {onlineFetchInfo.cancelled > 0 ? ` · 取消 ${onlineFetchInfo.cancelled}` : ""}
+                    {onlineFetchInfo.unpaid > 0 ? ` · 未付 ${onlineFetchInfo.unpaid}` : ""}
+                  </div>
+                ) : null}
+              </Card>
+
+              <Card title="營運指標 · 同環比" tag="vs 7 日均值">
+                <div className="grid gap-1">
+                  <Row label="營業額（7日均）" value={formatMoney(rev7dAvg)} />
+                  <Row label="線上渠道佔比（7日均）" value={`${Math.round(onlineShare7d * 100)}%`} />
+                  <Row label="會員充值（7日均）" value={formatMoney(topup7dAvg)} />
+                  <Row label="總售出份數" value={`${agg.totalSoldQty} 份`} />
+                </div>
+                <div className="mt-2 text-[11px] text-slate-400">
+                  營業額同線上佔比基於 POS 訂單 7 日均；會員充值來自 Ledger RPC。
+                </div>
+              </Card>
+
+              <Card
+                title="時長統計（堂食 / 外賣）"
+                tag={
+                  agg.dineInServing.total.estimated || agg.quickServing.total.estimated ? "含估算" : "實測"
+                }
+              >
+                {agg.dineInServing.total.count === 0 && agg.quickServing.total.count === 0 ? (
+                  <Empty />
+                ) : (
+                  <>
+                    <DurationBarChart
+                      steps={[
+                        {
+                          label: "堂食·下單→送廚",
+                          avgMin: agg.dineInServing.orderToKitchen.avgMin,
+                          count: agg.dineInServing.orderToKitchen.count,
+                          colorClass: "bg-indigo-500",
+                        },
+                        {
+                          label: "堂食·送廚→結帳",
+                          avgMin: agg.dineInServing.kitchenToSettle.avgMin,
+                          count: agg.dineInServing.kitchenToSettle.count,
+                          colorClass: "bg-indigo-500",
+                        },
+                        {
+                          label: "堂食·整體",
+                          avgMin: agg.dineInServing.total.avgMin,
+                          count: agg.dineInServing.total.count,
+                          colorClass: "bg-indigo-700",
+                        },
+                        {
+                          label: "外賣·下單→送廚",
+                          avgMin: agg.quickServing.orderToKitchen.avgMin,
+                          count: agg.quickServing.orderToKitchen.count,
+                          colorClass: "bg-amber-500",
+                        },
+                        {
+                          label: "外賣·送廚→出餐",
+                          avgMin: agg.quickServing.kitchenToServed.avgMin,
+                          count: agg.quickServing.kitchenToServed.count,
+                          colorClass: "bg-amber-500",
+                        },
+                        {
+                          label: "外賣·出餐→完成",
+                          avgMin: agg.quickServing.servedToSettled.avgMin,
+                          count: agg.quickServing.servedToSettled.count,
+                          colorClass: "bg-amber-500",
+                        },
+                        {
+                          label: "外賣·整體",
+                          avgMin: agg.quickServing.total.avgMin,
+                          count: agg.quickServing.total.count,
+                          colorClass: "bg-amber-700",
+                        },
+                      ]}
+                      maxAvg={Math.max(
+                        agg.dineInServing.orderToKitchen.avgMin,
+                        agg.dineInServing.kitchenToSettle.avgMin,
+                        agg.dineInServing.total.avgMin,
+                        agg.quickServing.orderToKitchen.avgMin,
+                        agg.quickServing.kitchenToServed.avgMin,
+                        agg.quickServing.servedToSettled.avgMin,
+                        agg.quickServing.total.avgMin,
+                        1,
+                      )}
+                    />
+                    {/* 圖例 */}
+                    <div className="mt-3 flex items-center gap-4 text-[11px] text-slate-500">
+                      <span className="flex items-center gap-1.5">
+                        <span className="h-2.5 w-2.5 rounded-sm bg-indigo-500" />
+                        堂食
+                      </span>
+                      <span className="flex items-center gap-1.5">
+                        <span className="h-2.5 w-2.5 rounded-sm bg-amber-500" />
+                        快餐 / 外賣
+                      </span>
+                      <span>深色 = 整體時長</span>
+                    </div>
+                  </>
+                )}
+              </Card>
+            </div>
+
+            {/* 模塊 5 人流 + 低庫存預警 */}
+            <div className="mb-4 grid gap-4 lg:grid-cols-2">
+              <Card title="當日人流（入店人次）" tag="自動計算 · 參考用">
+                <div className="flex items-baseline gap-2">
+                  <div className="text-3xl font-extrabold text-indigo-600">{footfallTotal}</div>
+                  <div className="text-xs text-slate-500">選取範圍累計入店人次</div>
+                </div>
+                <div className="mt-2 grid grid-cols-3 gap-2 text-xs">
+                  <div className="rounded-lg bg-slate-50 px-2 py-1.5">
+                    <div className="text-slate-400">堂食</div>
+                    <div className="mt-0.5 text-sm font-semibold text-slate-900">{footfallBreakdown.dineIn} 人</div>
+                  </div>
+                  <div className="rounded-lg bg-slate-50 px-2 py-1.5">
+                    <div className="text-slate-400">快餐 / 外賣</div>
+                    <div className="mt-0.5 text-sm font-semibold text-slate-900">{footfallBreakdown.counter} 單</div>
+                  </div>
+                  <div className="rounded-lg bg-slate-50 px-2 py-1.5">
+                    <div className="text-slate-400">Ledger 純線上</div>
+                    <div className="mt-0.5 text-sm font-semibold text-slate-900">{footfallBreakdown.online} 單</div>
+                  </div>
+                </div>
+                {conversion != null ? (
+                  <div className="mt-2 text-xs text-slate-500">
+                    堂食轉化率 {Math.round(conversion * 100)}%（覆蓋 {agg.covers} 人 / 人流 {footfallTotal}）
+                  </div>
+                ) : null}
+                <div className="mt-2 text-[11px] text-slate-400">
+                  由訂單自動計算：堂食依 partySize 加總；快餐 / 外賣 / Ledger 純線上一單算一人。三項相加等於上方總人次。純參考用，無門口計數硬件嘅替代方案。
+                </div>
+              </Card>
+
+              <Card title="低庫存預警" tag="current_qty ≤ par（reorder_level）">
+                {lowStock === null ? (
+                  <div className="text-xs text-slate-400">
+                    未能讀取庫存（未連線 macau-pos Supabase 或尚無庫存品）。
+                  </div>
+                ) : lowStock.length === 0 ? (
+                  <span className="inline-flex items-center rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-bold text-emerald-700">
+                    庫存充足
+                  </span>
+                ) : (
+                  <div className="grid gap-1">
+                    <div className="text-sm font-semibold text-rose-600">{lowStock.length} 款低庫存</div>
+                    {lowStock.slice(0, 8).map((p) => (
+                      <div
+                        key={p.name}
+                        className="flex items-center justify-between border-b border-slate-100 py-1.5 last:border-0"
+                      >
+                        <span className="text-sm text-slate-900">{p.name}</span>
+                        <span className="text-xs text-rose-600">
+                          {p.qty} / {p.par} {p.unit}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </Card>
+            </div>
+
+            {/* 模塊 9：自動化優化建議
+                ⚠️ 2026-09-15：外層 `{dataReady ? … : SectionSkeleton}` 已由最外層
+                `fullPageLoading` 取代（呢度一定係數據齊全嘅狀態）。
+                內部 `loading` 分支亦一併拆走 —— `loading` 係 Ledger 彙總嘅區域旗標，
+                佢未齊時外層已經 gate 住，唔會行到呢度。 */}
+            <div className="rounded-2xl border border-orange-200 bg-orange-50/60 p-4">
+              <div className="mb-3 text-base font-semibold text-slate-900">🔔 自動化優化建議（{FILTERS.find((f) => f.key === range)?.label}）</div>
+              {suggestions.length === 0 ? (
+                <div className="text-sm text-slate-500">目前未觸發優化建議，營運狀況健康。</div>
+              ) : (
+                <div className="grid gap-2">
+                  {suggestions.map((s, i) => (
+                    <div key={i} className="flex gap-3 rounded-xl border border-orange-200 bg-white p-3">
+                      <span
+                        className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                          s.level === "r" ? "bg-rose-100 text-rose-700" : s.level === "o" ? "bg-amber-100 text-amber-700" : "bg-slate-100 text-slate-600"
+                        }`}
+                      >
+                        {LEVEL_LABEL[s.level]}
+                      </span>
+                      <div className="text-sm leading-relaxed text-slate-700">
+                        <span className="font-semibold text-slate-900">{s.title}：</span>
+                        {s.action}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="mt-3 rounded-xl bg-slate-50 px-4 py-3 text-xs text-slate-400">
+              說明：營業額／訂單／菜品／桌台／退菜／折扣均來自本機結帳訂單；會員充值與線上餘額扣減來自 Ledger；低庫存預警來自本店 inv_products（current_qty ≤ reorder_level，只由「收據同步種子」與人手盤點改動，落單暫不扣庫存）。
+              {purchaseUnavailable && (
+                <span className="mt-1 block text-amber-700">
+                  注意：本店進貨（收據）數據未能讀取，毛利估算未扣成本。
+                </span>
+              )}
+              人流（入店人次）由訂單自動計算：堂食依 partySize 加總、快餐/外賣一單算一人，純參考用。時長統計分開呈現堂食（送廚 → 結帳）同快餐/外賣（送廚 → 出餐 → 完成）各步驟；缺時間戳嘅樣本以落單→結帳/updatedAt 估算，標「含估算」。食材消耗依 BOM 配方 × 已售份數計算（於「配方管理」填寫後方精確）。
+              買貨（收據）數據來自庫存系統：買貨總額＝已付＋未付；毛利為「營業額 − 買貨總額（已付＋未付）」估算，**未扣存貨變動**。菜品排行按金額由高到低。
+            </div>
+              </>
+            )}
+          </div>
+        </main>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * 報表整頁載入中（2026-09-15「全有或全無」渲染閘）。
+ *
+ * 🔴 為何要一個獨立嘅整頁 loading，而唔用返原本每張卡嘅骨架：
+ * 商家要嘅係「**任何一項數據未齊，整頁就維持 loading**」。若保留原本
+ * 「KPI 帶 skeleton + 11 張卡各自 skeleton」嘅做法，一來形狀同真身唔完全一致
+ * （真身係 5 格 KPI 帶 ＋ 4 格成本毛利，骨架係另一個 grid），二來逐卡載入完成會令個別卡先著燈
+ * —— 仍然係「部分內容」。整頁一個 spinner 最符合「一次性渲染」嘅要求。
+ *
+ * ⚠️ 高度用 `flex-1` 撐滿內容區（POS 模式內容區係 `min-h-0 flex-1`），
+ * 所以 loading 期間唔會出現「內容區高度塌陷 → 頁腳彈上彈落」嘅二次跳動。
+ */
+function ReportFullPageLoading() {
+  return (
+    <div className="flex min-h-[320px] flex-1 items-center justify-center py-16">
+      <div className="flex flex-col items-center gap-3">
+        <div
+          className="h-10 w-10 animate-spin rounded-full border-2 border-slate-300 border-t-slate-600"
+          role="status"
+          aria-label="載入中"
+        />
+        <div className="text-sm text-slate-500">正在載入報表數據…</div>
+        <div className="text-xs text-slate-400">
+          整合本機訂單、Ledger 線上單與會員數據，完成後一次顯示。
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Kpi({
+  label,
+  value,
+  highlight,
+  delta,
+  subtitle,
+  action,
+  info,
+}: {
+  label: string;
+  value: React.ReactNode;
+  highlight?: boolean;
+  delta: { arrow: string; cls: string } | null;
+  /** 大數下方的小字（如「線下/線上」分拆）。 */
+  subtitle?: string;
+  /** 右上角操作位（如「毛利（估）」嘅 edit 掣）。 */
+  action?: React.ReactNode;
+  /**
+   * 口徑說明（2026-10-01 J 口徑）：**唔佔版面**嘅右上角提示球內容。
+   *
+   * 傳入嘅係氣泡**內容**，球本身由 `Kpi` 統一 render（同一顆 `InfoBubble`）。
+   * ⚠️ 千祈唔好喺呼叫端自己再包一層 `InfoBubble`（會變成兩顆球疊住）。
+   *
+   * 🔴 2026-10-01：營業額／應收／實收三張金額卡**一律用呢個槽** ——
+   *    保證樣式、大小、位置邏輯完全一致。`action` 槽只留返真正嘅操作掣
+   *    （如毛利嘅 edit），語意唔再撈亂。
+   */
+  info?: React.ReactNode;
+}) {
+  const hasAside = info != null || action != null;
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-4">
+      <div className="flex items-start justify-between gap-2">
+        <div className="text-xs text-slate-500">{label}</div>
+        {hasAside ? (
+          <span className="flex shrink-0 items-center gap-1">
+            {info != null ? <InfoBubble label={`${label}口徑說明`}>{info}</InfoBubble> : null}
+            {action}
+          </span>
+        ) : null}
+      </div>
+      <div className={`mt-1 text-2xl font-bold ${highlight ? "text-orange-600" : "text-slate-900"}`}>{value}</div>
+      {subtitle ? <div className="mt-0.5 text-[11px] text-slate-500">{subtitle}</div> : null}
+      {delta ? <div className={`mt-1 text-[11px] ${delta.cls}`}>{delta.arrow}</div> : null}
+    </div>
+  );
+}
+
+/** 金額渲染：貨幣前綴（MOP）縮細，數字保持大號字，避免「MOP 123,456」擠爆格子。 */
+function Money({ amount, currency = "MOP" }: { amount: number; currency?: string }) {
+  const rounded = Math.round(Number.isFinite(amount) ? amount : 0);
+  const grouped = rounded.toLocaleString("en-US");
+  return (
+    <span className="tabular-nums">
+      <span className="mr-1 align-baseline text-sm font-medium text-slate-400">{currency}</span>
+      <span>{grouped}</span>
+    </span>
+  );
+}
+
+function Card({ title, tag, children, loading }: { title: string; tag?: string; children: React.ReactNode; loading?: boolean }) {
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-4">
+      <div className="mb-3 flex items-center justify-between">
+        <div className="text-base font-semibold text-slate-900">{title}</div>
+        {tag ? <div className="text-xs text-slate-400">{tag}</div> : null}
+      </div>
+      {loading ? (
+        <div className="flex min-h-[140px] items-center justify-center rounded-xl bg-slate-50">
+          <div className="h-8 w-8 animate-spin rounded-full border-2 border-slate-300 border-t-slate-500" role="status" aria-label="載入中" />
+        </div>
+      ) : (
+        children
+      )}
+    </div>
+  );
+}
+
+function DishRowItem({ d }: { d: DishRow }) {
+  const total = d.offlineQty + d.onlineQty;
+  const ch = d.onlineQty > 0 && d.offlineQty > 0 ? "mix" : d.onlineQty > 0 ? "off" : "in";
+  return (
+    <div className="flex items-center justify-between border-b border-slate-100 py-2 last:border-0">
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+          <span className="truncate">{d.name}</span>
+          <ChannelChip kind={ch} />
+        </div>
+        <div className="mt-0.5 text-xs text-slate-500">
+          線下 {d.offlineQty} · 線上 {d.onlineQty}
+        </div>
+      </div>
+      <div className="shrink-0 text-right">
+        <div className="text-sm font-semibold text-slate-900">{total} 份</div>
+        <div className="text-xs text-slate-400">{formatMoney(d.revenue)}</div>
+      </div>
+    </div>
+  );
+}
+
+function ChannelChip({ kind }: { kind: "off" | "in" | "mix" }) {
+  const map = {
+    off: { t: "線上", c: "bg-blue-50 text-blue-700" },
+    in: { t: "線下", c: "bg-slate-100 text-slate-600" },
+    mix: { t: "混合", c: "bg-purple-50 text-purple-700" },
+  } as const;
+  const v = map[kind];
+  return <span className={`ml-2 rounded-full px-2 py-0.5 text-[10px] font-bold ${v.c}`}>{v.t}</span>;
+}
+
+function Pill({ kind, children }: { kind: "amber" | "green" | "slate"; children: React.ReactNode }) {
+  const c = {
+    amber: "bg-amber-50 text-amber-700",
+    green: "bg-emerald-50 text-emerald-700",
+    slate: "bg-slate-100 text-slate-600",
+  } as const;
+  return <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${c[kind]}`}>{children}</span>;
+}
+
+function Metric({ label, value, warn }: { label: string; value: string; warn?: boolean }) {
+  return (
+    <div className="rounded-xl bg-slate-50 py-2">
+      <div className={`text-sm font-bold ${warn ? "text-rose-600" : "text-slate-900"}`}>{value}</div>
+      <div className="text-[11px] text-slate-500">{label}</div>
+    </div>
+  );
+}
+
+function Row({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between border-b border-slate-100 py-2 last:border-0">
+      <span className="text-sm text-slate-600">{label}</span>
+      <span className="text-sm font-semibold text-slate-900">{value}</span>
+    </div>
+  );
+}
+
+function Empty() {
+  return <div className="text-xs text-slate-400">此範圍暫無資料。</div>;
+}
+
+type DurationBarStep = {
+  label: string;
+  avgMin: number;
+  count: number;
+  colorClass: string;
+};
+
+/** 垂直柱狀圖：每個環節一根柱，柱頂顯示平均時長（分鐘），堂食／外賣以顏色區分。 */
+function DurationBarChart({ steps, maxAvg }: { steps: DurationBarStep[]; maxAvg: number }) {
+  return (
+    <div className="rounded-xl border border-slate-100 bg-slate-50/40 p-3">
+      {/* 柱區：高度固定，柱高按 avg / maxAvg 比例（上限 85%，預留數值標籤空間） */}
+      <div className="flex h-44 items-end gap-1.5">
+        {steps.map((s) => {
+          const noData = s.count === 0;
+          const pct = !noData && maxAvg > 0 ? Math.min((s.avgMin / maxAvg) * 85, 85) : 2;
+          return (
+            <div
+              key={s.label + s.colorClass}
+              className="flex h-full min-w-0 flex-1 flex-col items-center justify-end gap-1"
+            >
+              <div
+                className={`text-[11px] font-semibold ${noData ? "text-slate-300" : "text-slate-800"}`}
+              >
+                {noData ? "—" : s.avgMin.toFixed(1)}
+              </div>
+              <div
+                className={`w-full max-w-[44px] rounded-t-md ${noData ? "bg-slate-200" : s.colorClass}`}
+                style={{ height: `${pct}%` }}
+                title={`${s.label}：平均 ${noData ? "—" : `${s.avgMin.toFixed(1)} 分`}（樣本 ${s.count}）`}
+              />
+            </div>
+          );
+        })}
+      </div>
+      {/* X 軸標籤 */}
+      <div className="mt-2 flex gap-1.5 border-t border-slate-200 pt-1.5">
+        {steps.map((s) => (
+          <div
+            key={s.label + s.colorClass}
+            className="min-w-0 flex-1 truncate text-center text-[10px] leading-tight text-slate-500"
+            title={s.label}
+          >
+            {s.label}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}

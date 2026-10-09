@@ -135,10 +135,31 @@ export function scheduledPickupTimeClass(kind: ScheduledPickupKind): string {
  * 逾時／剩餘嘅中文尾綴，例如「18 分鐘後」「已逾時 42 分鐘」。
  * 逾時 1 分鐘內唔扮精確（顯示「已逾時」）—— 差一分鐘唔影響收銀決定。
  */
-export function scheduledPickupRelativeText(minutes: number | null): string {
-  if (minutes == null) return "";
-  if (minutes > 0) return `${minutes} 分鐘後`;
-  if (minutes === 0) return "已到時間";
+/**
+ * `scheduledPickupRelativeText()` 嘅**可翻譯**版本 —— 拆成「字典 key ＋ 佔位值」。
+ *
+ * 🔴 為何唔可以就地 `t(scheduledPickupRelativeText(18))`（2026-10-08）：
+ *    佢回傳嘅係**已填值**字串（`18 分鐘後`），字典 key 係 `{minutes} 分鐘後`，
+ *    兩者永遠唔會相等 ⇒ `t()` 靜靜 fallback 返中文（同 `orderCodeLabel` 同一個坑）。
+ *
+ * `null`（冇預約時間）→ 回 `null`（＝唔顯示）。
+ */
+export function scheduledPickupRelativeParts(
+  minutes: number | null,
+): { key: string; vars: Record<string, string | number> } | null {
+  if (minutes == null) return null;
+  if (minutes > 0) return { key: "{minutes} 分鐘後", vars: { minutes } };
+  if (minutes === 0) return { key: "已到時間", vars: {} };
   const overdue = -minutes;
-  return overdue <= 1 ? "已逾時" : `已逾時 ${overdue} 分鐘`;
+  return overdue <= 1
+    ? { key: "已逾時", vars: {} }
+    : { key: "已逾時 {overdue} 分鐘", vars: { overdue } };
+}
+
+export function scheduledPickupRelativeText(minutes: number | null): string {
+  const parts = scheduledPickupRelativeParts(minutes);
+  if (!parts) return "";
+  return parts.key.replace(/\{(\w+)\}/g, (whole, name: string) =>
+    name in parts.vars ? String(parts.vars[name]) : whole,
+  );
 }

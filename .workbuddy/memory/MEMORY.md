@@ -48,6 +48,28 @@
 🔴 **檔案係 CRLF**：多行 regex 前要**先 `replace(/\r\n/g,"\n")`**。
 🔴 抽函式體唔可以「搵第一個 `{`」⇒ 由宣告處逐個試配對、**取內容最長者**。門檻唔可以太細。
 
+### 6.2 i18n（英文版）三層分離（2026-10-08 修正）
+🔴 只有**第 1 層**（UI 顯示文案）翻譯。**第 2 層**（持久化資料值：`tableName`／`zoneId`／打印機 `brand`／付款方式名／店名／菜品名／枱號區名）**絕對唔譯**。**第 3 層**（實體紙單）**唔跟 UI 語言**。
+🔴🔴 **真正不變式唔係「資料值唔可以做字典 key」，而係「唔好將 `t()` 套用喺會流入持久化／打印嘅值上面」。** 「雙用值」（`堂食`／`自取`／`外賣`／`快餐`／`訂單`／`免單`／`已完成`／`收銀` …）**同時**係字典 key **同**持久化值，係合法嘅。守衛用可執行嘅全 `src/` 掃描：`/\bt\(\s*[^,()]*\.(tableName|paymentMethod|brand|zoneId)\b/`（🔴 用 `[^,()]*`，`[^)]*` 會對 placeholder 插值假報）。
+🔴 `src/lib` 嘅**純顯示 helper**（`orderSourceLabel()`／`describePosRealtimeProbe()`）：**lib 保持純中文**（可照做 unit test），喺**顯示位**包 `t(helper(x))`。改 lib 回傳英文會連**未做 i18n** 嘅 KDS 螢幕一齊變英文。同一個 helper 有未翻譯消費者時，只喺已翻譯嘅消費者包。
+🔴 **`t` 係 `useCallback([lang])`** ⇒ 切語言時係另一個 function。喺 `useEffect(…, [])` 用 `t` 兩邊都錯 ⇒ 用 `tRef`（`const tRef = useRef(t); useEffect(() => { tRef.current = t; }, [t]);`）。
+🔴🔴 **字典插入錨點**：兩個字典檔各有 **3 個** top-level object（`EN_DICT` → `SHORT_EN_DICT` → `SIDEBAR_EN_DICT`）。用 `indexOf("\r\n};")`（**第一個** = 主字典）；用 `lastIndexOf` 會靜靜落咗**側欄字典**（守衛 `#33`／`#44` 捉到）。落盤後驗：`grep -n "^export const\|^};"` 對行號範圍。字典檔係 **CRLF**。
+🔴 **`clip: []` 捉唔到「細 toast 撐高」**（`fixed` 浮層超出係正常）⇒ **11px 級提示文案，英文目標 ≤70 字**。
+🔴 未定政策：`orders-hub.tsx` 嘅 `downloadCsv()` 表頭／值暫定**唔譯**（匯出文件 ≈ 第 3 層，商家對帳用）——**動之前要問用戶**。
+🔴🔴 **標籤層標準做法**：`src/lib` 嘅標籤函式（`getOrderStatusBadge().label`／`getPaymentBadge().label`／`localOrderStatusLabel()`／`quickCompletionLabel()`／`orderSourceLabel()`／`describePosRealtimeProbe()`）**一律保持純中文**（語言無關、可單測），由 consumer 喺**顯示位**包 `t(helper(x))`。原因：同一個 `.label` 同時餵畫面（要譯）**同** CSV 匯出（唔譯）⇒ 改 lib = 兩邊一齊變。
+🔴 動態標籤（`t(badge.label)`）靜態掃描睇唔到 ⇒ 有守衛 `🔴 訂單狀態／付款徽章標籤`。⚠️ `quickCompleteLabel()`（已交付/已取餐/已完成）係**持久化 payload**，唔可以當顯示標籤。
+🔴🔴 **最隱蔽嘅漏譯：`t()` 一個「已填值」字串。** helper 回 `取餐碼 005`（已填值），字典 key 係 `取餐碼 {code}`（模板）⇒ 永遠唔相等，`lookup()` 靜靜 fallback 中文（唔 throw、唔報錯、測試全綠）。同類：`scheduledPickupRelativeText()`（`18 分鐘後`）、`autoAcceptToast().message`。**解法 = 加 `*Parts()` 回 `{ key, vars }`，顯示位 `t(parts.key, parts.vars)`，舊函式由 parts 砌返（DRY）。** 已有 `orderCodeLabelParts()` / `scheduledPickupRelativeParts()`。判斷法：回傳字串**含動態值**就唔可以直接餵 `t()`；純固定字串（`ledgerStatusLabel`/`tabLabel`/`kitchenHintText`）冇事。守衛 `🔴 唔可以 t() 一個「已填值」字串`（`BANNED` 清單，新增同類 helper 要自己補）。
+🔴 **`ToastPayload.message` 係字典 key（＋`vars`）**，唔可以係砌好嘅句子。兩個 consumer 翻譯時機唔同：`pos-app.tsx` 存**已翻譯**（顯示位 `{toast.message}`），`online-orders.tsx` 存**原文**（顯示位 `{t(toast.message, toast.vars)}`）⇒ 改 payload 形狀兩邊都要跟。
+🔴 **Pill 嘅 prop 係字典 key**：`MerchantOpenPill`/`AutoAcceptPill` 內部已 `t(label)`/`t(enabledLabel)`/`t(busyHint)` ⇒ call site **傳原文**，唔好包 `t()`（雙重翻譯；zh 睇唔出、en 靠 fallback 僥倖）。收尾 `grep 'label={t('` 應該冇命中。
+🔴 **`i18n-layer-guard` 有假守衛**：舊「紙單 label 唔准入 UI 字典」硬編 8 個字串（含 `菜品明細`）——但 `菜品明細` 係 `escpos-template.ts` 區塊名（只喺 print-center 設定頁顯示，`escpos-render.ts` 冇印過）＋ `online-orders` 彈窗標題；而真印上紙嘅 `總計`/`折扣`/`服務費` 本身已喺字典 ⇒ 前提同現實矛盾。已改成守真不變量：`escpos-render.ts`/`escpos-template.ts`/`receipt-ticket-preview.tsx` 一律唔可以 import `lang-provider`/`i18n-dict`/`useT`。
+🔴 `setToast("…")` 存嘅係字典 key，render 期 `t(toast)` ⇒ ① render 位一定要包 `t(toast)`；② 每個字面值要入字典；③ template literal toast 要手動合併 `t("… {n}", {n})`。
+🔴 `pos-order-filters.ts` 嘅 `default: String(order.status)` 同 `localOrderStatusLabel` 尾行 `return order.status` 會漏**原始英文 enum** 出畫面（加新 status 要記得補 case）。
+工具：`tools/_wrap-t-{ast,jsxtext,jsstr}.cjs`（三支 codemod，`EXCLUDE_BY_FILE` 係 **per-file** 行號地雷表）、`_apply-map.cjs`（template 對照）、**`_add-i18n-keys.cjs`（加字典 key 唯一正確入口：`indexOf` 第一個 `"\r\n};"` + 寫入後自我驗證位置；唔好用 `lastIndexOf` —— 會中側欄字典）**、`_gen-i18n-batch.cjs`、`_t-keys-missing.cjs`（兼報動態 key）、`_cjk-audit.cjs`（strip 註解＋已包 `t()` 後列出仍含中文嘅行）、`_check-keys.cjs`（加 key 前睇 coverage）。權威守衛 `src/lib/i18n-layer-guard.test.ts`（**49 條**）。
+🔴 手改批次腳本（`tools/_online-orders-*.cjs` 等）嘅**多行 old/new 一定要先 `\r\n → \n` 比對、寫入前轉返** —— 字典同元件檔都係 CRLF。
+🔴 **同一條 message 唔好同時放兩個 Edit 呼叫**（同一個檔會 race，後寫嘅會靜靜覆蓋前一個）⇒ 同一檔嘅多處改動一律寫入一支 assert 命中次數嘅 script。
+🔴 診斷頁面殘留要**開新 page 再 `goto`**；靠 HMR 會攞到半新半舊嘅 render（會見到假殘留）。`tools/_probe-orders-cjk.mjs` 可以 dump「含中文嘅葉節點＋className」定位係邊個元件。
+🔴 `npm run lint`（bare `eslint`）**本身已紅**：`tools/` 144 個 tracked `.cjs` 撞 `no-require-imports`。專案慣例係 `npx eslint <指定檔>`。
+
 ## 7 判別／取證
 `isSaleCountable()`：只計 settled／帶 `onlineOrderId` 嘅 paid，Macau 日界。id 前綴＝建單程式。`storeId` 係公開值。⭐ `tools/log-recheck.cjs --both`、`probe-anon-exposure.cjs`。🔴 量度陷阱：Vercel 一行 log＝一行 CSV 且倍數可變 ⇒ 按 `requestId` 去重；多部中繼機混算會被腰斬 ⇒ **逐 `agent_id` 拆**。🔴 anon 探測只有 24h 窗 ⇒ **睇唔到跨日行**，唔可據此斷定「DB 冇呢一行」。
 

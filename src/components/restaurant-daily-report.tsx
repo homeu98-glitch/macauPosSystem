@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { AppSidebar } from "@/components/app-sidebar";
+import { useT } from "@/components/lang-provider";
 import { DateRangeFilterChips } from "@/components/date-range-filter-chips";
 import type { CustomDateRange } from "@/lib/ledger/date-range";
 import {
@@ -108,6 +109,7 @@ function PlatformSettlementCard({
   theme: PlatformSettlementTheme;
   label: string;
 }) {
+  const t = useT();
   return (
     <div className={`mb-0 overflow-hidden rounded-xl border ${theme.border}`}>
       <div
@@ -118,7 +120,7 @@ function PlatformSettlementCard({
           {label}
         </span>
         <span className={`text-[11px] font-semibold ${theme.subtitle}`}>
-          平台財務對帳
+          {t("平台財務對帳")}
         </span>
       </div>
 
@@ -126,7 +128,7 @@ function PlatformSettlementCard({
       {totals.basis === "period" ? (
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-slate-200 bg-emerald-50/70 px-4 py-2 text-[11px] text-emerald-800">
           <span className="rounded-full bg-emerald-600 px-2 py-0.5 text-[10px] font-bold text-white">
-            帳期口徑
+            {t("帳期口徑")}
           </span>
           <span>
             以下三格為平台**帳期匯總**
@@ -144,7 +146,7 @@ function PlatformSettlementCard({
       <div className="grid grid-cols-3 divide-x divide-slate-200">
         {/* ① 應收金額（＝營業額總和，POS 即時有） */}
         <div className="px-4 py-3">
-          <div className="text-[11.5px] font-semibold text-slate-500">應收金額</div>
+          <div className="text-[11.5px] font-semibold text-slate-500">{t("應收金額")}</div>
           <div className="mt-1 truncate text-xl font-bold tabular-nums text-slate-900">
             {formatMoney(totals.receivable)}
           </div>
@@ -163,19 +165,19 @@ function PlatformSettlementCard({
             實收金額
             {totals.received === null ? (
               <span className="rounded-full bg-amber-500 px-2 py-0.5 text-[10px] font-bold text-white">
-                待對帳
+                {t("待對帳")}
               </span>
             ) : totals.basis === "period" ? (
               <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-700">
-                帳期
+                {t("帳期")}
               </span>
             ) : totals.pendingCount > 0 ? (
               <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-700">
-                部分未對帳
+                {t("部分未對帳")}
               </span>
             ) : (
               <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-700">
-                已對帳
+                {t("已對帳")}
               </span>
             )}
           </div>
@@ -201,7 +203,7 @@ function PlatformSettlementCard({
 
         {/* ③ 差額率（＝平台抽成比例） */}
         <div className="px-4 py-3">
-          <div className="text-[11.5px] font-semibold text-slate-500">平台差額率</div>
+          <div className="text-[11.5px] font-semibold text-slate-500">{t("平台差額率")}</div>
           <div
             className={`mt-1 truncate text-xl font-bold tabular-nums ${
               totals.feeRate === null ? "text-amber-600" : theme.feeValue
@@ -213,7 +215,7 @@ function PlatformSettlementCard({
           </div>
           {totals.feeRate === null ? (
             <div className="mt-1 text-[11px] text-slate-400">
-              冇實收就計唔到差額率（唔會用 0 濫竽充數）
+              {t("冇實收就計唔到差額率（唔會用 0 濫竽充數）")}
             </div>
           ) : (
             <>
@@ -636,8 +638,16 @@ const POS_ORDER_STATUS_LABELS: Record<string, string> = {
   refunded: "已退款",
 };
 
-function statusLabelOf(status: string): string {
-  return POS_ORDER_STATUS_LABELS[status] ?? status;
+/**
+ * 狀態碼 → 顯示標籤。
+ *
+ * ⚠️ 呢啲標籤係**第 1 層顯示文案**（要跟 UI 語言），唔係持久化值 ——
+ * 持久化值係 `status` 本身（`"sent_to_kitchen"` 等英文 enum）。
+ * 所以 `t` 由 caller 傳入（`node --test` 唔認 `@/` alias，唔可以喺呢個檔 import）。
+ */
+function statusLabelOf(status: string, t: (zh: string) => string): string {
+  const label = POS_ORDER_STATUS_LABELS[status];
+  return label ? t(label) : status;
 }
 
 /** 掃描 localStorage 內 macau-pos/stores/&#123;storeId&#125;/orders 同 macau-pos/orders 嘅單數，
@@ -1184,6 +1194,7 @@ export function RestaurantDailyReport(props: RestaurantDailyReportProps = {}) {
 }
 
 function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
+  const t = useT();
   // initialRange 只用作初始值；之後由用戶喺 UI 切。admin 頁面重新載入（remount）
   // 時會把上次嘅範圍傳返入嚟，避免刷新後彈返「今日」。
   const [range, setRange] = useState<ReportRangeArg>(props.initialRange ?? "today");
@@ -2276,7 +2287,9 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
         failed,
         status: collected.length === 0 ? "idle" : failed === collected.length ? "error" : "success",
         lastError:
-          failed > 0 ? `${failed} 單明細抓取失敗（金額已計入，僅菜品明細未併入）` : null,
+          failed > 0
+            ? t("{n} 單明細抓取失敗（金額已計入，僅菜品明細未併入）", { n: failed })
+            : null,
       });
     }
     void loadOnlineDetails();
@@ -2546,8 +2559,11 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
 
   const unsettledStatusLabel =
     Object.entries(pendingSplit.statusBreakdown)
-      .map(([status, n]) => `${statusLabelOf(status)} ${n} 張`)
-      .join("、") || "—";
+      // `{label} {n} 張` 係一句完整模板：中文「已送廚房（未結帳） 2 張」、
+      // 英文 "Sent to kitchen (unsettled) 2 orders" —— 語序唔同，唔可以拆開拼。
+      .map(([status, n]) => t("{label} {n} 張", { label: statusLabelOf(status, t), n }))
+      // 分隔符都係顯示文案（中文頓號 vs 英文逗號）。
+      .join(t("、")) || "—";
 
   // 手動毛利率 → 毛利 = 營業額 × 毛利率%；冇設定就用系統估算（營業額 − 進貨成本）。
   const displayGrossProfit =
@@ -2558,10 +2574,10 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
   // 讀唔到進貨數據時更要明講，否則用戶會以為毛利率真係 100%。
   const gpSubtitle =
     gpMarginPct != null
-      ? `毛利率 ${gpMarginPct}%（營業額 × ${gpMarginPct}%）`
+      ? t("毛利率 {p}%（營業額 × {p}%）", { p: gpMarginPct })
       : purchaseUnavailable
-        ? "注意：進貨數據未能讀取，未扣成本（＝營業額），僅供參考"
-        : "系統估算：營業額 − 買貨總額（已付 ＋ 未付）";
+        ? t("注意：進貨數據未能讀取，未扣成本（＝營業額），僅供參考")
+        : t("系統估算：營業額 − 買貨總額（已付 ＋ 未付）");
 
   /**
    * 沽清菜品清單。
@@ -2605,65 +2621,70 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
     if (soldOut.length >= 3) {
       out.push({
         level: "r",
-        title: `已沽清 ${soldOut.length} 款菜品`,
-        action: `即日補貨；優先處理高銷菜品（${soldOut.slice(0, 2).join("、")}）。`,
+        title: t("已沽清 {n} 款菜品", { n: soldOut.length }),
+        action: t("即日補貨；優先處理高銷菜品（{names}）。", {
+          names: soldOut.slice(0, 2).join(t("、")),
+        }),
       });
     }
     const revDrop = rev7dAvg > 0 && agg.revenue < rev7dAvg * 0.8;
     if (revDrop) {
       out.push({
         level: "r",
-        title: "營業額較 7 日均值跌超過 20%",
-        action: "推限時優惠或喚醒沉睡會員，拉升淡日營收。",
+        title: t("營業額較 7 日均值跌超過 20%"),
+        action: t("推限時優惠或喚醒沉睡會員，拉升淡日營收。"),
       });
     }
     if (onlineShare - onlineShare7d > 0.05) {
       out.push({
         level: "o",
-        title: `線上渠道佔比上升（${Math.round(onlineShare * 100)}%，7 日均值 ${Math.round(onlineShare7d * 100)}%）`,
-        action: "加強線上推廣，並確保廚房產能跟到外送單。",
+        title: t("線上渠道佔比上升（{cur}%，7 日均值 {avg}%）", {
+          cur: Math.round(onlineShare * 100),
+          avg: Math.round(onlineShare7d * 100),
+        }),
+        action: t("加強線上推廣，並確保廚房產能跟到外送單。"),
       });
     }
     if (topup7dAvg > 0 && (ledger.sel?.topupMop ?? 0) < topup7dAvg * 0.7) {
       out.push({
         level: "o",
-        title: "會員充值較 7 日均值跌超過 30%",
-        action: "推「限時儲值贈 10%」活動，喚醒會員現金回流。",
+        title: t("會員充值較 7 日均值跌超過 30%"),
+        action: t("推「限時儲值贈 10%」活動，喚醒會員現金回流。"),
       });
     }
     if (voidRate > 0.03) {
       out.push({
         level: "o",
-        title: `退菜率 ${Math.round(voidRate * 100)}%（高於 3% 閾值）`,
-        action: "檢視退菜原因，加強落單確認與出餐品質培訓。",
+        title: t("退菜率 {p}%（高於 3% 閾值）", { p: Math.round(voidRate * 100) }),
+        action: t("檢視退菜原因，加強落單確認與出餐品質培訓。"),
       });
     }
     if (discountRatio > 0.15) {
       out.push({
         level: "o",
-        title: `折扣佔比 ${Math.round(discountRatio * 100)}%（高於 15% 閾值）`,
-        action: "檢討優惠門檻，避免無謂折讓蠶食毛利。",
+        title: t("折扣佔比 {p}%（高於 15% 閾值）", { p: Math.round(discountRatio * 100) }),
+        action: t("檢討優惠門檻，避免無謂折讓蠶食毛利。"),
       });
     }
     if (agg.tables.length > 0) {
       const low = agg.tables[agg.tables.length - 1];
       out.push({
         level: "i",
-        title: `「${low.name}」使用偏低（${low.orders} 單）`,
-        action: "檢視該區擺位／排枱，必要時重新規劃或併枱。",
+        title: t("「{name}」使用偏低（{n} 單）", { name: low.name, n: low.orders }),
+        action: t("檢視該區擺位／排枱，必要時重新規劃或併枱。"),
       });
     }
     const order = { r: 0, o: 1, i: 2 } as const;
     return out.sort((a, b) => order[a.level] - order[b.level]);
-  }, [soldOut, agg, rev7dAvg, onlineShare, onlineShare7d, topup7dAvg, ledger.sel, voidRate, discountRatio]);
+  }, [soldOut, agg, rev7dAvg, onlineShare, onlineShare7d, topup7dAvg, ledger.sel, voidRate, discountRatio, t]);
 
   function pct(cur: number, prev: number | null): { arrow: string; cls: string } | null {
     if (prev === null || prev === 0) return null;
     const diff = ((cur - prev) / prev) * 100;
-    if (Math.abs(diff) < 0.5) return { arrow: "— 持平", cls: "text-slate-400" };
+    if (Math.abs(diff) < 0.5) return { arrow: t("— 持平"), cls: "text-slate-400" };
     const up = diff > 0;
     return {
-      arrow: `${up ? "▲" : "▼"} ${Math.abs(Math.round(diff))}% vs 昨日`,
+      arrow: t("{sign} {p}% vs 昨日", { sign: up ? "▲" : "▼", p: Math.abs(Math.round(diff)) }),
       cls: up ? "text-emerald-600" : "text-rose-600",
     };
   }
@@ -2727,16 +2748,22 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
           <div className="border-b border-slate-200 bg-white px-4 py-4">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
-                <div className="text-lg font-semibold text-slate-900">店鋪每日營運總結</div>
+                <div className="text-lg font-semibold text-slate-900">{t("店鋪每日營運總結")}</div>
                 <div className="mt-1 text-sm text-slate-500">
-                  {storeName} · {todayKey}（澳門）· 篩選影響全部模塊
+                  {/* ⚠️ `storeName` 係第 2 層（merchant 主檔名）、`todayKey` 係日期，
+                      兩者都**唔可以**翻譯；只譯後面嘅固定文案（2026-10-08 第 3 批）。 */}
+                  {storeName} · {todayKey}
+                  {t("（澳門）· 篩選影響全部模塊")}
                   {/* 自動刷新提示（2026-09-10）：唔講明嘅話，商家見到數字自己變咗會以為壞咗。
                       ⚠️ 2026-09-21：改為**由常數推導**（原本寫死「每 3 分鐘」）——
                       頻率調整成 10 分鐘之後，寫死嘅文案就會同實際行為唔一致（會誤導商家）。
-                      推導之後無論日後改幾多，畫面都會自動跟。 */}
+                      推導之後無論日後改幾多，畫面都會自動跟。
+                      ⚠️ 2026-10-08：文案改經 `t()`，數字用 `{n}` placeholder 傳入。 */}
                   <span className="text-slate-400">
                     {" "}
-                    · 每 {Math.round(AUTO_REFRESH_INTERVAL_MS / 60_000)} 分鐘自動更新
+                    {t("· 每 {n} 分鐘自動更新", {
+                      n: Math.round(AUTO_REFRESH_INTERVAL_MS / 60_000),
+                    })}
                   </span>
                 </div>
               </div>
@@ -2746,7 +2773,7 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                   onClick={exportCsv}
                   type="button"
                 >
-                  導出 CSV
+                  {t("導出 CSV")}
                 </button>
                 <DateRangeFilterChips
                   options={FILTERS}
@@ -2783,7 +2810,9 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
               <>
             {ledgerError ? (
               <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-                {ledgerError}
+                {/* ⚠️ state 存嘅係**字典 key（中文原文）**唔係譯文 ——
+                    render 期才 `t()`，切語言先會跟住變（2026-10-08）。 */}
+                {t(ledgerError)}
               </div>
             ) : null}
 
@@ -2795,20 +2824,23 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                 - local-fallback：雲端完全讀唔到 → 全部係本機 localStorage 訂單，唔係 DB 數字。 */}
             {debugInfo.dataSource === "cloud-partial" ? (
               <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-900">
-                <div className="font-semibold">⚠️ 雲端數據只讀到一部分，以下數字未能作準</div>
+                <div className="font-semibold">{t("⚠️ 雲端數據只讀到一部分，以下數字未能作準")}</div>
                 <div className="mt-1 text-[13px] text-amber-800">
-                  部分分頁讀取失敗（{debugInfo.lastError ?? "網絡不穩"}），未結帳筆數與營業額都會偏少。
-                  系統會自動重試，亦可稍後自行重新載入。
+                  {t(
+                    "部分分頁讀取失敗（{err}），未結帳筆數與營業額都會偏少。系統會自動重試，亦可稍後自行重新載入。",
+                    { err: debugInfo.lastError ?? t("網絡不穩") },
+                  )}
                 </div>
               </div>
             ) : null}
 
             {debugInfo.dataSource === "local-fallback" ? (
               <div className="mb-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2.5 text-sm text-rose-900">
-                <div className="font-semibold">⚠️ 雲端讀取失敗，以下為本機暫存資料，並非資料庫實際數字</div>
+                <div className="font-semibold">{t("⚠️ 雲端讀取失敗，以下為本機暫存資料，並非資料庫實際數字")}</div>
                 <div className="mt-1 text-[13px] text-rose-800">
-                  目前顯示的是本機快取的訂單，只反映本機畫面，可能與後台或其他裝置不一致。
-                  請檢查網絡後重新載入；確認資料是否已上雲，可到 POS 設定頁的「同步健康」。
+                  {t(
+                    "目前顯示的是本機快取的訂單，只反映本機畫面，可能與後台或其他裝置不一致。請檢查網絡後重新載入；確認資料是否已上雲，可到 POS 設定頁的「同步健康」。",
+                  )}
                 </div>
               </div>
             ) : null}
@@ -2818,15 +2850,21 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
             {showUnsettledNotice ? (
               <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-900">
                 <div className="font-semibold">
-                  ⚠️ 本區間有 {pendingSplit.totalInRange} 張訂單，但尚未有任何一張結帳，故營業額顯示為 0
+                  {t("⚠️ 本區間有 {n} 張訂單，但尚未有任何一張結帳，故營業額顯示為 0", {
+                    n: pendingSplit.totalInRange,
+                  })}
                 </div>
                 <div className="mt-1 text-[13px] text-amber-800">
-                  未結帳 {pendingSplit.count} 張 · 金額 {formatMoney(pendingSplit.amountMop)} · 狀態分佈：
-                  {unsettledStatusLabel}
+                  {t("未結帳 {n} 張 · 金額 {amt} · 狀態分佈：{dist}", {
+                    n: pendingSplit.count,
+                    amt: formatMoney(pendingSplit.amountMop),
+                    dist: unsettledStatusLabel,
+                  })}
                 </div>
                 <div className="mt-1 text-xs text-amber-700">
-                  營業額只統計「已結帳 / 已付款」的訂單（收入認列口徑）。訂單送廚房後需於收銀台結帳，
-                  結帳後即會計入本報表。
+                  {t(
+                    "營業額只統計「已結帳 / 已付款」的訂單（收入認列口徑）。訂單送廚房後需於收銀台結帳，結帳後即會計入本報表。",
+                  )}
                 </div>
               </div>
             ) : null}
@@ -2838,16 +2876,18 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                   auth.uid() 推導、連 merchantId 參數都冇，admin 裝置冇商戶身份 → 仍顯示為空。 */}
             {isAdminMode ? (
               <div className="mb-3 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2.5 text-sm text-sky-900">
-                <div className="font-semibold">ℹ️ 管理後台模式：線上單經 service-role 讀取已啟用</div>
+                <div className="font-semibold">{t("ℹ️ 管理後台模式：線上單經 service-role 讀取已啟用")}</div>
                 <div className="mt-1 text-[13px] text-sky-800">
-                  人流、尖峰時段、線上單計數已包含 Ledger 線上單（跨店 / 指定商家均可）。
-                  但會員充值 / 扣點等彙總 KPI 來自需要商戶身份（JWT）的 RPC，管理後台帳號冇商戶身份，
-                  故此類數字暫時唔會顯示（並非冇數據）。
+                  {t(
+                    "人流、尖峰時段、線上單計數已包含 Ledger 線上單（跨店 / 指定商家均可）。但會員充值 / 扣點等彙總 KPI 來自需要商戶身份（JWT）的 RPC，管理後台帳號冇商戶身份，故此類數字暫時唔會顯示（並非冇數據）。",
+                  )}
                 </div>
                 <div className="mt-1 text-xs text-sky-700">
-                  要睇完整會員類 KPI，請用該店商戶帳號登入 POS 後開啟報表；或為 Ledger 加上支援
+                  {/* ⚠️ `p_merchant_id` 係 SQL 參數名（第 2 層，唔可以翻譯），
+                      所以拆成三段：文案 → code → 文案。 */}
+                  {t("要睇完整會員類 KPI，請用該店商戶帳號登入 POS 後開啟報表；或為 Ledger 加上支援")}
                   <code className="mx-1 rounded bg-sky-100 px-1">p_merchant_id</code>
-                  參數嘅 admin 版 RPC。
+                  {t("參數嘅 admin 版 RPC。")}
                 </div>
               </div>
             ) : null}
@@ -2865,10 +2905,15 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                   ⚠️ 原先寫 `md:grid-cols-3 xl:grid-cols-5`，iPad 橫向內容區約 976px
                   落 `md`（3 格）→ 殘成 3-3-3-1；電腦 ≥1280 落 `xl`（5 格）。
                   家陣固定 5 欄，兩邊都係 5-5（2026-09-10 iPad 版面對齊）。
+                  ⚠️ 2026-10-08：加 `grid-cols-2 md:grid-cols-5` —— 手機（<768px）5 欄
+                  每格只剩 ~75px，英文副標題 `Offline MOP 0 · Online MOP 0` 會被**裁走**
+                  （實測 sw=34 / cw=28；中文版係勉強換行、唔裁）。
+                  `md` 斷點（768px）**唔會**改動 iPad 橫向（976px）／電腦嘅 5 欄排法 ——
+                  即係上面「iPad 與電腦版一致」嘅結論保持不變，只係補返手機。
                 */}
-                <div className="mb-3 grid grid-cols-5 gap-3">
+                <div className="mb-3 grid grid-cols-2 gap-3 md:grid-cols-5">
                   <Kpi
-                    label="營業額"
+                    label={t("營業額")}
                     /*
                      * 🔴🔴 2026-10-01（J 口徑）：大數由**毛**改為**淨**（已扣退款）。
                      *     J 明確要求：營業額格唔再單獨顯示「退款拆解」，直接出已扣退款嘅淨額，
@@ -2879,7 +2924,10 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                     value={<Money amount={onlineOfflineSplit.totalRevenueNetMop} />}
                     highlight
                     delta={pct(onlineOfflineSplit.totalRevenueNetMop, aggYest?.netRevenue ?? aggYest?.revenue ?? null)}
-                    subtitle={`線下 ${formatMoney(onlineOfflineSplit.offlineRevenueNetMop)} · 線上 ${formatMoney(onlineOfflineSplit.onlineRevenueMop)}`}
+                    subtitle={t("線下 {off} · 線上 {on}", {
+                      off: formatMoney(onlineOfflineSplit.offlineRevenueNetMop),
+                      on: formatMoney(onlineOfflineSplit.onlineRevenueMop),
+                    })}
                     /*
                      * 🔴 2026-09-28（J 口徑）：退款資訊由常駐橫幅收埋成呢個小球。
                      * 🔴 2026-10-01（J 口徑）：由 `action` 改為 `info` —— 三張金額卡
@@ -2891,9 +2939,9 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                      */
                     info={
                       <>
-                        <span className="block font-semibold text-slate-800">營業額（已扣退款）</span>
+                        <span className="block font-semibold text-slate-800">{t("營業額（已扣退款）")}</span>
                         <span className="mt-1 block">
-                          此數<span className="font-semibold">不包含退款金額</span>
+                          此數<span className="font-semibold">{t("不包含退款金額")}</span>
                           ：＝線下＋線上嘅收款 − 退款總額。
                         </span>
                         <span className="mt-1 block tabular-nums text-slate-600">
@@ -2902,10 +2950,10 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                           <br />＝ {formatMoney(onlineOfflineSplit.totalRevenueNetMop)}
                         </span>
                         <span className="mt-1 block text-[11px] text-slate-500">
-                          退款只涵蓋 POS 訂單（含線上單嘅本地投影）。
+                          {t("退款只涵蓋 POS 訂單（含線上單嘅本地投影）。")}
                         </span>
                         <span className="mt-1 block text-[11px] text-slate-500">
-                          ⚠️ Ledger 純線上單嘅退款目前冇資料來源，未計入呢個數。
+                          {t("⚠️ Ledger 純線上單嘅退款目前冇資料來源，未計入呢個數。")}
                         </span>
                       </>
                     }
@@ -2915,7 +2963,7 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                       唔可以用 Ledger RPC `order_paid_avos`（只認「已完成」）：已付款未完成嘅單會消失
                       （實案：KPI 2,984 vs 訂單明細 3,022，差 38 —— 嗰 38 係真收到嘅錢）。 */}
                   <Kpi
-                    label="應收金額合計"
+                    label={t("應收金額合計")}
                     value={<Money amount={agg.receivableTotal} />}
                     delta={null}
                     /* 🔴 2026-10-01（J 口徑）：原本寫「原價合計 + 服務費 + 稅」，但本店冇啟用
@@ -2923,17 +2971,20 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                        一詞含糊：定義係「未扣任何優惠前嘅原價」，唔講清會同「實收」混淆。
                        ⇒ 口徑解釋收埋入右上角提示球（`info`），card 面只留數字分拆。
                        ⚠️ 計法**完全冇改**（`agg.receivableTotal`），只改呈現。 */
-                    subtitle={`線下 ${formatMoney(agg.offlineReceivableTotal)} · 線上 ${formatMoney(agg.receivableTotal - agg.offlineReceivableTotal)}`}
+                    subtitle={t("線下 {off} · 線上 {on}", {
+                      off: formatMoney(agg.offlineReceivableTotal),
+                      on: formatMoney(agg.receivableTotal - agg.offlineReceivableTotal),
+                    })}
                     info={
                       <>
-                        <span className="block font-semibold text-slate-800">應收金額合計</span>
+                        <span className="block font-semibold text-slate-800">{t("應收金額合計")}</span>
                         <span className="mt-1 block">
-                          ＝<span className="font-semibold">未扣任何優惠前</span>嘅原價（單品原價 × 數量），
+                          ＝<span className="font-semibold">{t("未扣任何優惠前")}</span>嘅原價（單品原價 × 數量），
                           同下面「訂單明細」逐行加總一致。
                         </span>
                         <span className="mt-1 block text-[11px] text-slate-500">
                           同「實收金額合計」嘅差額 ＝ 全單優惠折扣 + 抹零。
-                          應收<span className="font-semibold">未扣</span>優惠，實收<span className="font-semibold">已扣</span>優惠。
+                          應收<span className="font-semibold">{t("未扣")}</span>優惠，實收<span className="font-semibold">{t("已扣")}</span>優惠。
                         </span>
                       </>
                     }
@@ -2952,46 +3003,53 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                       而退款橫幅又係 `refundCount > 0` 才出 ⇒ **冇橫幅時靜默變淨額、零提示**。
                       依家：卡 = 毛（同明細加總一致）；淨額同退款拆解一律喺下面橫幅交代。 */}
                   <Kpi
-                    label="實收金額合計"
+                    label={t("實收金額合計")}
                     value={<Money amount={agg.paidTotal} />}
                     delta={null}
                     highlight={agg.refundTotal > 0}
-                    subtitle={`線下 ${formatMoney(onlineOfflineSplit.offlineRevenueMop)} · 線上 ${formatMoney(onlineOfflineSplit.onlineRevenueMop)}`}
+                    subtitle={t("線下 {off} · 線上 {on}", {
+                      off: formatMoney(onlineOfflineSplit.offlineRevenueMop),
+                      on: formatMoney(onlineOfflineSplit.onlineRevenueMop),
+                    })}
                     info={
                       <>
-                        <span className="block font-semibold text-slate-800">實收金額合計</span>
+                        <span className="block font-semibold text-slate-800">{t("實收金額合計")}</span>
                         <span className="mt-1 block">
-                          ＝<span className="font-semibold">已扣優惠後</span>實際收到嘅錢
+                          ＝<span className="font-semibold">{t("已扣優惠後")}</span>實際收到嘅錢
                           （原價 − 全單優惠折扣 − 抹零），同下面「訂單明細」逐行加總一致。
                         </span>
                         <span className="mt-1 block text-[11px] text-slate-500">
-                          同「應收金額合計」嘅差額 ＝ 全單優惠折扣 + 抹零。
-                          呢個數係<span className="font-semibold">毛</span>（未扣退款）；
-                          扣退款後嘅落袋金額見「營業額」格嘅退款拆解。
+                          {t("同「應收金額合計」嘅差額 ＝ 全單優惠折扣 + 抹零。")}
+                          {t("呢個數係")}
+                          <span className="font-semibold">{t("毛")}</span>
+                          {t("（未扣退款）；扣退款後嘅落袋金額見「營業額」格嘅退款拆解。")}
                         </span>
                       </>
                     }
                   />
                   <Kpi
-                    label="訂單數"
+                    label={t("訂單數")}
                     value={String(onlineOfflineSplit.totalCount)}
                     delta={pct(onlineOfflineSplit.totalCount, aggYest?.count ?? null)}
-                    subtitle={`線下 ${onlineOfflineSplit.offlineCount} 單 · 線上 ${onlineOfflineSplit.onlineCount} 單`}
+                    subtitle={t("線下 {off} 單 · 線上 {on} 單", {
+                      off: onlineOfflineSplit.offlineCount,
+                      on: onlineOfflineSplit.onlineCount,
+                    })}
                     info={
                       <>
-                        <span className="block font-semibold text-slate-800">訂單數</span>
+                        <span className="block font-semibold text-slate-800">{t("訂單數")}</span>
                         <span className="mt-1 block">
-                          只計<span className="font-semibold">已結帳</span>嘅可入帳單
+                          只計<span className="font-semibold">{t("已結帳")}</span>嘅可入帳單
                           （含帶 onlineOrderId 嘅線上投影單）。
                         </span>
                         <span className="mt-1 block text-[11px] text-slate-500">
-                          未結帳（送廚中／未付款）嘅單唔會計入，請見下面「未結帳訂單」格。
+                          {t("未結帳（送廚中／未付款）嘅單唔會計入，請見下面「未結帳訂單」格。")}
                         </span>
                       </>
                     }
                   />
                   <Kpi
-                    label="客單價"
+                    label={t("客單價")}
                     value={
                       <Money
                         amount={
@@ -3012,28 +3070,36 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                        併入「客單價」嘅副標題 ＋ 提示球，唔再另佔一格。 */
                     subtitle={
                       pendingSplit.count > 0
-                        ? `未結帳 ${pendingSplit.count} 張 · ${formatMoney(pendingSplit.amountMop)} · ${unsettledStatusLabel}`
-                        : "冇待收款訂單"
+                        ? t("未結帳 {n} 張 · {amt} · {dist}", {
+                            n: pendingSplit.count,
+                            amt: formatMoney(pendingSplit.amountMop),
+                            dist: unsettledStatusLabel,
+                          })
+                        : t("冇待收款訂單")
                     }
                     info={
                       <>
-                        <span className="block font-semibold text-slate-800">客單價</span>
+                        <span className="block font-semibold text-slate-800">{t("客單價")}</span>
                         <span className="mt-1 block">
-                          ＝營業額 ÷ 訂單數（兩邊同源，都係線下 + 線上）。
+                          {t("＝營業額 ÷ 訂單數（兩邊同源，都係線下 + 線上）。")}
                         </span>
                         <span className="mt-1 block text-[11px] text-slate-500">
-                          用嘅係毛營業額，唔係扣除退款後嘅淨額。
+                          {t("用嘅係毛營業額，唔係扣除退款後嘅淨額。")}
                         </span>
                         <span className="mt-1 block border-t border-slate-100 pt-1 font-semibold text-slate-800">
-                          未結帳訂單
+                          {t("未結帳訂單")}
                         </span>
                         <span className="mt-1 block">
-                          已落單但<span className="font-semibold">未結帳</span>嘅單
-                          （送廚中／已出餐／未付款等）：{pendingSplit.count} 張 ·
-                          {formatMoney(pendingSplit.amountMop)} · {unsettledStatusLabel}。
+                          {t("已落單但")}
+                          <span className="font-semibold">{t("未結帳")}</span>
+                          {t("嘅單（送廚中／已出餐／未付款等）：{n} 張 · {amt} · {dist}。", {
+                            n: pendingSplit.count,
+                            amt: formatMoney(pendingSplit.amountMop),
+                            dist: unsettledStatusLabel,
+                          })}
                         </span>
                         <span className="mt-1 block text-[11px] text-slate-500">
-                          呢啲單唔計入營業額／應收／實收 —— 錢未收到。
+                          {t("呢啲單唔計入營業額／應收／實收 —— 錢未收到。")}
                         </span>
                       </>
                     }
@@ -3050,7 +3116,7 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                 */}
                 <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
                   <Kpi
-                    label="買貨總額"
+                    label={t("買貨總額")}
                     value={
                       purchaseUnavailable ? (
                         <span className="text-slate-400">—</span>
@@ -3059,12 +3125,12 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                       )
                     }
                     delta={null}
-                    subtitle={`共 ${purchase.sel?.count ?? 0} 張收據 · 含未付`}
+                    subtitle={t("共 {n} 張收據 · 含未付", { n: purchase.sel?.count ?? 0 })}
                     info={
                       <>
-                        <span className="block font-semibold text-slate-800">買貨總額</span>
+                        <span className="block font-semibold text-slate-800">{t("買貨總額")}</span>
                         <span className="mt-1 block">
-                          ＝本期間所有進貨收據嘅總額（已付 ＋ 未付）。
+                          {t("＝本期間所有進貨收據嘅總額（已付 ＋ 未付）。")}
                         </span>
                         <span className="mt-1 block text-[11px] text-slate-500">
                           呢個係「入貨當期認成本」嘅口徑，比只睇「已付」準
@@ -3075,7 +3141,7 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                     }
                   />
                   <Kpi
-                    label="已付支出"
+                    label={t("已付支出")}
                     value={
                       purchaseUnavailable ? (
                         <span className="text-slate-400">—</span>
@@ -3084,12 +3150,12 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                       )
                     }
                     delta={null}
-                    subtitle="本期間現金已付出嘅貨款"
+                    subtitle={t("本期間現金已付出嘅貨款")}
                     info={
                       <>
-                        <span className="block font-semibold text-slate-800">已付支出</span>
+                        <span className="block font-semibold text-slate-800">{t("已付支出")}</span>
                         <span className="mt-1 block">
-                          ＝本期間已付款嘅進貨收據總額（現金流口徑）。
+                          {t("＝本期間已付款嘅進貨收據總額（現金流口徑）。")}
                         </span>
                         <span className="mt-1 block text-[11px] text-slate-500">
                           係獨立參考數，**唔可以**同上面「應收／實收」加減 ——
@@ -3099,7 +3165,7 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                     }
                   />
                   <Kpi
-                    label="未付支出"
+                    label={t("未付支出")}
                     value={
                       purchaseUnavailable ? (
                         <span className="text-slate-400">—</span>
@@ -3108,12 +3174,12 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                       )
                     }
                     delta={null}
-                    subtitle="本期間已入貨但未付款嘅貨款"
+                    subtitle={t("本期間已入貨但未付款嘅貨款")}
                     info={
                       <>
-                        <span className="block font-semibold text-slate-800">未付支出</span>
+                        <span className="block font-semibold text-slate-800">{t("未付支出")}</span>
                         <span className="mt-1 block">
-                          ＝本期間已入貨（收據已開）但<span className="font-semibold">未付款</span>嘅金額。
+                          ＝本期間已入貨（收據已開）但<span className="font-semibold">{t("未付款")}</span>嘅金額。
                         </span>
                         <span className="mt-1 block text-[11px] text-slate-500">
                           月結／賒數貨一般落呢邊。呢筆錢遲啲要付，
@@ -3123,11 +3189,11 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                     }
                   />
                   <Kpi
-                    label="毛利（估）"
+                    label={t("毛利（估）")}
                     value={
                       gpEditing ? (
                         <span className="flex items-center gap-1">
-                          <span className="text-[11px] font-medium text-slate-400">毛利率</span>
+                          <span className="text-[11px] font-medium text-slate-400">{t("毛利率")}</span>
                           <input
                             autoFocus
                             type="number"
@@ -3156,16 +3222,16 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                     subtitle={gpSubtitle}
                     info={
                       <>
-                        <span className="block font-semibold text-slate-800">毛利（估）</span>
+                        <span className="block font-semibold text-slate-800">{t("毛利（估）")}</span>
                         <span className="mt-1 block">
                           {gpMarginPct != null
                             ? `手動設定毛利率：營業額 × ${gpMarginPct}%。`
                             : "系統估算：營業額 − 買貨總額（已付 ＋ 未付）。"}
                         </span>
                         <span className="mt-1 block text-[11px] text-slate-500">
-                          成本用嘅係<span className="font-semibold">買貨總額</span>（含未付），
+                          成本用嘅係<span className="font-semibold">{t("買貨總額")}</span>（含未付），
                           ＝入貨當期認成本 —— 比只用「已付」準（月結貨唔會漏計）。
-                          但仍<span className="font-semibold">未扣存貨變動</span>
+                          但仍<span className="font-semibold">{t("未扣存貨變動")}</span>
                           （入大批貨當期毛利會偏低；冇入貨當期會偏高）。
                           要更準可撳右上角 edit 直接輸入毛利率。
                         </span>
@@ -3178,13 +3244,13 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                             onClick={saveGpOverride}
                             className="text-[11px] font-semibold text-orange-600 hover:underline"
                           >
-                            儲存
+                            {t("儲存")}
                           </button>
                           <button
                             onClick={() => setGpEditing(false)}
                             className="text-[11px] text-slate-400 hover:underline"
                           >
-                            取消
+                            {t("取消")}
                           </button>
                         </div>
                       ) : (
@@ -3194,7 +3260,7 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                             setGpEditing(true);
                           }}
                           className="flex items-center gap-0.5 rounded-md px-1.5 py-0.5 text-[11px] text-slate-400 transition-colors hover:bg-orange-50 hover:text-orange-600"
-                          title="編輯毛利預估值"
+                          title={t("編輯毛利預估值")}
                         >
                           <svg viewBox="0 0 16 16" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="1.5">
                             <path d="M11 2l3 3L6 13l-3.5.5L3 10z" strokeLinejoin="round" />
@@ -3218,23 +3284,23 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                 */}
                 <details className="mb-4 rounded-2xl border border-slate-200 bg-white">
                   <summary className="flex cursor-pointer flex-wrap items-center gap-x-3 gap-y-1 px-4 py-3">
-                    <span className="text-base font-semibold text-slate-900">會員錢包</span>
-                    <span className="text-[11px] text-slate-400">負債口徑 · 唔屬營業額</span>
+                    <span className="text-base font-semibold text-slate-900">{t("會員錢包")}</span>
+                    <span className="text-[11px] text-slate-400">{t("負債口徑 · 唔屬營業額")}</span>
                     <span className="ml-auto flex flex-wrap items-baseline gap-x-5 gap-y-1">
                       <span className="text-[11px] text-slate-400">
-                        餘額總額{" "}
+                        {t("餘額總額")}{" "}
                         <span className="text-sm font-semibold tabular-nums text-slate-900">
                           {ledger.sel?.balanceTotalMop != null ? formatMoney(ledger.sel.balanceTotalMop) : "—"}
                         </span>
                       </span>
                       <span className="text-[11px] text-slate-400">
-                        充值{" "}
+                        {t("充值")}{" "}
                         <span className="text-sm font-semibold tabular-nums text-slate-900">
                           {formatMoney(ledger.sel?.topupMop ?? 0)}
                         </span>
                       </span>
                       <span className="text-[11px] text-slate-400">
-                        扣點{" "}
+                        {t("扣點")}{" "}
                         <span className="text-sm font-semibold tabular-nums text-slate-900">
                           {formatMoney(ledger.sel?.deductMop ?? 0)}
                         </span>
@@ -3244,8 +3310,8 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                   <div className="grid gap-1 border-t border-slate-100 px-4 py-3">
                     <div className="flex items-baseline justify-between gap-3 py-1.5">
                       <span className="text-sm text-slate-700">
-                        餘額總額（仲欠客人幾多）
-                        <span className="ml-2 text-[11px] text-slate-400">負債口徑，唔可以當營業額</span>
+                        {t("餘額總額（仲欠客人幾多）")}
+                        <span className="ml-2 text-[11px] text-slate-400">{t("負債口徑，唔可以當營業額")}</span>
                       </span>
                       <span className="shrink-0 text-sm font-semibold tabular-nums text-slate-900">
                         {ledger.sel?.balanceTotalMop != null ? formatMoney(ledger.sel.balanceTotalMop) : "—"}
@@ -3253,10 +3319,12 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                     </div>
                     <div className="flex items-baseline justify-between gap-3 py-1.5">
                       <span className="text-sm text-slate-700">
-                        會員充值
+                        {t("會員充值")}
                         <span className="ml-2 text-[11px] text-slate-400">
-                          實際 {formatMoney(ledger.sel?.topupPaidMop ?? 0)} · 贈送{" "}
-                          {formatMoney(ledger.sel?.topupGiftMop ?? 0)}；只有「實際」算收入
+                          {t("實際 {paid} · 贈送 {gift}；只有「實際」算收入", {
+                            paid: formatMoney(ledger.sel?.topupPaidMop ?? 0),
+                            gift: formatMoney(ledger.sel?.topupGiftMop ?? 0),
+                          })}
                         </span>
                       </span>
                       <span className="shrink-0 text-sm font-semibold tabular-nums text-slate-900">
@@ -3265,10 +3333,13 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                     </div>
                     <div className="flex items-baseline justify-between gap-3 py-1.5">
                       <span className="text-sm text-slate-700">
-                        會員扣點
+                        {t("會員扣點")}
                         <span className="ml-2 text-[11px] text-slate-400">
-                          已付 {formatMoney(ledger.sel?.deductPaidMop ?? 0)} · 贈送{" "}
-                          {formatMoney(ledger.sel?.deductGiftMop ?? 0)}；之前充值时已收，唔再計一次
+                          {/* ⚠️ 原文 `充值時` 誤寫成簡體 `充值时` —— 順手修正（2026-10-08）。 */}
+                          {t("已付 {paid} · 贈送 {gift}；之前充值時已收，唔再計一次", {
+                            paid: formatMoney(ledger.sel?.deductPaidMop ?? 0),
+                            gift: formatMoney(ledger.sel?.deductGiftMop ?? 0),
+                          })}
                         </span>
                       </span>
                       <span className="shrink-0 text-sm font-semibold tabular-nums text-slate-900">
@@ -3316,14 +3387,14 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                     <PlatformSettlementCard
                       totals={mfoodSettlement}
                       theme={MFOOD_THEME}
-                      label="MFOOD 結算"
+                      label={t("MFOOD 結算")}
                     />
                   ) : null}
                   {showAomi ? (
                     <PlatformSettlementCard
                       totals={aomiSettlement}
                       theme={AOMI_THEME}
-                      label="澳覓 結算"
+                      label={t("澳覓 結算")}
                     />
                   ) : null}
                 </div>
@@ -3379,8 +3450,8 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                 </div>
                 <div className="mt-1 text-[11px] text-amber-700">
                   {agg.refundCount > 0
-                    ? "⚠️ 退款單（含部分退款）原本被排除在營業額之外；「淨營業額」已扣回退款，＝實際落袋金額。"
-                    : "本期間沒有任何退款單，所以「營業額」＝「毛實收」＝「實收金額合計」，三個數必然相同。"}
+                    ? t("⚠️ 退款單（含部分退款）原本被排除在營業額之外；「淨營業額」已扣回退款，＝實際落袋金額。")
+                    : t("本期間沒有任何退款單，所以「營業額」＝「毛實收」＝「實收金額合計」，三個數必然相同。")}
                 </div>
               </div>
             ) : null}
@@ -3398,26 +3469,29 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
             {purchaseUnavailable ? null : purchase.sel && purchase.sel.count > 0 ? (
               <div className="mb-4">
                 <Card
-                  title="買貨明細"
-                  tag={`${purchase.sel.count} 張收據 · ${purchase.sel.itemsTotal} 款品項`}
+                  title={t("買貨明細")}
+                  tag={t("{n} 張收據 · {k} 款品項", {
+                    n: purchase.sel.count,
+                    k: purchase.sel.itemsTotal,
+                  })}
                 >
                   <div className="mb-4 grid gap-4 lg:grid-cols-2">
                     {/* 左：貨品細項（按金額倒序，API 已排好） */}
                     <div>
                       <div className="mb-2 text-xs font-semibold text-slate-500">
-                        貨品細項（按金額）
+                        {t("貨品細項（按金額）")}
                       </div>
                       {purchase.sel.items.length === 0 ? (
-                        <div className="text-sm text-slate-400">本期間冇貨品細項資料。</div>
+                        <div className="text-sm text-slate-400">{t("本期間冇貨品細項資料。")}</div>
                       ) : (
                         <>
                           <table className="w-full text-sm">
                             <thead>
                               <tr className="text-left text-[11px] text-slate-400">
-                                <th className="pb-1 font-medium">品項</th>
-                                <th className="pb-1 text-right font-medium">數量</th>
-                                <th className="pb-1 text-right font-medium">單價</th>
-                                <th className="pb-1 text-right font-medium">金額</th>
+                                <th className="pb-1 font-medium">{t("品項")}</th>
+                                <th className="pb-1 text-right font-medium">{t("數量")}</th>
+                                <th className="pb-1 text-right font-medium">{t("單價")}</th>
+                                <th className="pb-1 text-right font-medium">{t("金額")}</th>
                               </tr>
                             </thead>
                             <tbody className="tabular-nums">
@@ -3437,7 +3511,7 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                                 </tr>
                               ))}
                               <tr className="border-t-2 border-slate-300 font-semibold text-slate-900">
-                                <td className="py-1.5 pr-2">合計</td>
+                                <td className="py-1.5 pr-2">{t("合計")}</td>
                                 <td className="py-1.5 text-right text-slate-400">—</td>
                                 <td className="py-1.5 text-right text-slate-400">—</td>
                                 <td className="py-1.5 text-right">
@@ -3447,9 +3521,12 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                             </tbody>
                           </table>
                           <div className="mt-2 text-[11px] text-slate-400">
-                            以庫存「品項」為單位聚合 · 同名品項跨收據合併 · 顯示前{" "}
-                            {Math.min(5, purchase.sel.items.length)} 項
-                            {purchase.sel.itemsTotal > 5 ? `（共 ${purchase.sel.itemsTotal} 款）` : ""}
+                            {t("以庫存「品項」為單位聚合 · 同名品項跨收據合併 · 顯示前 {n} 項", {
+                              n: Math.min(5, purchase.sel.items.length),
+                            })}
+                            {purchase.sel.itemsTotal > 5
+                              ? t("（共 {n} 款）", { n: purchase.sel.itemsTotal })
+                              : ""}
                           </div>
                         </>
                       )}
@@ -3457,16 +3534,16 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
 
                     {/* 右：付款方式分佈 */}
                     <div>
-                      <div className="mb-2 text-xs font-semibold text-slate-500">付款方式分佈</div>
+                      <div className="mb-2 text-xs font-semibold text-slate-500">{t("付款方式分佈")}</div>
                       {purchase.sel.paymentMethodBreakdown.length === 0 ? (
-                        <div className="text-sm text-slate-400">本期間冇付款方式資料。</div>
+                        <div className="text-sm text-slate-400">{t("本期間冇付款方式資料。")}</div>
                       ) : (
                         <table className="w-full text-sm">
                           <thead>
                             <tr className="text-left text-[11px] text-slate-400">
-                              <th className="pb-1 font-medium">付款方式</th>
-                              <th className="pb-1 text-right font-medium">張數</th>
-                              <th className="pb-1 text-right font-medium">金額</th>
+                              <th className="pb-1 font-medium">{t("付款方式")}</th>
+                              <th className="pb-1 text-right font-medium">{t("張數")}</th>
+                              <th className="pb-1 text-right font-medium">{t("金額")}</th>
                             </tr>
                           </thead>
                           <tbody className="tabular-nums">
@@ -3480,7 +3557,7 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                               </tr>
                             ))}
                             <tr className="border-t-2 border-slate-300 font-semibold text-slate-900">
-                              <td className="py-1.5 pr-2">合計</td>
+                              <td className="py-1.5 pr-2">{t("合計")}</td>
                               <td className="py-1.5 text-right">{purchase.sel.count}</td>
                               <td className="py-1.5 text-right">{formatMoney(purchase.sel.total)}</td>
                             </tr>
@@ -3494,7 +3571,7 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                   {purchase.sel.monthlyExpenses.length > 0 ? (
                     <div>
                       <div className="mb-2 text-xs font-semibold text-slate-500">
-                        近 6 個月買貨支出
+                        {t("近 6 個月買貨支出")}
                       </div>
                       <div className="flex items-end gap-2" style={{ height: 96 }}>
                         {(() => {
@@ -3527,7 +3604,10 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                           .map((m) => `${m.name} ${formatMoney(m.amount)}`)
                           .join(" · ")}
                         {purchase.sel.trend.up + purchase.sel.trend.down > 0
-                          ? ` · 單價上升 ${purchase.sel.trend.up} 款 · 下降 ${purchase.sel.trend.down} 款`
+                          ? t(" · 單價上升 {up} 款 · 下降 {down} 款", {
+                              up: purchase.sel.trend.up,
+                              down: purchase.sel.trend.down,
+                            })
                           : ""}
                       </div>
                     </div>
@@ -3561,11 +3641,11 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
             ) : null}
 
             <Card
-              title="訂單明細"
-              tag={`共 ${agg.orderDetails.length} 張 · 結賬時間倒序`}
+              title={t("訂單明細")}
+              tag={t("共 {n} 張 · 結賬時間倒序", { n: agg.orderDetails.length })}
             >
               {agg.orderDetails.length === 0 ? (
-                <div className="text-sm text-slate-500">篩選範圍內暫無已結帳訂單。</div>
+                <div className="text-sm text-slate-500">{t("篩選範圍內暫無已結帳訂單。")}</div>
               ) : (
                 <>
                   <div className="max-h-[420px] overflow-auto rounded-xl border border-slate-200 bg-white">
@@ -3598,7 +3678,7 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                  同 Ledger `dishes[]`（migration 0060）一致。
             */}
             <div className="mb-4">
-              <Card title="菜品銷售排行" tag="按下單當時快照名稱 · 線上＋線下 · 按金額由高到低">
+              <Card title={t("菜品銷售排行")} tag={t("按下單當時快照名稱 · 線上＋線下 · 按金額由高到低")}>
                 {agg.dishes.length === 0 ? (
                   <Empty />
                 ) : (
@@ -3644,7 +3724,7 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                   <div className="max-h-[80vh] w-full max-w-2xl overflow-hidden rounded-2xl bg-white p-4 shadow-xl">
                     <div className="mb-3 flex items-center justify-between">
                       <div>
-                        <div className="text-base font-semibold text-slate-900">菜品銷售排行</div>
+                        <div className="text-base font-semibold text-slate-900">{t("菜品銷售排行")}</div>
                         <div className="text-xs text-slate-500">共 {agg.dishes.length} 個菜品 · 每頁 {DISHES_PER_PAGE} 個</div>
                       </div>
                       <button
@@ -3652,7 +3732,7 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                         onClick={() => setDishModalOpen(false)}
                         className="rounded-lg bg-slate-100 px-3 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-200"
                       >
-                        關閉
+                        {t("關閉")}
                       </button>
                     </div>
                     <div className="max-h-[55vh] overflow-y-auto pr-1">
@@ -3671,11 +3751,16 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                                     />
                                   </div>
                                   <div className="mt-0.5 pl-8 text-xs text-slate-500">
-                                    線下 {d.offlineQty} · 線上 {d.onlineQty}
+                                    {t("線下 {off} · 線上 {on}", {
+                                      off: d.offlineQty,
+                                      on: d.onlineQty,
+                                    })}
                                   </div>
                                 </div>
                                 <div className="shrink-0 text-right">
-                                  <div className="text-sm font-semibold text-slate-900">{d.offlineQty + d.onlineQty} 份</div>
+                                  <div className="text-sm font-semibold text-slate-900">
+                                    {t("{n} 份", { n: d.offlineQty + d.onlineQty })}
+                                  </div>
                                   <div className="text-xs text-slate-400">{formatMoney(d.revenue)}</div>
                                 </div>
                               </div>
@@ -3692,7 +3777,7 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                           onClick={() => setDishModalPage((p) => Math.max(1, p - 1))}
                           className="rounded-lg bg-slate-100 px-3 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-200 disabled:opacity-40"
                         >
-                          上一頁
+                          {t("上一頁")}
                         </button>
                         <span className="text-sm text-slate-600">
                           第 {dishModalPage} / {Math.ceil(agg.dishes.length / DISHES_PER_PAGE)} 頁
@@ -3703,7 +3788,7 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                           onClick={() => setDishModalPage((p) => Math.min(Math.ceil(agg.dishes.length / DISHES_PER_PAGE), p + 1))}
                           className="rounded-lg bg-slate-100 px-3 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-200 disabled:opacity-40"
                         >
-                          下一頁
+                          {t("下一頁")}
                         </button>
                       </div>
                     ) : null}
@@ -3717,36 +3802,39 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                 ⚠️ 位置：由 KPI 帶下方移到呢度（2026-09-10）。KPI 下面嘅第一、二個區塊
                 要係「訂單明細 → 菜品銷售排行」（用戶指定順序），所以食材消耗讓位。 */}
             <div className="mb-4 grid gap-4 lg:grid-cols-2">
-              <Card title="食材消耗（本月）" tag="BOM × 已售份數">
+              <Card title={t("食材消耗（本月）")} tag={t("BOM × 已售份數")}>
                 {!consMonth.hasRecipes ? (
                   <div>
-                    <div className="text-xs text-slate-400">尚未設定菜品配方，模塊顯示空白。</div>
+                    <div className="text-xs text-slate-400">{t("尚未設定菜品配方，模塊顯示空白。")}</div>
                     <Link
                       href="/reports/bom"
                       className="mt-2 inline-block rounded-lg border border-dashed border-orange-300 px-3 py-1.5 text-xs font-semibold text-orange-600 hover:bg-orange-50"
                     >
-                      前往「配方管理」填寫 →
+                      {t("前往「配方管理」填寫 →")}
                     </Link>
                   </div>
                 ) : (
                   <div>
                     <div className="text-3xl font-extrabold text-orange-600">{formatMoney(consMonth.totalAmount)}</div>
                     <div className="mt-1 text-xs text-slate-500">
-                      本月食材成本（至今日）· {consMonth.kinds} 款食材
+                      {t("本月食材成本（至今日）· {n} 款食材", { n: consMonth.kinds })}
                     </div>
                     <div className="mt-2 text-xs text-slate-400">
-                      選取範圍（{FILTERS.find((f) => f.key === range)?.label}）：{formatMoney(consRange.totalAmount)} ·{" "}
-                      {consRange.kinds} 款
+                      {t("選取範圍（{range}）：{amt} · ", {
+                        range: t(FILTERS.find((f) => f.key === range)?.label ?? ""),
+                        amt: formatMoney(consRange.totalAmount),
+                      })}
+                      {t("{n} 款", { n: consRange.kinds })}
                     </div>
                   </div>
                 )}
               </Card>
 
-              <Card title="食材使用量排行" tag="本月 · 按成本">
+              <Card title={t("食材使用量排行")} tag={t("本月 · 按成本")}>
                 {!consMonth.hasRecipes ? (
                   <Empty />
                 ) : consMonth.rows.length === 0 ? (
-                  <div className="text-xs text-slate-400">本月暫無已售菜品配對到配方。</div>
+                  <div className="text-xs text-slate-400">{t("本月暫無已售菜品配對到配方。")}</div>
                 ) : (
                   <div className="grid gap-1">
                     {consMonth.rows.slice(0, 8).map((r, i) => (
@@ -3780,21 +3868,21 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
               ②③ 之前會令 `in_store` / `balance` 等Ledger enum 出現喺一張「線下」卡裡 = 語意矛盾。
               改名「店內收款」因為三者都係**本店實際收到嘅錢**，同一批單、同一口徑。*/}
             <Card
-              title="支付方式分項（店內收款）"
-              tag="涵蓋範圍內所有已結帳單：店內 POS 單＋線上單投影＋Ledger 純線上單（皆為本店實際收款，各單只計一次）。應收 = 未扣優惠前嘅原價 · 實收 = order.total · 已扣退款；各行實收相加 = 上方「實收金額合計」"
+              title={t("支付方式分項（店內收款）")}
+              tag={t("涵蓋範圍內所有已結帳單：店內 POS 單＋線上單投影＋Ledger 純線上單（皆為本店實際收款，各單只計一次）。應收 = 未扣優惠前嘅原價 · 實收 = order.total · 已扣退款；各行實收相加 = 上方「實收金額合計」")}
             >
               {Object.keys(agg.paymentBreakdown).length === 0 ? (
-                <div className="text-sm text-slate-500">篩選範圍內暫無已結帳訂單。</div>
+                <div className="text-sm text-slate-500">{t("篩選範圍內暫無已結帳訂單。")}</div>
               ) : (
                 <div className="overflow-auto rounded-xl border border-slate-200">
                   <table className="w-full border-collapse text-sm">
                     <thead className="bg-slate-50 text-left text-xs font-semibold text-slate-500">
                       <tr>
-                        <th className="border-b border-slate-200 px-3 py-2">支付方式</th>
-                        <th className="border-b border-slate-200 px-3 py-2 text-right">訂單數</th>
-                        <th className="border-b border-slate-200 px-3 py-2 text-right">應收金額合計</th>
-                        <th className="border-b border-slate-200 px-3 py-2 text-right">實收金額合計</th>
-                        <th className="border-b border-slate-200 px-3 py-2 text-right">折扣差額</th>
+                        <th className="border-b border-slate-200 px-3 py-2">{t("支付方式")}</th>
+                        <th className="border-b border-slate-200 px-3 py-2 text-right">{t("訂單數")}</th>
+                        <th className="border-b border-slate-200 px-3 py-2 text-right">{t("應收金額合計")}</th>
+                        <th className="border-b border-slate-200 px-3 py-2 text-right">{t("實收金額合計")}</th>
+                        <th className="border-b border-slate-200 px-3 py-2 text-right">{t("折扣差額")}</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -3829,7 +3917,7 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                         const totalPaid = Object.values(agg.paymentBreakdown).reduce((s, b) => s + b.paid, 0);
                         return (
                           <tr className="bg-slate-50 text-sm font-semibold text-slate-900">
-                            <td className="px-3 py-2">合計</td>
+                            <td className="px-3 py-2">{t("合計")}</td>
                             <td className="px-3 py-2 text-right">{totalCount}</td>
                             <td className="px-3 py-2 text-right">{formatMoney(totalReceivable)}</td>
                             <td className="px-3 py-2 text-right text-emerald-700">{formatMoney(totalPaid)}</td>
@@ -3849,9 +3937,9 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
 
             {/* 模塊 7 + 模塊 8 */}
             <div className="mb-4 grid gap-4 md:grid-cols-2">
-              <Card title="沽清菜品" tag="即時">
+              <Card title={t("沽清菜品")} tag={t("即時")}>
                 <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-bold ${soldOut.length > 0 ? "bg-rose-100 text-rose-700" : "bg-emerald-100 text-emerald-700"}`}>
-                  {soldOut.length} 款沽清
+                  {t("{n} 款沽清", { n: soldOut.length })}
                 </span>
                 {soldOut.length > 0 ? (
                   <div className="mt-2 flex flex-wrap gap-2">
@@ -3862,23 +3950,25 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                     ))}
                   </div>
                 ) : (
-                  <div className="mt-2 text-xs text-slate-400">暫無沽清菜品。</div>
+                  <div className="mt-2 text-xs text-slate-400">{t("暫無沽清菜品。")}</div>
                 )}
               </Card>
 
-              <Card title="最熱門桌台排行" tag="單數 · 覆蓋人數">
+              <Card title={t("最熱門桌台排行")} tag={t("單數 · 覆蓋人數")}>
                 {agg.tables.length === 0 ? (
                   <Empty />
                 ) : (
                   <div className="grid gap-1">
-                    {agg.tables.slice(0, 6).map((t, i) => (
-                      <div key={t.tableId} className="flex items-center justify-between border-b border-slate-100 py-2 last:border-0">
+                    {/* ⚠️ map 參數**唔可以叫 `t`** —— 會 shadow 翻譯函式 `t()`，
+                        之前就係咁樣，令呢個 card 完全冇得 i18n（2026-10-08 修）。 */}
+                    {agg.tables.slice(0, 6).map((row, i) => (
+                      <div key={row.tableId} className="flex items-center justify-between border-b border-slate-100 py-2 last:border-0">
                         <div className="text-sm font-semibold text-slate-900">
                           <span className="mr-2 text-xs text-slate-400">{i + 1}.</span>
-                          {t.name}
+                          {row.name}
                         </div>
                         <div className="text-sm text-slate-700">
-                          {t.orders} 單 · {t.covers} 人
+                          {t("{orders} 單 · {covers} 人", { orders: row.orders, covers: row.covers })}
                         </div>
                       </div>
                     ))}
@@ -3890,13 +3980,13 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
             {/* 補充：尖峰時段 + 出餐時間 + 營運指標 */}
             <div className="mb-4 grid gap-4 md:grid-cols-2 lg:grid-cols-3">
               <Card
-                title="尖峰時段（每小時訂單）"
+                title={t("尖峰時段（每小時訂單）")}
                 tag={
                   onlineFetchInfo.status === "success"
-                    ? `POS+Ledger · 高峰約 ${peakHour}:00`
+                    ? t("POS+Ledger · 高峰約 {h}:00", { h: peakHour })
                     : onlineFetchInfo.status === "error"
-                      ? `僅 POS · 高峰約 ${peakHour}:00`
-                      : `POS · 高峰約 ${peakHour}:00`
+                      ? t("僅 POS · 高峰約 {h}:00", { h: peakHour })
+                      : t("POS · 高峰約 {h}:00", { h: peakHour })
                 }
               >
                 <div className="grid grid-cols-12 gap-1">
@@ -3906,7 +3996,12 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                     return (
                       <div
                         key={h}
-                        title={`${h}:00 · POS ${offline} 單 + Ledger 線上 ${online} 單 = 共 ${c} 單`}
+                        title={t("{h}:00 · POS {offline} 單 + Ledger 線上 {online} 單 = 共 {c} 單", {
+                          h,
+                          offline,
+                          online,
+                          c,
+                        })}
                         className="relative flex h-7 items-end justify-center overflow-hidden rounded text-[9px] text-white"
                         style={{
                           background: c >= maxHour * 0.7 ? "#ef4444" : c >= maxHour * 0.4 ? "#fb923c" : "#cbd5e1",
@@ -3926,9 +4021,9 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                   })}
                 </div>
                 <div className="mt-2 grid grid-cols-3 gap-2 text-center">
-                  <Metric label="退菜率" value={`${Math.round(voidRate * 100)}%`} warn={voidRate > 0.03} />
-                  <Metric label="折扣佔比" value={`${Math.round(discountRatio * 100)}%`} warn={discountRatio > 0.15} />
-                  <Metric label="線上佔比" value={`${Math.round(onlineShare * 100)}%`} />
+                  <Metric label={t("退菜率")} value={`${Math.round(voidRate * 100)}%`} warn={voidRate > 0.03} />
+                  <Metric label={t("折扣佔比")} value={`${Math.round(discountRatio * 100)}%`} warn={discountRatio > 0.15} />
+                  <Metric label={t("線上佔比")} value={`${Math.round(onlineShare * 100)}%`} />
                 </div>
                 {onlineFetchInfo.status === "error" ? (
                   <div className="mt-2 text-[11px] text-amber-700">
@@ -3937,29 +4032,37 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                 ) : null}
                 {onlineFetchInfo.status === "success" && onlineFetchInfo.outOfRange > 0 ? (
                   <div className="mt-1 text-[11px] text-slate-400">
-                    Ledger 抓取 {onlineFetchInfo.fetched} 單 · 入圖 {onlineFetchInfo.counted} · 越界 {onlineFetchInfo.outOfRange}
-                    {onlineFetchInfo.cancelled > 0 ? ` · 取消 ${onlineFetchInfo.cancelled}` : ""}
-                    {onlineFetchInfo.unpaid > 0 ? ` · 未付 ${onlineFetchInfo.unpaid}` : ""}
+                    {t("Ledger 抓取 {f} 單 · 入圖 {c} · 越界 {o}", {
+                      f: onlineFetchInfo.fetched,
+                      c: onlineFetchInfo.counted,
+                      o: onlineFetchInfo.outOfRange,
+                    })}
+                    {onlineFetchInfo.cancelled > 0
+                      ? t(" · 取消 {n}", { n: onlineFetchInfo.cancelled })
+                      : ""}
+                    {onlineFetchInfo.unpaid > 0 ? t(" · 未付 {n}", { n: onlineFetchInfo.unpaid }) : ""}
                   </div>
                 ) : null}
               </Card>
 
-              <Card title="營運指標 · 同環比" tag="vs 7 日均值">
+              <Card title={t("營運指標 · 同環比")} tag={t("vs 7 日均值")}>
                 <div className="grid gap-1">
-                  <Row label="營業額（7日均）" value={formatMoney(rev7dAvg)} />
-                  <Row label="線上渠道佔比（7日均）" value={`${Math.round(onlineShare7d * 100)}%`} />
-                  <Row label="會員充值（7日均）" value={formatMoney(topup7dAvg)} />
-                  <Row label="總售出份數" value={`${agg.totalSoldQty} 份`} />
+                  <Row label={t("營業額（7日均）")} value={formatMoney(rev7dAvg)} />
+                  <Row label={t("線上渠道佔比（7日均）")} value={`${Math.round(onlineShare7d * 100)}%`} />
+                  <Row label={t("會員充值（7日均）")} value={formatMoney(topup7dAvg)} />
+                  <Row label={t("總售出份數")} value={t("{n} 份", { n: agg.totalSoldQty })} />
                 </div>
                 <div className="mt-2 text-[11px] text-slate-400">
-                  營業額同線上佔比基於 POS 訂單 7 日均；會員充值來自 Ledger RPC。
+                  {t("營業額同線上佔比基於 POS 訂單 7 日均；會員充值來自 Ledger RPC。")}
                 </div>
               </Card>
 
               <Card
-                title="時長統計（堂食 / 外賣）"
+                title={t("時長統計（堂食 / 外賣）")}
                 tag={
-                  agg.dineInServing.total.estimated || agg.quickServing.total.estimated ? "含估算" : "實測"
+                  agg.dineInServing.total.estimated || agg.quickServing.total.estimated
+                    ? t("含估算")
+                    : t("實測")
                 }
               >
                 {agg.dineInServing.total.count === 0 && agg.quickServing.total.count === 0 ? (
@@ -4032,7 +4135,7 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                         <span className="h-2.5 w-2.5 rounded-sm bg-amber-500" />
                         快餐 / 外賣
                       </span>
-                      <span>深色 = 整體時長</span>
+                      <span>{t("深色 = 整體時長")}</span>
                     </div>
                   </>
                 )}
@@ -4041,47 +4144,59 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
 
             {/* 模塊 5 人流 + 低庫存預警 */}
             <div className="mb-4 grid gap-4 lg:grid-cols-2">
-              <Card title="當日人流（入店人次）" tag="自動計算 · 參考用">
+              <Card title={t("當日人流（入店人次）")} tag={t("自動計算 · 參考用")}>
                 <div className="flex items-baseline gap-2">
                   <div className="text-3xl font-extrabold text-indigo-600">{footfallTotal}</div>
-                  <div className="text-xs text-slate-500">選取範圍累計入店人次</div>
+                  <div className="text-xs text-slate-500">{t("選取範圍累計入店人次")}</div>
                 </div>
                 <div className="mt-2 grid grid-cols-3 gap-2 text-xs">
                   <div className="rounded-lg bg-slate-50 px-2 py-1.5">
-                    <div className="text-slate-400">堂食</div>
-                    <div className="mt-0.5 text-sm font-semibold text-slate-900">{footfallBreakdown.dineIn} 人</div>
+                    <div className="text-slate-400">{t("堂食")}</div>
+                    <div className="mt-0.5 text-sm font-semibold text-slate-900">
+                      {t("{n} 人", { n: footfallBreakdown.dineIn })}
+                    </div>
                   </div>
                   <div className="rounded-lg bg-slate-50 px-2 py-1.5">
-                    <div className="text-slate-400">快餐 / 外賣</div>
-                    <div className="mt-0.5 text-sm font-semibold text-slate-900">{footfallBreakdown.counter} 單</div>
+                    <div className="text-slate-400">{t("快餐 / 外賣")}</div>
+                    <div className="mt-0.5 text-sm font-semibold text-slate-900">
+                      {t("{n} 單", { n: footfallBreakdown.counter })}
+                    </div>
                   </div>
                   <div className="rounded-lg bg-slate-50 px-2 py-1.5">
-                    <div className="text-slate-400">Ledger 純線上</div>
-                    <div className="mt-0.5 text-sm font-semibold text-slate-900">{footfallBreakdown.online} 單</div>
+                    <div className="text-slate-400">{t("Ledger 純線上")}</div>
+                    <div className="mt-0.5 text-sm font-semibold text-slate-900">
+                      {t("{n} 單", { n: footfallBreakdown.online })}
+                    </div>
                   </div>
                 </div>
                 {conversion != null ? (
                   <div className="mt-2 text-xs text-slate-500">
-                    堂食轉化率 {Math.round(conversion * 100)}%（覆蓋 {agg.covers} 人 / 人流 {footfallTotal}）
+                    {t("堂食轉化率 {pct}%（覆蓋 {covers} 人 / 人流 {total}）", {
+                      pct: Math.round(conversion * 100),
+                      covers: agg.covers,
+                      total: footfallTotal,
+                    })}
                   </div>
                 ) : null}
                 <div className="mt-2 text-[11px] text-slate-400">
-                  由訂單自動計算：堂食依 partySize 加總；快餐 / 外賣 / Ledger 純線上一單算一人。三項相加等於上方總人次。純參考用，無門口計數硬件嘅替代方案。
+                  {t("由訂單自動計算：堂食依 partySize 加總；快餐 / 外賣 / Ledger 純線上一單算一人。三項相加等於上方總人次。純參考用，無門口計數硬件嘅替代方案。")}
                 </div>
               </Card>
 
-              <Card title="低庫存預警" tag="current_qty ≤ par（reorder_level）">
+              <Card title={t("低庫存預警")} tag="current_qty ≤ par（reorder_level）">
                 {lowStock === null ? (
                   <div className="text-xs text-slate-400">
-                    未能讀取庫存（未連線 macau-pos Supabase 或尚無庫存品）。
+                    {t("未能讀取庫存（未連線 macau-pos Supabase 或尚無庫存品）。")}
                   </div>
                 ) : lowStock.length === 0 ? (
                   <span className="inline-flex items-center rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-bold text-emerald-700">
-                    庫存充足
+                    {t("庫存充足")}
                   </span>
                 ) : (
                   <div className="grid gap-1">
-                    <div className="text-sm font-semibold text-rose-600">{lowStock.length} 款低庫存</div>
+                    <div className="text-sm font-semibold text-rose-600">
+                      {t("{n} 款低庫存", { n: lowStock.length })}
+                    </div>
                     {lowStock.slice(0, 8).map((p) => (
                       <div
                         key={p.name}
@@ -4104,9 +4219,13 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                 內部 `loading` 分支亦一併拆走 —— `loading` 係 Ledger 彙總嘅區域旗標，
                 佢未齊時外層已經 gate 住，唔會行到呢度。 */}
             <div className="rounded-2xl border border-orange-200 bg-orange-50/60 p-4">
-              <div className="mb-3 text-base font-semibold text-slate-900">🔔 自動化優化建議（{FILTERS.find((f) => f.key === range)?.label}）</div>
+              <div className="mb-3 text-base font-semibold text-slate-900">
+                {t("🔔 自動化優化建議（{range}）", {
+                  range: t(FILTERS.find((f) => f.key === range)?.label ?? ""),
+                })}
+              </div>
               {suggestions.length === 0 ? (
-                <div className="text-sm text-slate-500">目前未觸發優化建議，營運狀況健康。</div>
+                <div className="text-sm text-slate-500">{t("目前未觸發優化建議，營運狀況健康。")}</div>
               ) : (
                 <div className="grid gap-2">
                   {suggestions.map((s, i) => (
@@ -4116,7 +4235,7 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                           s.level === "r" ? "bg-rose-100 text-rose-700" : s.level === "o" ? "bg-amber-100 text-amber-700" : "bg-slate-100 text-slate-600"
                         }`}
                       >
-                        {LEVEL_LABEL[s.level]}
+                        {t(LEVEL_LABEL[s.level])}
                       </span>
                       <div className="text-sm leading-relaxed text-slate-700">
                         <span className="font-semibold text-slate-900">{s.title}：</span>
@@ -4129,14 +4248,15 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
             </div>
 
             <div className="mt-3 rounded-xl bg-slate-50 px-4 py-3 text-xs text-slate-400">
-              說明：營業額／訂單／菜品／桌台／退菜／折扣均來自本機結帳訂單；會員充值與線上餘額扣減來自 Ledger；低庫存預警來自本店 inv_products（current_qty ≤ reorder_level，只由「收據同步種子」與人手盤點改動，落單暫不扣庫存）。
+              {t("說明：營業額／訂單／菜品／桌台／退菜／折扣均來自本機結帳訂單；會員充值與線上餘額扣減來自 Ledger；低庫存預警來自本店 inv_products（current_qty ≤ reorder_level，只由「收據同步種子」與人手盤點改動，落單暫不扣庫存）。")}
               {purchaseUnavailable && (
                 <span className="mt-1 block text-amber-700">
-                  注意：本店進貨（收據）數據未能讀取，毛利估算未扣成本。
+                  {t("注意：本店進貨（收據）數據未能讀取，毛利估算未扣成本。")}
                 </span>
               )}
-              人流（入店人次）由訂單自動計算：堂食依 partySize 加總、快餐/外賣一單算一人，純參考用。時長統計分開呈現堂食（送廚 → 結帳）同快餐/外賣（送廚 → 出餐 → 完成）各步驟；缺時間戳嘅樣本以落單→結帳/updatedAt 估算，標「含估算」。食材消耗依 BOM 配方 × 已售份數計算（於「配方管理」填寫後方精確）。
-              買貨（收據）數據來自庫存系統：買貨總額＝已付＋未付；毛利為「營業額 − 買貨總額（已付＋未付）」估算，**未扣存貨變動**。菜品排行按金額由高到低。
+              {t("人流（入店人次）由訂單自動計算：堂食依 partySize 加總、快餐/外賣一單算一人，純參考用。時長統計分開呈現堂食（送廚 → 結帳）同快餐/外賣（送廚 → 出餐 → 完成）各步驟；缺時間戳嘅樣本以落單→結帳/updatedAt 估算，標「含估算」。食材消耗依 BOM 配方 × 已售份數計算（於「配方管理」填寫後方精確）。")}
+              {" "}
+              {t("買貨（收據）數據來自庫存系統：買貨總額＝已付＋未付；毛利為「營業額 − 買貨總額（已付＋未付）」估算，未扣存貨變動。菜品排行按金額由高到低。")}
             </div>
               </>
             )}
@@ -4160,17 +4280,18 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
  * 所以 loading 期間唔會出現「內容區高度塌陷 → 頁腳彈上彈落」嘅二次跳動。
  */
 function ReportFullPageLoading() {
+  const t = useT();
   return (
     <div className="flex min-h-[320px] flex-1 items-center justify-center py-16">
       <div className="flex flex-col items-center gap-3">
         <div
           className="h-10 w-10 animate-spin rounded-full border-2 border-slate-300 border-t-slate-600"
           role="status"
-          aria-label="載入中"
+          aria-label={t("載入中")}
         />
-        <div className="text-sm text-slate-500">正在載入報表數據…</div>
+        <div className="text-sm text-slate-500">{t("正在載入報表數據…")}</div>
         <div className="text-xs text-slate-400">
-          整合本機訂單、Ledger 線上單與會員數據，完成後一次顯示。
+          {t("整合本機訂單、Ledger 線上單與會員數據，完成後一次顯示。")}
         </div>
       </div>
     </div>
@@ -4238,6 +4359,7 @@ function Money({ amount, currency = "MOP" }: { amount: number; currency?: string
 }
 
 function Card({ title, tag, children, loading }: { title: string; tag?: string; children: React.ReactNode; loading?: boolean }) {
+  const t = useT();
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-4">
       <div className="mb-3 flex items-center justify-between">
@@ -4246,7 +4368,7 @@ function Card({ title, tag, children, loading }: { title: string; tag?: string; 
       </div>
       {loading ? (
         <div className="flex min-h-[140px] items-center justify-center rounded-xl bg-slate-50">
-          <div className="h-8 w-8 animate-spin rounded-full border-2 border-slate-300 border-t-slate-500" role="status" aria-label="載入中" />
+          <div className="h-8 w-8 animate-spin rounded-full border-2 border-slate-300 border-t-slate-500" role="status" aria-label={t("載入中")} />
         </div>
       ) : (
         children
@@ -4256,6 +4378,7 @@ function Card({ title, tag, children, loading }: { title: string; tag?: string; 
 }
 
 function DishRowItem({ d }: { d: DishRow }) {
+  const t = useT();
   const total = d.offlineQty + d.onlineQty;
   const ch = d.onlineQty > 0 && d.offlineQty > 0 ? "mix" : d.onlineQty > 0 ? "off" : "in";
   return (
@@ -4266,11 +4389,11 @@ function DishRowItem({ d }: { d: DishRow }) {
           <ChannelChip kind={ch} />
         </div>
         <div className="mt-0.5 text-xs text-slate-500">
-          線下 {d.offlineQty} · 線上 {d.onlineQty}
+          {t("線下 {off} · 線上 {on}", { off: d.offlineQty, on: d.onlineQty })}
         </div>
       </div>
       <div className="shrink-0 text-right">
-        <div className="text-sm font-semibold text-slate-900">{total} 份</div>
+        <div className="text-sm font-semibold text-slate-900">{t("{n} 份", { n: total })}</div>
         <div className="text-xs text-slate-400">{formatMoney(d.revenue)}</div>
       </div>
     </div>
@@ -4315,7 +4438,8 @@ function Row({ label, value }: { label: string; value: string }) {
 }
 
 function Empty() {
-  return <div className="text-xs text-slate-400">此範圍暫無資料。</div>;
+  const t = useT();
+  return <div className="text-xs text-slate-400">{t("此範圍暫無資料。")}</div>;
 }
 
 type DurationBarStep = {

@@ -4,6 +4,7 @@ import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { formatMacauDateTime } from "@/lib/format";
 
 import { AppSidebar } from "@/components/app-sidebar";
+import { useT } from "@/components/lang-provider";
 import { InfoBubble } from "@/components/info-bubble";
 import { ResponsiveModal } from "@/components/responsive-modal";
 import { defaultDeviceConfig } from "@/lib/mock-data";
@@ -103,6 +104,7 @@ const SHIFT_HISTORY_PAGE_DAYS = 10;
 /** 交班歷史表格最大高度（px）—— 框架尺寸固定嘅關鍵。 */
 const SHIFT_HISTORY_MAX_HEIGHT_PX = 620;
 const MACAU_WEEKDAY_LABELS = ["日", "一", "二", "三", "四", "五", "六"];
+const SHIFT_WEEKDAY_LABELS = ["（週日）", "（週一）", "（週二）", "（週三）", "（週四）", "（週五）", "（週六）"];
 
 /**
  * 表頭貨幣單位（黏喺表頭標籤下面一行）。
@@ -127,11 +129,12 @@ function shiftHistoryDayKey(closedAt: string): string {
 }
 
 /** 日分隔列標籤：`DD/MM/YYYY（週X）`，同格內顯示格式一致。 */
-function shiftHistoryDayLabel(day: string): string {
+function shiftHistoryDayLabel(day: string, t: (k: string, vars?: Record<string, string | number>) => string): string {
   const parts = day.split("-");
   if (parts.length !== 3) return day;
-  const wd = MACAU_WEEKDAY_LABELS[new Date(`${day}T00:00:00Z`).getUTCDay()] ?? "";
-  return `${parts[2]}/${parts[1]}/${parts[0]}（週${wd}）`;
+  const wd = new Date(`${day}T00:00:00Z`).getUTCDay();
+  const weekday = SHIFT_WEEKDAY_LABELS[wd] ?? "";
+  return `${parts[2]}/${parts[1]}/${parts[0]}${weekday ? t(weekday) : ""}`;
 }
 /**
  * 交班摘要（線下 POS）。
@@ -367,11 +370,13 @@ function pickShiftPrinter(config: DeviceConfig): DevicePrinterConfig | null {
 }
 
 export function ShiftPage() {
+  // ⚠️ 一定要放喺所有 early return 之前（Rules of Hooks）。
+  const t = useT();
   const [shift, setShift] = useState(() => loadShiftState());
   // 「開工備註」draft：只喺未開工時顯示，開工時寫入 openingNote 後清空；
   // 交班備註（closingNote）改喺結數交班彈窗入面填，唔再同開工共用同一欄（2026-09-07 修正）。
   const [shiftNote, setShiftNote] = useState("");
-  const [status, setStatus] = useState("開工後可於下班時做結數交班並打印交班單。");
+  const [status, setStatus] = useState(t("開工後可於下班時做結數交班並打印交班單。"));
   const [confirmOpen, setConfirmOpen] = useState(false);
   // 結數交班彈窗三步（2026-09-08）：1 = 核對金額（填差額）→ 2 = 二次確認 → 3 = 交班明細打印預覽（打印／跳過）。
   // step3 先實際交班：打印 = 出紙並完成；跳過 = 唔打印直接完成。
@@ -556,11 +561,11 @@ export function ShiftPage() {
         if (result.adoptedServer) {
           setStatus(
             result.shift.openedAt
-              ? `已同步雲端班次狀態（另一部裝置已開工：${formatMacauDateTime(result.shift.openedAt)}），可以直接交班。`
-              : "已同步雲端班次狀態。",
+              ? t(`已同步雲端班次狀態（另一部裝置已開工：{openedAt}），可以直接交班。`, { openedAt: formatMacauDateTime(result.shift.openedAt) })
+              : t("已同步雲端班次狀態。"),
           );
         } else if (result.shift.serverSynced) {
-          setStatus("班次狀態已與雲端同步。");
+          setStatus(t("班次狀態已與雲端同步。"));
         }
       })
       .catch(() => undefined);
@@ -786,7 +791,7 @@ export function ShiftPage() {
       paid: o.total,
       // 🔴 同 `paymentBreakdown` 用同一個映射，否則交班單明細同支付方式分項表對唔到。
       method: posPaymentMethodLabel(o.paymentMethod),
-      cashier: o.settledByName ?? o.settledBy ?? "未記錄",
+      cashier: o.settledByName ?? o.settledBy ?? t("未記錄"),
       // 🔴 2026-09-18 需求：「返結後，訂單明細內的時間應該更新到最新時間。」
       //
       // 【舊口徑】`o.originalSettledAt ?? o.updatedAt` —— `originalSettledAt` 係
@@ -827,11 +832,11 @@ export function ShiftPage() {
       return {
         id: o.id,
         pickupCode: o.pickupCode,
-        table: ledgerFulfillmentLabel(o.fulfillmentType),
+        table: t(ledgerFulfillmentLabel(o.fulfillmentType)),
         receivable: Number.isFinite(subtotal) && subtotal > 0 ? subtotal : paid,
         paid,
-        method: paymentModeLabel(o.paymentMode) || "線上單",
-        cashier: "客人",
+        method: paymentModeLabel(o.paymentMode) || t("線上單"),
+        cashier: t("客人"),
         settledAt: o.updatedAt ?? o.createdAt ?? "",
         notes: buildOnlineOrderDetailNotes(o.discountAmount),
         online: true,
@@ -858,7 +863,7 @@ export function ShiftPage() {
       if (!restored) {
         setLedgerToday(null);
         setLedgerPaidOrders(null);
-        setLedgerTodayError("尚未登入 Ledger，無法讀取今日線上訂單。");
+        setLedgerTodayError(t("尚未登入 Ledger，無法讀取今日線上訂單。"));
         return;
       }
       const data = await getMerchantReportSummary("today");
@@ -878,7 +883,7 @@ export function ShiftPage() {
     } catch (error) {
       setLedgerToday(null);
       setLedgerPaidOrders(null);
-      setLedgerTodayError(error instanceof Error ? error.message : "讀取今日線上報表失敗");
+      setLedgerTodayError(error instanceof Error ? error.message : t("讀取今日線上報表失敗"));
     } finally {
       // 🔴 放 `finally`：上面「未登入 Ledger」嗰條 `return` 同 catch 都係「未拿到線上數」
       // 兩種合法結局（UI 各自有明確錯誤橫幅）。若唔放行，錯咗之後全頁會**永久 loading**，
@@ -975,13 +980,13 @@ export function ShiftPage() {
     for (const id of ids) {
       const result = await syncOnlineDineInCompletionById(id);
       if (result.ok) ok += 1;
-      else failures.push(result.error ?? "未知錯誤");
+      else failures.push(result.error ?? t("未知錯誤"));
     }
     setBackfillingLedger(false);
     setBackfillStatus(
       failures.length === 0
-        ? `已補推 ${ok} 張線上單至「已完成」。`
-        : `補推完成：成功 ${ok} 張、失敗 ${failures.length} 張（${failures[0]}）`,
+        ? t(`已補推 {ok} 張線上單至「已完成」。`, { ok })
+        : t(`補推完成：成功 {ok} 張、失敗 {fail} 張（{first}）`, { ok, fail: failures.length, first: failures[0] ?? "" }),
     );
     await refreshLedgerToday();
   }
@@ -1040,7 +1045,7 @@ export function ShiftPage() {
       if (!day) continue;
       let group = byDay.get(day);
       if (!group) {
-        group = { day, label: shiftHistoryDayLabel(day), rows: [] };
+        group = { day, label: shiftHistoryDayLabel(day, t), rows: [] };
         byDay.set(day, group);
         groups.push(group);
       }
@@ -1072,7 +1077,7 @@ export function ShiftPage() {
         new Map(
           shiftHistory
             .filter((row) => row.employeeAccount)
-            .map((row) => [row.employeeAccount as string, row.employeeName ?? row.employeeAccount ?? "未記錄"]),
+            .map((row) => [row.employeeAccount as string, row.employeeName ?? row.employeeAccount ?? t("未記錄")]),
         ).entries(),
       ),
     [shiftHistory],
@@ -1194,13 +1199,13 @@ export function ShiftPage() {
     saveQueue(enqueueEvents(loadQueue(), withStoreScope([event])));
     // 入隊即觸發 flush worker（以前要等 30s interval）
     notifyQueueChanged();
-    setStatus(`已把 ${row.closedAt.slice(0, 10)} 的交班單加入重打隊列。`);
+    setStatus(t(`已把 {date} 的交班單加入重打隊列。`, { date: row.closedAt.slice(0, 10) }));
     setReprintingShiftId(null);
   }
 
   async function forceSyncBeforeClose() {
     if (!readNetworkOnline()) {
-      setStatus("目前離線，無法強制同步。請恢復網絡後再交班。");
+      setStatus(t("目前離線，無法強制同步。請恢復網絡後再交班。"));
       return false;
     }
     // 只 retry 真正「會 retry」嘅 pending event。
@@ -1219,8 +1224,7 @@ export function ShiftPage() {
     if (retryable.length === 0) {
       if (failedCount > 0) {
         setStatus(
-          `有 ${failedCount} 筆資料永久同步失敗（伺服器連續拒收），已跳過，` +
-            `唔會阻住交班。請稍後喺落單畫面撳「重試同步」，或聯絡技術支援。`,
+          t(`有 {n} 筆資料永久同步失敗（伺服器連續拒收），已跳過，唔會阻住交班。請稍後喺落單畫面撳「重試同步」，或聯絡技術支援。`, { n: failedCount }),
         );
       }
       return true;
@@ -1236,7 +1240,7 @@ export function ShiftPage() {
         }),
       });
     } catch {
-      setStatus("強制同步失敗，請檢查網絡或稍後重試。");
+      setStatus(t("強制同步失敗，請檢查網絡或稍後重試。"));
       return false;
     }
 
@@ -1248,8 +1252,7 @@ export function ShiftPage() {
     if (!res.ok) {
       const detail = await res.text().catch(() => "");
       setStatus(
-        `同步失敗（HTTP ${res.status}）：${detail.slice(0, 200) || "伺服器拒收"}。` +
-          `資料仲喺本機未上傳，請稍後再試或聯絡技術支援。`,
+        t(`同步失敗（HTTP {status}）：{detail}。資料仲喺本機未上傳，請稍後再試或聯絡技術支援。`, { status: res.status, detail: detail.slice(0, 200) || t("伺服器拒收") }),
       );
       return false;
     }
@@ -1267,8 +1270,8 @@ export function ShiftPage() {
       );
     }
     setStatus(
-      `已同步 ${retryable.length} 筆待辦資料，準備交班。` +
-        (failedCount > 0 ? `（另有 ${failedCount} 筆永久失敗已跳過）` : ""),
+      t(`已同步 {n} 筆待辦資料，準備交班。`, { n: retryable.length }) +
+        (failedCount > 0 ? t(`（另有 {n} 筆永久失敗已跳過）`, { n: failedCount }) : ""),
     );
     return true;
   }
@@ -1290,13 +1293,13 @@ export function ShiftPage() {
     setShift(next);
     saveShiftState(next);
     window.dispatchEvent(new CustomEvent("pos-shift-changed", { detail: { shift: next } }));
-    setStatus("已開工。");
+    setStatus(t("已開工。"));
     setShiftNote(""); // 開工備註已寫入 openingNote，唔好留低畀交班彈窗誤用
 
     const storeId = resolveStoreId();
     if (!storeId) return;
     if (!readNetworkOnline()) {
-      setStatus("已離線開工：恢復網絡後會自動同步到雲端（其他裝置會見到已開工）。");
+      setStatus(t("已離線開工：恢復網絡後會自動同步到雲端（其他裝置會見到已開工）。"));
       return;
     }
     try {
@@ -1316,14 +1319,14 @@ export function ShiftPage() {
         saveShiftState(merged);
         window.dispatchEvent(new CustomEvent("pos-shift-changed", { detail: { shift: merged } }));
         setStatus(
-          `本店已有班次進行中（另一部裝置已於 ${formatMacauDateTime(merged.openedAt)} 開工），已同步該開工狀態。`,
+          t(`本店已有班次進行中（另一部裝置已於 {openedAt} 開工），已同步該開工狀態。`, { openedAt: formatMacauDateTime(merged.openedAt) }),
         );
         return;
       }
       saveShiftState({ ...loadShiftState(), serverSynced: true });
-      setStatus("已開工，並已同步到雲端（其他裝置會見到已開工）。");
+      setStatus(t("已開工，並已同步到雲端（其他裝置會見到已開工）。"));
     } catch {
-      setStatus("已開工，但暫時未能同步伺服器；恢復網絡後會自動補同步。");
+      setStatus(t("已開工，但暫時未能同步伺服器；恢復網絡後會自動補同步。"));
     }
   }
 
@@ -1483,7 +1486,7 @@ export function ShiftPage() {
         // ⚠️ 呢個係 early return —— 關店總掣已經喺上面行咗（一定要保持咁樣），
         //    但結果要帶埋出狀態列，否則「收咗班但仲接單」會靜靜地冇人知。
         setStatus(
-          "已交班（交班單打印已關閉，如需紙本請到交班歷史「重打」）。" +
+          t("已交班（交班單打印已關閉，如需紙本請到交班歷史「重打」）。") +
             (gateResult ? describeCloseGate(gateResult) : ""),
         );
         setClosingShift(false);
@@ -1551,9 +1554,9 @@ export function ShiftPage() {
 
     setStatus(
       (print
-        ? `已交班，交班明細（${snapshot.shiftNo}）已加入打印隊列，狀態已重置為待開工。`
-        : `已交班（跳過打印，單號 ${snapshot.shiftNo}），狀態已重置為待開工。`) +
-        (serverCloseFailed ? "（⚠️ 收工狀態未能同步雲端，將自動重試，其他裝置可能仍顯示已開工。）" : "（雲端已同步，其他裝置會顯示已收工。）") +
+        ? t(`已交班，交班明細（{no}）已加入打印隊列，狀態已重置為待開工。`, { no: snapshot.shiftNo })
+        : t(`已交班（跳過打印，單號 {no}），狀態已重置為待開工。`, { no: snapshot.shiftNo })) +
+        (serverCloseFailed ? t("（⚠️ 收工狀態未能同步雲端，將自動重試，其他裝置可能仍顯示已開工。）") : t("（雲端已同步，其他裝置會顯示已收工。）")) +
         // 關店總掣結果：全部成功／無需動作 → `describeCloseGate` 回 ""，唔會多餘加字。
         (gateResult ? describeCloseGate(gateResult) : ""),
     );
@@ -1572,7 +1575,7 @@ export function ShiftPage() {
   async function syncHistoryNoteToCloud(record: ShiftHistoryRecord, note: string) {
     const storeId = resolveStoreId();
     if (!storeId || !readNetworkOnline()) {
-      setStatus("已更新本機備註；離線中，未同步雲端。");
+      setStatus(t("已更新本機備註；離線中，未同步雲端。"));
       return;
     }
     try {
@@ -1583,10 +1586,10 @@ export function ShiftPage() {
         closingNote: note,
       });
       setStatus(
-        ok ? "已更新備註並同步雲端（換機都見到）。" : "已更新本機備註；雲端搵唔到對應班次，未同步。",
+        ok ? t("已更新備註並同步雲端（換機都見到）。") : t("已更新本機備註；雲端搵唔到對應班次，未同步。"),
       );
     } catch {
-      setStatus("已更新本機備註；雲端同步失敗，請檢查網絡後再試。");
+      setStatus(t("已更新本機備註；雲端同步失敗，請檢查網絡後再試。"));
     }
   }
 
@@ -1598,7 +1601,7 @@ export function ShiftPage() {
     );
     setShiftHistory(nextHistory);
     saveShiftHistory(nextHistory);
-    setStatus("已更新交班歷史備註。");
+    setStatus(t("已更新交班歷史備註。"));
     if (target) void syncHistoryNoteToCloud(target, note);
   }
 
@@ -1606,14 +1609,14 @@ export function ShiftPage() {
     const nextHistory = shiftHistory.filter((row) => row.id !== recordId);
     setShiftHistory(nextHistory);
     saveShiftHistory(nextHistory);
-    setStatus("已刪除交班歷史。");
+    setStatus(t("已刪除交班歷史。"));
   }
 
   function exportShiftHistoryCsv() {
     if (exportingType) return;
     setExportingType("csv");
     if (filteredShiftHistory.length === 0 || typeof window === "undefined") {
-      setStatus("目前沒有符合條件的交班歷史可導出。");
+      setStatus(t("目前沒有符合條件的交班歷史可導出。"));
       setExportingType(null);
       return;
     }
@@ -1649,7 +1652,7 @@ export function ShiftPage() {
     link.download = "交班歷史.csv";
     link.click();
     URL.revokeObjectURL(url);
-    setStatus("交班歷史 CSV 已導出。");
+    setStatus(t("交班歷史 CSV 已導出。"));
     setExportingType(null);
   }
 
@@ -1682,16 +1685,16 @@ export function ShiftPage() {
   const closeGateNow = (() => {
     const storeLabel =
       storeOpenStatus.isOpen === null
-        ? "未接通"
+        ? t("未接通")
         : storeOpenStatus.isOpen
-          ? "營業中"
-          : "已暫停";
+          ? t("營業中")
+          : t("已暫停");
     const onlineLabel =
       onlineOrderConfig.merchantEnabled === null
-        ? "未接通"
+        ? t("未接通")
         : onlineOrderConfig.merchantEnabled
-          ? "接單中"
-          : "已暫停";
+          ? t("接單中")
+          : t("已暫停");
     return { storeLabel, onlineLabel };
   })();
   /** 兩條通道都已經關咗（或者未讀到）→ 勾唔勾都冇分別，UI 可以講清楚。 */
@@ -1704,17 +1707,17 @@ export function ShiftPage() {
       <div className="mx-auto h-[100dvh] max-w-[1600px] overflow-auto px-4 py-4 md:pl-[88px]">
         <div className="flex flex-wrap items-start justify-between gap-4 rounded-2xl border border-slate-200 bg-white p-4">
           <div className="min-w-[240px] flex-1">
-            <div className="text-lg font-semibold text-slate-900">交班</div>
+            <div className="text-lg font-semibold text-slate-900">{t("交班")}</div>
             <div className="mt-1 text-sm text-slate-500">
-              開工 → 營業 → 結數交班。交班後會打印一張今日營業摘要。
+              {t("開工 → 營業 → 結數交班。交班後會打印一張今日營業摘要。")}
             </div>
             {!shift.openedAt ? (
               <label className="mt-4 grid max-w-sm gap-1">
-                <span className="text-xs font-semibold text-slate-500">開工備註（選填）</span>
+                <span className="text-xs font-semibold text-slate-500">{t("開工備註（選填）")}</span>
                 <input
                   className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
                   onChange={(event) => setShiftNote(event.target.value)}
-                  placeholder="例如：今日人手安排／開店檢查"
+                  placeholder={t("例如：今日人手安排／開店檢查")}
                   value={shiftNote}
                 />
               </label>
@@ -1728,19 +1731,18 @@ export function ShiftPage() {
           */}
           {lastCloseGate && !isCloseGateClean(lastCloseGate) ? (
             <div className="w-full rounded-2xl border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-              <span className="font-semibold">⚠️ 交班已完成，但部分接單通道未能關閉</span>
+              <span className="font-semibold">{t("⚠️ 交班已完成，但部分接單通道未能關閉")}</span>
               <span className="ml-1">
-                {lastCloseGate.store === "failed" ? "店內接單（掃碼／自助機）" : ""}
-                {lastCloseGate.store === "failed" && lastCloseGate.online === "failed" ? "、" : ""}
-                {lastCloseGate.online === "failed" ? "線上接單" : ""}
-                仍然開住 —— 客人落得到單。請到側欄商店名卡手動關閉。
-              </span>
+                {lastCloseGate.store === "failed" ? t("店內接單（掃碼／自助機）") : ""}
+                {lastCloseGate.store === "failed" && lastCloseGate.online === "failed" ? t("、") : ""}
+                {lastCloseGate.online === "failed" ? t("線上接單") : ""}
+                {t("仍然開住 —— 客人落得到單。請到側欄商店名卡手動關閉。")}</span>
               <button
                 className="ml-2 rounded-xl bg-white px-2 py-1 text-xs font-semibold text-amber-900 ring-1 ring-amber-300"
                 onClick={() => setLastCloseGate(null)}
                 type="button"
               >
-                知道了
+                {t("知道了")}
               </button>
             </div>
           ) : null}
@@ -1749,13 +1751,13 @@ export function ShiftPage() {
             <div className="text-right text-sm">
               {shift.openedAt ? (
                 <div className="font-semibold text-slate-900">
-                  {`已開工：${shift.employeeName ?? shift.employeeAccount ?? ""}${shift.employeeName || shift.employeeAccount ? " · " : ""}${formatMacauDateTime(shift.openedAt)}`}
+                  {`${t("已開工：")}${shift.employeeName ?? shift.employeeAccount ?? ""}${shift.employeeName || shift.employeeAccount ? t(" · ") : ""}${formatMacauDateTime(shift.openedAt)}`}
                 </div>
               ) : (
-                <div className="font-semibold text-slate-500">未開工</div>
+                <div className="font-semibold text-slate-500">{t("未開工")}</div>
               )}
               {shift.openedAt && shift.closedAt ? (
-                <div className="mt-0.5 text-slate-500">最近交班：{formatMacauDateTime(shift.closedAt)}</div>
+                <div className="mt-0.5 text-slate-500">{t("最近交班：")}{formatMacauDateTime(shift.closedAt)}</div>
               ) : null}
             </div>
             <div className="flex flex-wrap justify-end gap-2">
@@ -1765,7 +1767,7 @@ export function ShiftPage() {
                   onClick={() => void openShiftNow()}
                   type="button"
                 >
-                  開工
+                  {t("開工")}
                 </button>
               ) : (
                 <button
@@ -1778,7 +1780,7 @@ export function ShiftPage() {
                   }}
                   type="button"
                 >
-                  結數交班並打印
+                  {t("結數交班並打印")}
                 </button>
               )}
             </div>
@@ -1807,17 +1809,17 @@ export function ShiftPage() {
         ) : (
           <>
         <section className="mt-3 rounded-2xl border border-slate-200 bg-white p-4">
-          <div className="text-base font-semibold text-slate-900">今日摘要</div>
-            <div className="mt-1 text-xs text-slate-500">店內堂食／快餐以本機 POS 為準；會員通線上以 Ledger 報表為準。</div>
+          <div className="text-base font-semibold text-slate-900">{t("今日摘要")}</div>
+            <div className="mt-1 text-xs text-slate-500">{t("店內堂食／快餐以本機 POS 為準；會員通線上以 Ledger 報表為準。")}</div>
 
             {/* 金額合計（線上 + 線下）第一行：對數先睇呢度，確認條數啱唔啱 */}
             <div className="mt-4">
-              <div className="text-sm font-semibold text-slate-700">金額合計（線上 + 線下）</div>
+              <div className="text-sm font-semibold text-slate-700">{t("金額合計（線上 + 線下）")}</div>
               {/* 口徑說明（2026-09-14）：線下 = 本機 POS「全部支付方式」（現金／Mpay／會員餘額…），
                   合計唔會剔走任何一種支付方式；線上 = Ledger **已付款單加總**（含未推 completed 嘅單，
                   ＝實際收到嘅錢）。寫清楚係因為商家曾誤以為「合計漏咗現金」——實際上現金一向喺線下總額之內。 */}
               <div className="mt-1 text-xs text-slate-500">
-                線下 = 本機 POS 全部支付方式（現金／Mpay／會員餘額 等，唔會剔走任何一種）；線上 = 本地線上投影單 ∪ Ledger 已付款單（按單去重，＝實際收到嘅錢）。
+                {t("線下 = 本機 POS 全部支付方式（現金／Mpay／會員餘額 等，唔會剔走任何一種）；線上 = 本地線上投影單 ∪ Ledger 已付款單（按單去重，＝實際收到嘅錢）。")}
               </div>
               {/* 🔴 2026-10-01：由 3 欄改 2 欄 —— 「線上線下合計（實收）」已移除
                   （實收已擴為線下＋線上），剩「應收」＋「實收」兩張同範圍、可直接對數嘅卡。
@@ -1836,46 +1838,38 @@ export function ShiftPage() {
                 {purchaseToday?.summary ? (
                   <article className="rounded-2xl border border-rose-200 bg-rose-50/40 p-4">
                     <div className="flex items-start justify-between gap-2">
-                      <div className="text-sm text-rose-700">已付支出</div>
-                      <InfoBubble label="已付支出口徑說明">
-                        <span className="block font-semibold text-slate-800">已付支出（今日買貨）</span>
+                      <div className="text-sm text-rose-700">{t("已付支出")}</div>
+                      <InfoBubble label={t("已付支出口徑說明")}>
+                        <span className="block font-semibold text-slate-800">{t("已付支出（今日買貨）")}</span>
                         <span className="mt-1 block">
-                          ＝今日收據入面<span className="font-semibold">「已付款」</span>嗰批嘅總額，
-                          即今日真正流出嘅貨錢。
-                        </span>
+                          {t("＝今日收據入面")}<span className="font-semibold">{t("「已付款」")}</span>{t("嗰批嘅總額， 即今日真正流出嘅貨錢。")}</span>
                         <span className="mt-1 block tabular-nums text-slate-600">
-                          {purchaseToday.summary.count} 張收據
-                          <br />已付 {formatMoney(purchaseToday.summary.paid)}
+                          {purchaseToday.summary.count} {t("張收據")}<br />{t("已付 ")}{formatMoney(purchaseToday.summary.paid)}
                         </span>
                         {/* ⚠️ 未付**唔顯示**（2026-10-05 J 拍板）—— 資料照抓、只係收埋。
                             唔好因為「有資料」就加返，商家會誤以為要即刻俾錢。 */}
                         <span className="mt-1 block text-[11px] text-slate-500">
-                          只計已付款收據。來源：庫存收據（expenseRecorder）。
+                          {t("只計已付款收據。來源：庫存收據（expenseRecorder）。")}
                         </span>
                         <span className="mt-1 block text-[11px] text-rose-700">
-                          ⚠ 呢個係<span className="font-semibold">獨立參考數</span>，
-                          唔可以同隔籬兩張收入卡加減 —— 佢係買貨開支，唔係當日營業額嘅扣減。
-                        </span>
+                          {t("⚠ 呢個係")}<span className="font-semibold">{t("獨立參考數")}</span>{t("， 唔可以同隔籬兩張收入卡加減 —— 佢係買貨開支，唔係當日營業額嘅扣減。")}</span>
                       </InfoBubble>
                     </div>
                     <div className="mt-2 text-2xl font-semibold text-rose-700">
                       {formatMoney(purchaseToday.summary.paid)}
                     </div>
                     <div className="mt-1 text-xs text-slate-500">
-                      {purchaseToday.summary.count} 張收據 · 供貨商 {purchaseToday.summary.supplierStats.length} 間
-                    </div>
+                      {purchaseToday.summary.count} {t("張收據 · 供貨商 ")}{purchaseToday.summary.supplierStats.length} {t("間")}</div>
                     {/* 供貨商分拆：預設收起（J 拍板），撳一下先展開 */}
                     {purchaseToday.summary.supplierStats.length > 0 ? (
                       <details className="mt-2 rounded-xl border border-rose-200 bg-white/70 px-3 py-2 text-xs text-slate-600">
                         <summary className="cursor-pointer font-semibold text-slate-700">
-                          供貨商分拆（{purchaseToday.summary.supplierStats.length} 間 · 撳開逐張核對）
-                        </summary>
+                          {t("供貨商分拆（")}{purchaseToday.summary.supplierStats.length} {t("間 · 撳開逐張核對）")}</summary>
                         <div className="mt-2 grid gap-1">
                           {purchaseToday.summary.supplierStats.map((s) => (
                             <div key={s.name} className="flex items-baseline justify-between gap-2">
                               <span className="truncate">
-                                {s.name} · {s.count} 張
-                              </span>
+                                {s.name} · {s.count} {t("張")}</span>
                               <span className="shrink-0 font-semibold">{formatMoney(s.total)}</span>
                             </div>
                           ))}
@@ -1885,10 +1879,10 @@ export function ShiftPage() {
                   </article>
                 ) : (
                   <article className="rounded-2xl border border-slate-200 bg-slate-50/60 p-4">
-                    <div className="text-sm text-slate-500">已付支出</div>
+                    <div className="text-sm text-slate-500">{t("已付支出")}</div>
                     <div className="mt-2 text-2xl font-semibold text-slate-400">—</div>
                     <div className="mt-1 text-xs text-slate-400">
-                      今日暫無買貨收據（或庫存資料未載入）。
+                      {t("今日暫無買貨收據（或庫存資料未載入）。")}
                     </div>
                   </article>
                 )}
@@ -1902,28 +1896,25 @@ export function ShiftPage() {
                           寫住只係噪音；報表頁已同步改走）。
                   */}
                   <div className="flex items-start justify-between gap-2">
-                    <div className="text-sm text-indigo-700">應收金額合計</div>
-                    <InfoBubble label="應收金額合計口徑說明">
-                      <span className="block font-semibold text-slate-800">應收金額合計（線下 ＋ 線上）</span>
+                    <div className="text-sm text-indigo-700">{t("應收金額合計")}</div>
+                    <InfoBubble label={t("應收金額合計口徑說明")}>
+                      <span className="block font-semibold text-slate-800">{t("應收金額合計（線下 ＋ 線上）")}</span>
                       <span className="mt-1 block">
-                        ＝<span className="font-semibold">未扣任何優惠前</span>嘅原價（單品原價 × 數量）。
-                      </span>
+                        ＝<span className="font-semibold">{t("未扣任何優惠前")}</span>{t("嘅原價（單品原價 × 數量）。")}</span>
                       <span className="mt-1 block tabular-nums text-slate-600">
-                        線下 {formatMoney(summary.receivableTotal)}
-                        <br />＋ 線上 {formatMoney(ledgerOnlineReceivableMop)}
+                        {t("線下 ")}{formatMoney(summary.receivableTotal)}
+                        <br />{t("＋ 線上 ")}{formatMoney(ledgerOnlineReceivableMop)}
                         <br />＝ {formatMoney(receivableTotalAll)}
                       </span>
                       <span className="mt-1 block text-[11px] text-slate-500">
-                        同報表頁「應收金額合計」同一口徑（本店冇服務費／稅）。
-                        同「實收」嘅差額 ＝ 全單優惠折扣 + 抹零。
-                      </span>
+                        {t("同報表頁「應收金額合計」同一口徑（本店冇服務費／稅）。 同「實收」嘅差額 ＝ 全單優惠折扣 + 抹零。")}</span>
                     </InfoBubble>
                   </div>
                   <div className="mt-2 text-2xl font-semibold text-indigo-700">
                     {formatMoney(receivableTotalAll)}
                   </div>
                   <div className="mt-1 text-xs text-slate-500">
-                    未扣優惠前嘅原價 · 線下 {formatMoney(summary.receivableTotal)} ＋ 線上{" "}
+                    {t("未扣優惠前嘅原價 · 線下 ")}{formatMoney(summary.receivableTotal)} {t("＋ 線上")}{" "}
                     {formatMoney(ledgerOnlineReceivableMop)}
                   </div>
                 </article>
@@ -1937,32 +1928,27 @@ export function ShiftPage() {
                           否則會同「應收金額合計」完全重複。
                   */}
                   <div className="flex items-start justify-between gap-2">
-                    <div className="text-sm text-emerald-700">實收金額合計</div>
-                    <InfoBubble label="實收金額合計口徑說明">
-                      <span className="block font-semibold text-slate-800">實收金額合計（線下 ＋ 線上）</span>
+                    <div className="text-sm text-emerald-700">{t("實收金額合計")}</div>
+                    <InfoBubble label={t("實收金額合計口徑說明")}>
+                      <span className="block font-semibold text-slate-800">{t("實收金額合計（線下 ＋ 線上）")}</span>
                       <span className="mt-1 block">
-                        ＝<span className="font-semibold">已扣優惠</span>後實際收到嘅錢（線下單 order.total ＋ 線上實收）。
-                      </span>
+                        ＝<span className="font-semibold">{t("已扣優惠")}</span>{t("後實際收到嘅錢（線下單 order.total ＋ 線上實收）。")}</span>
                       <span className="mt-1 block tabular-nums text-slate-600">
-                        線下 {formatMoney(summary.paidTotal)}
-                        <br />＋ 線上 {formatMoney(ledgerOnlineMop)}
+                        {t("線下 ")}{formatMoney(summary.paidTotal)}
+                        <br />{t("＋ 線上 ")}{formatMoney(ledgerOnlineMop)}
                         <br />＝ {formatMoney(summary.paidTotal + ledgerOnlineMop)}
                       </span>
                       <span className="mt-1 block text-[11px] text-slate-500">
-                        同報表頁「實收金額合計」係同一範圍。
-                        同「應收金額合計」嘅差額 ＝ 全單優惠折扣 + 抹零。
-                      </span>
+                        {t("同報表頁「實收金額合計」係同一範圍。 同「應收金額合計」嘅差額 ＝ 全單優惠折扣 + 抹零。")}</span>
                       <span className="mt-1 block text-[11px] text-slate-500">
-                        呢個數係<span className="font-semibold">毛</span>（未扣退款）；
-                        扣退款後嘅落袋金額見卡內下方「淨實收」。
-                      </span>
+                        {t("呢個數係")}<span className="font-semibold">{t("毛")}</span>{t("（未扣退款）； 扣退款後嘅落袋金額見卡內下方「淨實收」。")}</span>
                     </InfoBubble>
                   </div>
                   <div className="mt-2 text-2xl font-semibold text-emerald-700">
                     {formatMoney(summary.paidTotal + ledgerOnlineMop)}
                   </div>
                   <div className="mt-1 text-xs text-slate-500">
-                    線下 {formatMoney(summary.paidTotal)}（已含現金／Mpay／會員餘額）＋ 線上{" "}
+                    {t("線下 ")}{formatMoney(summary.paidTotal)}{t("（已含現金／Mpay／會員餘額）＋ 線上")}{" "}
                     {formatMoney(ledgerOnlineMop)}
                   </div>
                   {/* 🔴 2026-10-01（J 口徑·C1 誠實版）：「毛實收」一行移除 —— 佢同上面大數
@@ -1981,22 +1967,22 @@ export function ShiftPage() {
                           商家唔需要靠「有冇顯示」去推斷。 */}
                   <div className="mt-2 rounded-xl border border-emerald-200 bg-white/70 px-3 py-2 text-xs text-emerald-900">
                     <div className="flex items-baseline justify-between gap-2">
-                      <span>退款（POS 線下）</span>
+                      <span>{t("退款（POS 線下）")}</span>
                       <span className="font-semibold">− {formatMoney(summary.refundAmount)}</span>
                     </div>
                     <div className="mt-1 flex items-baseline justify-between gap-2 border-t border-emerald-200 pt-1">
-                      <span className="font-semibold">淨實收（落袋）</span>
+                      <span className="font-semibold">{t("淨實收（落袋）")}</span>
                       <span className="text-base font-semibold">
                         {formatMoney(summary.paidTotal + ledgerOnlineMop - summary.refundAmount)}
                       </span>
                     </div>
                     <div className="mt-1 text-[11px] text-emerald-700">
                       {summary.refundCount > 0
-                        ? `＝實收金額合計（毛）− ${summary.refundCount} 張退款單嘅退款總額 ${formatMoney(summary.refundAmount)}`
-                        : "本班次沒有退款單，所以「淨實收」＝「實收金額合計」。"}
+                        ? t(`＝實收金額合計（毛）− {n} 張退款單嘅退款總額 {amt}`, { n: summary.refundCount, amt: formatMoney(summary.refundAmount) })
+                        : t("本班次沒有退款單，所以「淨實收」＝「實收金額合計」。")}
                     </div>
                     <div className="mt-1 text-[11px] text-emerald-600/80">
-                      ⚠️ Ledger 純線上單嘅退款目前冇資料來源，未計入呢個數。
+                      {t("⚠️ Ledger 純線上單嘅退款目前冇資料來源，未計入呢個數。")}
                     </div>
                   </div>
                 </article>
@@ -2011,12 +1997,10 @@ export function ShiftPage() {
                   role="alert"
                   className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900"
                 >
-                  <div className="font-semibold">有線上單未入 POS 記錄</div>
+                  <div className="font-semibold">{t("有線上單未入 POS 記錄")}</div>
                   <div className="mt-0.5">
                     {unadoptedNotice(onlineReconcile)}
-                    呢批單嘅錢已經計入上面「線上」實收，但 POS 訂單庫未有記錄 ⇒
-                    「線下訂單」／對帳／明細暫時見唔到。系統會自動補入，唔需要手動處理。
-                  </div>
+                    {t("呢批單嘅錢已經計入上面「線上」實收，但 POS 訂單庫未有記錄 ⇒ 「線下訂單」／對帳／明細暫時見唔到。系統會自動補入，唔需要手動處理。")}</div>
                 </div>
               ) : null}
               {/*
@@ -2047,28 +2031,28 @@ export function ShiftPage() {
 
             <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
               <div>
-                <div className="font-semibold text-slate-900">應收現金（系統自動計算）</div>
+                <div className="font-semibold text-slate-900">{t("應收現金（系統自動計算）")}</div>
                 <div className="mt-1 text-xs text-slate-500">
-                  現金箱核對改喺「結數交班並打印」彈窗進行：有落差先需要輸入差額。
+                  {t("現金箱核對改喺「結數交班並打印」彈窗進行：有落差先需要輸入差額。")}
                 </div>
               </div>
               <div className="text-3xl font-semibold text-slate-900">{formatMoney(expectedCash)}</div>
             </div>
 
             <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
-              <div className="text-sm font-semibold text-slate-900">店內支付方式拆分（線下 POS）</div>
+              <div className="text-sm font-semibold text-slate-900">{t("店內支付方式拆分（線下 POS）")}</div>
               <div className="mt-3 grid gap-2">
                 {Object.keys(summary.paymentBreakdown).length === 0 ? (
-                  <div className="text-sm text-slate-500">今天暫未有已結帳店內訂單。</div>
+                  <div className="text-sm text-slate-500">{t("今天暫未有已結帳店內訂單。")}</div>
                 ) : (
                   <div className="overflow-auto rounded-xl border border-slate-200 bg-white">
                     <table className="w-full border-collapse text-sm">
                       <thead className="bg-slate-50 text-left text-xs font-semibold text-slate-500">
                         <tr>
-                          <th className="border-b border-slate-200 px-3 py-1.5">支付方式</th>
-                          <th className="border-b border-slate-200 px-3 py-1.5 text-right">張數</th>
-                          <th className="border-b border-slate-200 px-3 py-1.5 text-right">應收</th>
-                          <th className="border-b border-slate-200 px-3 py-1.5 text-right">實收</th>
+                          <th className="border-b border-slate-200 px-3 py-1.5">{t("支付方式")}</th>
+                          <th className="border-b border-slate-200 px-3 py-1.5 text-right">{t("張數")}</th>
+                          <th className="border-b border-slate-200 px-3 py-1.5 text-right">{t("應收")}</th>
+                          <th className="border-b border-slate-200 px-3 py-1.5 text-right">{t("實收")}</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -2094,14 +2078,11 @@ export function ShiftPage() {
             </div>
 
             <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
-              <div className="text-sm font-semibold text-slate-900">訂單明細（今日已結帳）</div>
+              <div className="text-sm font-semibold text-slate-900">{t("訂單明細（今日已結帳）")}</div>
               <div className="mt-1 text-xs text-slate-500">
-                線下 {detailSplit.offlineCount} 張 {formatMoney(detailSplit.offlineMop)}（＝上方「店內支付方式拆分（線下 POS）」合計）
-                ｜「線上」標記 {detailSplit.onlineCount} 張 {formatMoney(detailSplit.onlineMop)}（線上交單嘅本地投影，＝上方線上實收嘅本地部分）
-                ｜按結賬時間倒序；退款單唔列出。
-              </div>
+                {t("線下 ")}{detailSplit.offlineCount} {t("張 ")}{formatMoney(detailSplit.offlineMop)}{t("（＝上方「店內支付方式拆分（線下 POS）」合計） ｜「線上」標記 ")}{detailSplit.onlineCount} {t("張 ")}{formatMoney(detailSplit.onlineMop)}{t("（線上交單嘅本地投影，＝上方線上實收嘅本地部分） ｜按結賬時間倒序；退款單唔列出。")}</div>
               <div className="mt-3 max-h-[420px] overflow-auto rounded-xl border border-slate-200 bg-white">
-                <OrderDetailList rows={orderDetailRows} emptyText="今天暫無已結帳訂單。" />
+                <OrderDetailList rows={orderDetailRows} emptyText={t("今天暫無已結帳訂單。")} />
               </div>
             </div>
 
@@ -2128,7 +2109,7 @@ export function ShiftPage() {
             */}
             {false ? (
               <>
-                <div className="mt-6 text-sm font-semibold text-slate-700">會員通線上（Ledger）</div>
+                <div className="mt-6 text-sm font-semibold text-slate-700">{t("會員通線上（Ledger）")}</div>
                 {/*
                   ⚠️ 2026-09-15：原本呢度有一句 `{ledgerTodayLoading ? "載入今日線上報表…" : null}`。
                   而家全頁 `pageReady` 閘已經覆蓋（`ledgerLoaded` 未 true → 成頁 loading），
@@ -2144,27 +2125,26 @@ export function ShiftPage() {
             {ledgerToday ? (
               <div className="mt-3 grid gap-3 md:grid-cols-3">
                 <article className="rounded-2xl border border-orange-100 bg-orange-50/40 p-4">
-                  <div className="text-sm text-slate-500">線上訂單數</div>
+                  <div className="text-sm text-slate-500">{t("線上訂單數")}</div>
                   <div className="mt-2 text-2xl font-semibold text-slate-900">{ledgerToday?.orderCount}</div>
                 </article>
                 <article className="rounded-2xl border border-orange-100 bg-orange-50/40 p-4">
-                  <div className="text-sm text-slate-500">已付線上營業額</div>
+                  <div className="text-sm text-slate-500">{t("已付線上營業額")}</div>
                   <div className="mt-2 text-2xl font-semibold text-slate-900">
                     {formatMoney(ledgerOnlineMop)}
                   </div>
                   <div className="mt-1 text-xs text-slate-500">
-                    線上 {ledgerOnlineCount} 張（本地投影 {formatMoney(onlineLocalMop)} ＋ Ledger 純線上 {formatMoney(ledgerOnlyOnline.amountMop)}）＝ 實際收到
-                    {ledgerOnlineIsPaidSum && (ledgerPaidOrders?.incompleteCount ?? 0) > 0
-                      ? `｜其中 ${ledgerPaidOrders?.incompleteCount} 張未標記完成（${formatMoney(ledgerPaidOrders?.incompleteAmountMop ?? 0)}）`
+                    {t("線上 ")}{ledgerOnlineCount} {t("張（本地投影 ")}{formatMoney(onlineLocalMop)} {t("＋ Ledger 純線上 ")}{formatMoney(ledgerOnlyOnline.amountMop)}{t("）＝ 實際收到")}{ledgerOnlineIsPaidSum && (ledgerPaidOrders?.incompleteCount ?? 0) > 0
+                      ? t(`｜其中 {n} 張未標記完成（{amt}）`, { n: ledgerPaidOrders?.incompleteCount ?? 0, amt: formatMoney(ledgerPaidOrders?.incompleteAmountMop ?? 0) })
                       : ""}
                   </div>
                 </article>
                 <article className="rounded-2xl border border-orange-100 bg-orange-50/40 p-4">
-                  <div className="text-sm text-slate-500">餘額扣點 / 到店付款</div>
+                  <div className="text-sm text-slate-500">{t("餘額扣點 / 到店付款")}</div>
                   <div className="mt-2 text-base font-semibold text-slate-900">
                     {formatMoney(ledgerToday?.orderBalancePaidMop ?? 0)} / {formatMoney(ledgerToday?.orderInStorePaidMop ?? 0)}
                   </div>
-                  <div className="mt-1 text-xs text-slate-500">Ledger「已完成」單細項（供核對，未完成單未計）</div>
+                  <div className="mt-1 text-xs text-slate-500">{t("Ledger「已完成」單細項（供核對，未完成單未計）")}</div>
                 </article>
               </div>
             ) : null}
@@ -2172,15 +2152,14 @@ export function ShiftPage() {
             {ledgerPaidOrders ? (
               <details className="mt-3 rounded-xl border border-slate-200 bg-white p-3 text-xs text-slate-600">
                 <summary className="cursor-pointer font-semibold text-slate-800">
-                  線上拆數（點開逐張核對）：本地投影 {onlineLocalOrders.length} 張 {formatMoney(onlineLocalMop)} ＋
-                  Ledger 已付款 {ledgerPaidOrders?.count} 張 {formatMoney(ledgerPaidOrders?.amountMop ?? 0)}
-                  （其中 {ledgerOnlyRows.length} 張本地冇 → 計 {formatMoney(ledgerOnlyOnline.amountMop)}）
+                  {t("線上拆數（點開逐張核對）：本地投影 ")}{onlineLocalOrders.length} {t("張 ")}{formatMoney(onlineLocalMop)} {t("＋ Ledger 已付款 ")}{ledgerPaidOrders?.count} {t("張 ")}{formatMoney(ledgerPaidOrders?.amountMop ?? 0)}
+                  {t("（其中 ")}{ledgerOnlyRows.length} {t("張本地冇 → 計 ")}{formatMoney(ledgerOnlyOnline.amountMop)}{t("）")}
                 </summary>
                 <div className="mt-2 grid gap-1">
                   {onlineLocalOrders.map((o) => (
                     <div key={o.id} className="flex items-baseline justify-between gap-2">
                       <span className="truncate">
-                        本地投影 · {o.localOrderNo} · onlineId {String(o.onlineOrderId).slice(0, 8)} · {posPaymentMethodLabel(o.paymentMethod, "—")}
+                        {t("本地投影 · ")}{o.localOrderNo} · onlineId {String(o.onlineOrderId).slice(0, 8)} · {posPaymentMethodLabel(o.paymentMethod, "—")}
                       </span>
                       <span className="shrink-0 font-semibold">{formatMoney(o.total)}</span>
                     </div>
@@ -2194,8 +2173,8 @@ export function ShiftPage() {
                         className={`flex items-baseline justify-between gap-2 ${dup ? "text-slate-400" : ""}`}
                       >
                         <span className="truncate">
-                          Ledger · 取餐碼 {o.pickupCode ?? "—"} · id {o.id.slice(0, 8)} · {o.status}
-                          {dup ? "（本地已有 → 唔重複計）" : ""}
+                          {t("Ledger · 取餐碼 ")}{o.pickupCode ?? "—"} · id {o.id.slice(0, 8)} · {o.status}
+                          {dup ? t("（本地已有 → 唔重複計）") : ""}
                         </span>
                         <span className="shrink-0 font-semibold">{formatMoney(amount)}</span>
                       </div>
@@ -2210,12 +2189,11 @@ export function ShiftPage() {
 
           <section className="mt-3 rounded-2xl border border-slate-200 bg-white p-4">
             <div>
-              <div className="text-base font-semibold text-slate-900">交班歷史</div>
+              <div className="text-base font-semibold text-slate-900">{t("交班歷史")}</div>
               <div className="mt-1 text-sm text-slate-500">
-                保留最近 60 次交班記錄，方便追數與核對。
-                {historyCloudCount > 0
-                  ? `｜已由雲端同步 ${historyCloudCount} 筆（換機／多部機共用同一份）`
-                  : "｜交班記錄要上雲後才會跨機顯示。"}
+                {t("保留最近 60 次交班記錄，方便追數與核對。")}{historyCloudCount > 0
+                  ? t(`｜已由雲端同步 {n} 筆（換機／多部機共用同一份）`, { n: historyCloudCount })
+                  : t("｜交班記錄要上雲後才會跨機顯示。")}
               </div>
             </div>
             {/*
@@ -2226,31 +2204,31 @@ export function ShiftPage() {
               （容器太窄時改為橫向滾動，唔會拆行）。
             */}
             <div className="mt-4 flex items-center gap-2 overflow-x-auto rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2">
-              <span className="shrink-0 text-xs text-slate-500">交班日期</span>
+              <span className="shrink-0 text-xs text-slate-500">{t("交班日期")}</span>
               <input
-                aria-label="交班日期（由）"
+                aria-label={t("交班日期（由）")}
                 className="h-10 w-[150px] shrink-0 rounded-xl border border-slate-200 bg-white px-3"
                 onChange={(event) => setHistoryDateFrom(event.target.value)}
                 type="date"
                 value={historyDateFrom}
               />
-              <span className="shrink-0 text-xs text-slate-400">至</span>
+              <span className="shrink-0 text-xs text-slate-400">{t("至")}</span>
               <input
-                aria-label="交班日期（至）"
+                aria-label={t("交班日期（至）")}
                 className="h-10 w-[150px] shrink-0 rounded-xl border border-slate-200 bg-white px-3"
                 onChange={(event) => setHistoryDateTo(event.target.value)}
                 type="date"
                 value={historyDateTo}
               />
               <span className="h-6 w-px shrink-0 bg-slate-200" />
-              <span className="shrink-0 text-xs text-slate-500">員工</span>
+              <span className="shrink-0 text-xs text-slate-500">{t("員工")}</span>
               <select
-                aria-label="員工"
+                aria-label={t("員工")}
                 className="h-10 w-[150px] shrink-0 rounded-xl border border-slate-200 bg-white px-2"
                 onChange={(event) => setHistoryEmployeeFilter(event.target.value)}
                 value={historyEmployeeFilter}
               >
-                <option value="">全部員工</option>
+                <option value="">{t("全部員工")}</option>
                 {historyEmployeeOptions.map(([account, name]) => (
                   <option key={account} value={account}>
                     {name}
@@ -2265,7 +2243,7 @@ export function ShiftPage() {
                 onClick={exportShiftHistoryCsv}
                 type="button"
               >
-                {exportingType === "csv" ? "同步中…" : "導出 CSV"}
+                {exportingType === "csv" ? t("同步中…") : t("導出 CSV")}
               </button>
             </div>
             {/*
@@ -2305,27 +2283,26 @@ export function ShiftPage() {
                     表頭用 11px 先可以全部單行顯示，唔會斷成「應收金額合 / 計」。 */}
                 <thead className="bg-slate-50 text-left text-[11px] font-semibold text-slate-500">
                   <tr>
-                    <th className="border-b border-slate-200 px-3 py-2">交班時間</th>
-                    <th className="border-b border-slate-200 px-3 py-2">員工</th>
-                    <th className="border-b border-slate-200 px-3 py-2">營業額{MONEY_UNIT}</th>
-                    <th className="border-b border-slate-200 px-3 py-2">應收金額合計{MONEY_UNIT}</th>
-                    <th className="border-b border-slate-200 px-3 py-2">實收金額合計{MONEY_UNIT}</th>
-                    <th className="border-b border-slate-200 px-3 py-2">線上線下合計{MONEY_UNIT}</th>
-                    <th className="border-b border-slate-200 px-3 py-2">退款{MONEY_UNIT}</th>
-                    <th className="border-b border-slate-200 px-3 py-2">應收/實收現金{MONEY_UNIT}</th>
-                    <th className="border-b border-slate-200 px-3 py-2">差額{MONEY_UNIT}</th>
-                    <th className="border-b border-slate-200 px-3 py-2">待同步</th>
-                    <th className="border-b border-slate-200 px-3 py-2">備註</th>
-                    <th className="border-b border-slate-200 px-3 py-2">操作</th>
+                    <th className="border-b border-slate-200 px-3 py-2">{t("交班時間")}</th>
+                    <th className="border-b border-slate-200 px-3 py-2">{t("員工")}</th>
+                    <th className="border-b border-slate-200 px-3 py-2">{t("營業額")}{MONEY_UNIT}</th>
+                    <th className="border-b border-slate-200 px-3 py-2">{t("應收金額合計")}{MONEY_UNIT}</th>
+                    <th className="border-b border-slate-200 px-3 py-2">{t("實收金額合計")}{MONEY_UNIT}</th>
+                    <th className="border-b border-slate-200 px-3 py-2">{t("線上線下合計")}{MONEY_UNIT}</th>
+                    <th className="border-b border-slate-200 px-3 py-2">{t("退款")}{MONEY_UNIT}</th>
+                    <th className="border-b border-slate-200 px-3 py-2">{t("應收/實收現金")}{MONEY_UNIT}</th>
+                    <th className="border-b border-slate-200 px-3 py-2">{t("差額")}{MONEY_UNIT}</th>
+                    <th className="border-b border-slate-200 px-3 py-2">{t("待同步")}</th>
+                    <th className="border-b border-slate-200 px-3 py-2">{t("備註")}</th>
+                    <th className="border-b border-slate-200 px-3 py-2">{t("操作")}</th>
                   </tr>
                 </thead>
                 <tbody>
                   {shiftHistoryDayGroups.length === 0 ? (
                     <tr>
                       <td className="px-3 py-4 text-slate-500" colSpan={12}>
-                        目前沒有符合條件的交班歷史。
-                        {historyCloudCount === 0
-                          ? "（本機同雲端都未有已收工班次；完成一次「結數交班」後就會出現，換機登入都睇得返。）"
+                        {t("目前沒有符合條件的交班歷史。")}{historyCloudCount === 0
+                          ? t("（本機同雲端都未有已收工班次；完成一次「結數交班」後就會出現，換機登入都睇得返。）")
                           : ""}
                       </td>
                     </tr>
@@ -2338,13 +2315,12 @@ export function ShiftPage() {
                             className="border-b border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-500"
                             colSpan={12}
                           >
-                            {group.label} · {group.rows.length} 個班次
-                          </td>
+                            {group.label} · {group.rows.length} {t("個班次")}</td>
                         </tr>
                         {group.rows.map((row) => (
                       <tr key={row.id} className="border-b border-slate-100 last:border-b-0">
                         <td className="px-3 py-3 text-slate-700">{formatMacauDateTime(row.closedAt)}</td>
-                        <td className="px-3 py-3 text-slate-700">{row.employeeName ?? row.employeeAccount ?? "未記錄"}</td>
+                        <td className="px-3 py-3 text-slate-700">{row.employeeName ?? row.employeeAccount ?? t("未記錄")}</td>
                         <td className="overflow-hidden whitespace-nowrap px-3 py-3 font-semibold text-slate-900">{formatMoneyValue(row.revenue)}</td>
                         <td className="overflow-hidden whitespace-nowrap px-3 py-3 text-slate-700">
                           {typeof row.receivableTotal === "number" ? formatMoneyValue(row.receivableTotal) : "--"}
@@ -2376,13 +2352,12 @@ export function ShiftPage() {
                         </td>
                         {/* 逐行拆開顯示（唔用「N 事件 / M 打印」一行）—— 欄窄時會斷成「3 打 / 印」。 */}
                         <td className="px-3 py-3 text-slate-700">
-                          {row.pendingEvents} 事件
-                          <div className="text-[11px] text-slate-500">{row.pendingPrints} 打印</div>
+                          {row.pendingEvents} {t("事件")}<div className="text-[11px] text-slate-500">{row.pendingPrints} {t("打印")}</div>
                           {row.failedEvents ? (
-                            <div className="text-[11px] text-red-600">{row.failedEvents} 失敗</div>
+                            <div className="text-[11px] text-red-600">{row.failedEvents} {t("失敗")}</div>
                           ) : null}
                           {row.skippedEvents ? (
-                            <div className="text-[11px] text-slate-500">無歸屬 {row.skippedEvents}</div>
+                            <div className="text-[11px] text-slate-500">{t("無歸屬 ")}{row.skippedEvents}</div>
                           ) : null}
                         </td>
                         <td className="px-3 py-3">
@@ -2396,7 +2371,7 @@ export function ShiftPage() {
                                   [row.id]: event.target.value,
                                 }))
                               }
-                              placeholder="補錄備註"
+                              placeholder={t("補錄備註")}
                               value={historyNoteDrafts[row.id] ?? row.closingNote ?? ""}
                             />
                             <button
@@ -2404,7 +2379,7 @@ export function ShiftPage() {
                               onClick={() => saveHistoryNote(row.id)}
                               type="button"
                             >
-                              保存
+                              {t("保存")}
                             </button>
                           </div>
                         </td>
@@ -2417,14 +2392,14 @@ export function ShiftPage() {
                               onClick={() => reprintShiftRecord(row)}
                               type="button"
                             >
-                              {reprintingShiftId === row.id ? "打印中…" : "重打交班單"}
+                              {reprintingShiftId === row.id ? t("打印中…") : t("重打交班單")}
                             </button>
                             <button
                               className="whitespace-nowrap rounded-xl bg-red-50 px-2.5 py-2 font-semibold text-red-700 shadow-sm ring-1 ring-red-200"
                               onClick={() => deleteHistoryRecord(row.id)}
                               type="button"
                             >
-                              刪除
+                              {t("刪除")}
                             </button>
                           </div>
                         </td>
@@ -2440,12 +2415,11 @@ export function ShiftPage() {
             {/* 分頁：每頁最多 10 個日曆日；「查看更多」累加（框尺寸固定）。 */}
             <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
               <div className="text-sm text-slate-500">
-                已顯示最近 <span className="font-semibold text-slate-900">{shiftHistoryVisibleGroups.length} 天</span> ·{" "}
-                <span className="font-semibold text-slate-900">{shiftHistoryVisibleRows} 筆</span>
-                （合計 <span className="font-semibold text-slate-900">{shiftHistoryDayGroups.length} 天</span> ·{" "}
-                <span className="font-semibold text-slate-900">{filteredShiftHistory.length} 筆</span>）　·　每頁最多{" "}
-                {SHIFT_HISTORY_PAGE_DAYS} 天
-              </div>
+                {t("已顯示最近 ")}<span className="font-semibold text-slate-900">{shiftHistoryVisibleGroups.length} {t("天")}</span> ·{" "}
+                <span className="font-semibold text-slate-900">{shiftHistoryVisibleRows} {t("筆")}</span>
+                {t("（合計 ")}<span className="font-semibold text-slate-900">{shiftHistoryDayGroups.length} {t("天")}</span> ·{" "}
+                <span className="font-semibold text-slate-900">{filteredShiftHistory.length} {t("筆")}</span>{t("）　·　每頁最多")}{" "}
+                {SHIFT_HISTORY_PAGE_DAYS} {t("天")}</div>
               <div className="flex items-center gap-2">
                 {shiftHistoryVisibleGroups.length > SHIFT_HISTORY_PAGE_DAYS ? (
                   <button
@@ -2453,7 +2427,7 @@ export function ShiftPage() {
                     onClick={() => setHistoryLoadedDays(SHIFT_HISTORY_PAGE_DAYS)}
                     type="button"
                   >
-                    收起
+                    {t("收起")}
                   </button>
                 ) : null}
                 <button
@@ -2463,11 +2437,11 @@ export function ShiftPage() {
                   type="button"
                 >
                   {shiftHistoryHasMore
-                    ? `查看更多（再載入 ${Math.min(
+                    ? t(`查看更多（再載入 {n} 天）`, { n: Math.min(
                         SHIFT_HISTORY_PAGE_DAYS,
                         shiftHistoryDayGroups.length - shiftHistoryVisibleGroups.length,
-                      )} 天）`
-                    : "已全部載入"}
+                      ) })
+                    : t("已全部載入")}
                 </button>
               </div>
             </div>
@@ -2481,17 +2455,17 @@ export function ShiftPage() {
         <ResponsiveModal
           title={
             confirmStep === 1
-              ? "結數交班 · 核對金額"
+              ? t("結數交班 · 核對金額")
               : confirmStep === 2
-                ? "二次確認 · 交班後無法更改"
-                : "交班明細 · 打印預覽"
+                ? t("二次確認 · 交班後無法更改")
+                : t("交班明細 · 打印預覽")
           }
           description={
             confirmStep === 1
-              ? "系統已自動彙總今日所有金額。請先點算現金箱：若與應收現金有落差，喺下面輸入差額；冇落差可直接進行下一步。"
+              ? t("系統已自動彙總今日所有金額。請先點算現金箱：若與應收現金有落差，喺下面輸入差額；冇落差可直接進行下一步。")
               : confirmStep === 2
-                ? "交班後本班次會寫入歷史並切回「未開工」，金額與差額記錄即鎖定、不可再更改。請最後核對下列數字。"
-                : "以下為固定格式交班明細（內容同版面不可編輯）。按「打印」由指定打印機出紙並完成交班；按「跳過」唔打印直接完成交班。"
+                ? t("交班後本班次會寫入歷史並切回「未開工」，金額與差額記錄即鎖定、不可再更改。請最後核對下列數字。")
+                : t("以下為固定格式交班明細（內容同版面不可編輯）。按「打印」由指定打印機出紙並完成交班；按「跳過」唔打印直接完成交班。")
           }
           actions={
             confirmStep === 1 ? (
@@ -2502,7 +2476,7 @@ export function ShiftPage() {
                   onClick={() => setConfirmOpen(false)}
                   type="button"
                 >
-                  取消
+                  {t("取消")}
                 </button>
                 <button
                   className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
@@ -2510,7 +2484,7 @@ export function ShiftPage() {
                   onClick={() => setConfirmStep(2)}
                   type="button"
                 >
-                  下一步：二次確認
+                  {t("下一步：二次確認")}
                 </button>
               </>
             ) : confirmStep === 2 ? (
@@ -2521,7 +2495,7 @@ export function ShiftPage() {
                   onClick={() => setConfirmStep(1)}
                   type="button"
                 >
-                  返回修改
+                  {t("返回修改")}
                 </button>
                 <button
                   className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
@@ -2533,7 +2507,7 @@ export function ShiftPage() {
                   }}
                   type="button"
                 >
-                  下一步：打印預覽
+                  {t("下一步：打印預覽")}
                 </button>
               </>
             ) : (
@@ -2544,7 +2518,7 @@ export function ShiftPage() {
                   onClick={() => setConfirmStep(2)}
                   type="button"
                 >
-                  返回修改
+                  {t("返回修改")}
                 </button>
                 <button
                   className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm ring-1 ring-slate-200 disabled:opacity-60"
@@ -2552,7 +2526,7 @@ export function ShiftPage() {
                   onClick={() => void closeShift(closingDiff, closingNote, previewData ?? undefined, false)}
                   type="button"
                 >
-                  跳過
+                  {t("跳過")}
                 </button>
                 <button
                   aria-busy={closingShift}
@@ -2561,7 +2535,7 @@ export function ShiftPage() {
                   onClick={() => void closeShift(closingDiff, closingNote, previewData ?? undefined, true)}
                   type="button"
                 >
-                  {closingShift ? "處理中…" : "打印"}
+                  {closingShift ? t("處理中…") : t("打印")}
                 </button>
               </>
             )
@@ -2579,29 +2553,29 @@ export function ShiftPage() {
             <>
               <div className="grid gap-3 md:grid-cols-3">
                 <article className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                  <div className="text-sm text-slate-500">已結帳訂單</div>
+                  <div className="text-sm text-slate-500">{t("已結帳訂單")}</div>
                   <div className="mt-2 text-2xl font-semibold text-slate-900">{summary.count}</div>
                 </article>
                 <article className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                  <div className="text-sm text-slate-500">營業額</div>
+                  <div className="text-sm text-slate-500">{t("營業額")}</div>
                   <div className="mt-2 text-2xl font-semibold text-slate-900">{formatMoney(summary.revenue)}</div>
                 </article>
                 <article className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                  <div className="text-sm text-slate-500">線上已支付</div>
+                  <div className="text-sm text-slate-500">{t("線上已支付")}</div>
                   <div className="mt-2 text-2xl font-semibold text-slate-900">{formatMoney(summary.prepaid)}</div>
                 </article>
               </div>
 
               <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
-                <div className="text-xs font-semibold text-slate-500">系統應收現金（唔可以改）</div>
+                <div className="text-xs font-semibold text-slate-500">{t("系統應收現金（唔可以改）")}</div>
                 <div className="mt-1 text-3xl font-semibold text-slate-900">{formatMoney(expectedCash)}</div>
                 <div className="mt-1 text-xs text-slate-500">
-                  = 已結帳訂單中以現金／混合現金方式實收嘅總和（線下 POS，含退款調整）。
+                  {t("= 已結帳訂單中以現金／混合現金方式實收嘅總和（線下 POS，含退款調整）。")}
                 </div>
               </div>
 
               <label className="grid gap-1.5">
-                <span className="text-sm font-semibold text-slate-900">現金差額（有落差先填）</span>
+                <span className="text-sm font-semibold text-slate-900">{t("現金差額（有落差先填）")}</span>
                 <div className="flex flex-wrap items-center gap-2">
                   <input
                     autoFocus
@@ -2611,33 +2585,30 @@ export function ShiftPage() {
                     placeholder="0"
                     value={closingDiff}
                   />
-                  <span className="text-xs text-slate-500">少收填負數（如 -30）／多收填正數（如 15.5）</span>
+                  <span className="text-xs text-slate-500">{t("少收填負數（如 -30）／多收填正數（如 15.5）")}</span>
                 </div>
                 <span className="text-xs text-slate-500">
-                  實收現金（系統推算）：{closingActualCash !== null ? formatMoney(closingActualCash) : "--"}
+                  {t("實收現金（系統推算）：")}{closingActualCash !== null ? formatMoney(closingActualCash) : "--"}
                 </span>
                 {closingDiffInvalid ? (
                   <span className="text-xs font-semibold text-red-600">
-                    差額格式不正確：只可輸入數字，如需少收請以負數表示。
+                    {t("差額格式不正確：只可輸入數字，如需少收請以負數表示。")}
                   </span>
                 ) : null}
               </label>
 
               {closingDiffValue !== undefined ? (
                 <div className="rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-                  ⚠ 現金箱與應收有{" "}
-                  {formatMoney(closingDiffValue < 0 ? -closingDiffValue : closingDiffValue)} 嘅差額
-                  （{closingDiffValue < 0 ? "少收／短款" : "多收／長款"}）。請確認已正確點算；
-                  如屬錯數，請喺下面「備註」填寫說明——差額只作記錄，唔會改動系統任何金額。
-                </div>
+                  {t("⚠ 現金箱與應收有")}{" "}
+                  {formatMoney(closingDiffValue < 0 ? -closingDiffValue : closingDiffValue)} {t("嘅差額 （")}{closingDiffValue < 0 ? t("少收／短款") : t("多收／長款")}{t("）。請確認已正確點算； 如屬錯數，請喺下面「備註」填寫說明——差額只作記錄，唔會改動系統任何金額。")}</div>
               ) : null}
 
               <label className="grid gap-1.5">
-                <span className="text-sm font-semibold text-slate-900">備註／錯數說明（選填）</span>
+                <span className="text-sm font-semibold text-slate-900">{t("備註／錯數說明（選填）")}</span>
                 <textarea
                   className="min-h-[64px] rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900"
                   onChange={(event) => setClosingNote(event.target.value)}
-                  placeholder="只作記錄用途，唔會修改任何金額。例如：找續出錯，短款 MOP 30"
+                  placeholder={t("只作記錄用途，唔會修改任何金額。例如：找續出錯，短款 MOP 30")}
                   value={closingNote}
                 />
               </label>
@@ -2648,16 +2619,14 @@ export function ShiftPage() {
               ledgerTodayError ? (
                 <div className="grid gap-1 rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
                   {queueSummary.pendingEvents > 0
-                    ? `⚠ 仲有 ${queueSummary.pendingEvents} 筆資料未同步上雲，交班前會先強制同步。`
+                    ? t(`⚠ 仲有 {n} 筆資料未同步上雲，交班前會先強制同步。`, { n: queueSummary.pendingEvents })
                     : null}
                   {queueSummary.failedEvents > 0
-                    ? `⚠ ${queueSummary.failedEvents} 筆資料永久同步失敗（已跳過，唔會阻住交班）。`
+                    ? t(`⚠ {n} 筆資料永久同步失敗（已跳過，唔會阻住交班）。`, { n: queueSummary.failedEvents })
                     : null}
                   {queueSummary.skippedEvents > 0 ? (
                     <span className="text-amber-700">
-                      {queueSummary.skippedEvents} 筆資料冇店舖歸屬（外店／未登入時產生），
-                      <strong>唔會上雲</strong>，亦唔會阻住交班。如需處理請聯絡技術支援。
-                    </span>
+                      {queueSummary.skippedEvents} {t("筆資料冇店舖歸屬（外店／未登入時產生），")}<strong>{t("唔會上雲")}</strong>{t("，亦唔會阻住交班。如需處理請聯絡技術支援。")}</span>
                   ) : null}
                   {ledgerTodayError ? `⚠ ${ledgerTodayError}` : null}
                 </div>
@@ -2666,70 +2635,64 @@ export function ShiftPage() {
           ) : confirmStep === 2 ? (
             <>
               <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">
-                <div className="font-semibold">此操作無法復原</div>
+                <div className="font-semibold">{t("此操作無法復原")}</div>
                 <div className="mt-1">
-                  撳「確認，交班並打印」後，本班次即寫入交班歷史、狀態切回「未開工」，
-                  並打印交班單。之後只能喺歷史補錄備註，<span className="font-semibold">唔可以再改任何金額或差額</span>
-                  。請確認下面數字冇錯。
-                </div>
+                  {t("撳「確認，交班並打印」後，本班次即寫入交班歷史、狀態切回「未開工」， 並打印交班單。之後只能喺歷史補錄備註，")}<span className="font-semibold">{t("唔可以再改任何金額或差額")}</span>
+                  {t("。請確認下面數字冇錯。")}</div>
                 {closeStoreGate ? (
                   <div className="mt-2 border-t border-red-200 pt-2">
-                    另外：<span className="font-semibold">本店線上／線下接單會一齊關閉</span>（打烊），
-                    客人即刻落唔到單；重開要人手。
-                  </div>
+                    {t("另外：")}<span className="font-semibold">{t("本店線上／線下接單會一齊關閉")}</span>{t("（打烊）， 客人即刻落唔到單；重開要人手。")}</div>
                 ) : null}
               </div>
               <div className="grid gap-3 md:grid-cols-2">
                 <article className="rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm">
-                  <div className="text-slate-500">已結帳訂單</div>
-                  <div className="mt-1 text-xl font-semibold text-slate-900">{summary.count} 張</div>
+                  <div className="text-slate-500">{t("已結帳訂單")}</div>
+                  <div className="mt-1 text-xl font-semibold text-slate-900">{summary.count} {t("張")}</div>
                 </article>
                 <article className="rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm">
-                  <div className="text-slate-500">營業額</div>
+                  <div className="text-slate-500">{t("營業額")}</div>
                   <div className="mt-1 text-xl font-semibold text-slate-900">{formatMoney(summary.revenue)}</div>
                 </article>
                 <article className="rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm">
-                  <div className="text-slate-500">線上已支付</div>
+                  <div className="text-slate-500">{t("線上已支付")}</div>
                   <div className="mt-1 text-xl font-semibold text-slate-900">{formatMoney(summary.prepaid)}</div>
                 </article>
                 <article className="rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm">
-                  <div className="text-slate-500">退款</div>
+                  <div className="text-slate-500">{t("退款")}</div>
                   <div className="mt-1 text-xl font-semibold text-slate-900">
-                    {summary.refundCount} 張 / {formatMoney(summary.refundAmount)}
+                    {summary.refundCount} {t("張 / ")}{formatMoney(summary.refundAmount)}
                   </div>
                 </article>
               </div>
 
               <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
                 <div className="flex items-center justify-between py-1">
-                  <span>應收現金（系統）</span>
+                  <span>{t("應收現金（系統）")}</span>
                   <span className="font-semibold text-slate-900">{formatMoney(expectedCash)}</span>
                 </div>
                 <div className="flex items-center justify-between border-t border-slate-200 py-1">
-                  <span>輸入差額</span>
+                  <span>{t("輸入差額")}</span>
                   <span className={`font-semibold ${closingDiffValue === undefined ? "text-slate-500" : closingDiffValue < 0 ? "text-red-700" : "text-emerald-700"}`}>
-                    {closingDiffValue === undefined ? "無（0）" : formatMoney(closingDiffValue)}
+                    {closingDiffValue === undefined ? t("無（0）") : formatMoney(closingDiffValue)}
                   </span>
                 </div>
                 <div className="flex items-center justify-between border-t border-slate-200 py-1">
-                  <span>實收現金（推算）</span>
+                  <span>{t("實收現金（推算）")}</span>
                   <span className="font-semibold text-slate-900">
-                    {closingActualCash !== null ? formatMoney(closingActualCash) : "--（無盤點記錄）"}
+                    {closingActualCash !== null ? formatMoney(closingActualCash) : t("--（無盤點記錄）")}
                   </span>
                 </div>
                 <div className="flex items-start justify-between gap-3 border-t border-slate-200 py-1">
-                  <span>備註</span>
+                  <span>{t("備註")}</span>
                   <span className="max-w-[60%] text-right text-slate-700">
-                    {closingNote.trim() || "（無）"}
+                    {closingNote.trim() || t("（無）")}
                   </span>
                 </div>
               </div>
 
               {closingDiffValue !== undefined ? (
                 <div className="rounded-2xl border border-red-200 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700">
-                  現金差額非零（{formatMoney(closingDiffValue < 0 ? -closingDiffValue : closingDiffValue)}）
-                  —— 將記錄為「{closingDiffValue < 0 ? "少收／短款" : "多收／長款"}」，不會改動系統金額。
-                </div>
+                  {t("現金差額非零（")}{formatMoney(closingDiffValue < 0 ? -closingDiffValue : closingDiffValue)}{t("） —— 將記錄為「")}{closingDiffValue < 0 ? t("少收／短款") : t("多收／長款")}{t("」，不會改動系統金額。")}</div>
               ) : null}
 
               {queueSummary.pendingEvents > 0 ||
@@ -2737,10 +2700,10 @@ export function ShiftPage() {
               queueSummary.skippedEvents > 0 ||
               ledgerTodayError ? (
                 <div className="grid gap-1 rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-                  {queueSummary.pendingEvents > 0 ? `仲有 ${queueSummary.pendingEvents} 筆資料待同步（交班前會先強制同步）。` : null}
-                  {queueSummary.failedEvents > 0 ? `${queueSummary.failedEvents} 筆永久失敗已跳過。` : null}
+                  {queueSummary.pendingEvents > 0 ? t(`仲有 {n} 筆資料待同步（交班前會先強制同步）。`, { n: queueSummary.pendingEvents }) : null}
+                  {queueSummary.failedEvents > 0 ? t(`{n} 筆永久失敗已跳過。`, { n: queueSummary.failedEvents }) : null}
                   {queueSummary.skippedEvents > 0
-                    ? `${queueSummary.skippedEvents} 筆無歸屬資料（外店／未登入時產生）唔會上雲，已跳過。`
+                    ? t(`{n} 筆無歸屬資料（外店／未登入時產生）唔會上雲，已跳過。`, { n: queueSummary.skippedEvents })
                     : null}
                   {ledgerTodayError ? ledgerTodayError : null}
                 </div>
@@ -2769,33 +2732,31 @@ export function ShiftPage() {
                   />
                   <span className="flex-1 text-sm">
                     <span className="block font-semibold text-slate-900">
-                      同時關閉本店「線上 + 線下」接單（打烊）
+                      {t("同時關閉本店「線上 + 線下」接單（打烊）")}
                     </span>
                     <span className="mt-1 block text-slate-600">
-                      交班後客人將無法掃碼點餐、用自助點餐機落單，線上（會員通）亦會暫停接單。
+                      {t("交班後客人將無法掃碼點餐、用自助點餐機落單，線上（會員通）亦會暫停接單。")}
                     </span>
                     <span className="mt-1 block text-xs text-slate-500">
-                      而家：店內接單 <strong className="text-slate-700">{closeGateNow.storeLabel}</strong>
+                      {t("而家：店內接單 ")}<strong className="text-slate-700">{closeGateNow.storeLabel}</strong>
                       {" · "}
-                      線上接單 <strong className="text-slate-700">{closeGateNow.onlineLabel}</strong>
+                      {t("線上接單 ")}<strong className="text-slate-700">{closeGateNow.onlineLabel}</strong>
                     </span>
                   </span>
                 </label>
 
                 {closeStoreGate && closeGateNothingToDo ? (
                   <div className="mt-2 rounded-xl bg-white/70 px-3 py-2 text-xs text-slate-600">
-                    兩條通道本身都未開（或未接通），交班唔會再改動接單狀態。
+                    {t("兩條通道本身都未開（或未接通），交班唔會再改動接單狀態。")}
                   </div>
                 ) : null}
 
                 {closeStoreGate ? (
                   <div className="mt-2 rounded-xl bg-white/70 px-3 py-2 text-xs text-slate-600">
-                    ⚠ 重開需要人手：交班後到側欄商店名卡撳「營業中」，或設定頁開返線上接單。
-                    <strong className="text-slate-700">唔會</strong>自動開返。
-                  </div>
+                    {t("⚠ 重開需要人手：交班後到側欄商店名卡撳「營業中」，或設定頁開返線上接單。")}<strong className="text-slate-700">{t("唔會")}</strong>{t("自動開返。")}</div>
                 ) : (
                   <div className="mt-2 rounded-xl border border-amber-200 bg-white/70 px-3 py-2 text-xs text-amber-800">
-                    ⚠ 已取消勾選：交班後接單狀態維持現狀，客人仍然落得到單。
+                    {t("⚠ 已取消勾選：交班後接單狀態維持現狀，客人仍然落得到單。")}
                   </div>
                 )}
               </div>
@@ -2804,21 +2765,20 @@ export function ShiftPage() {
             <>
               {!shiftPrinter ? (
                 <div className="rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-                  未偵測到可用打印機：可到「設備設定 → 打印機」添加／啟用並指定「交班單打印機」，或者按「跳過」不打印直接完成交班。
+                  {t("未偵測到可用打印機：可到「設備設定 → 打印機」添加／啟用並指定「交班單打印機」，或者按「跳過」不打印直接完成交班。")}
                 </div>
               ) : (
                 <div className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
-                  將由「{shiftPrinter.name}」出紙（更改：設備設定 → 打印機 → 交班單打印機）。
-                </div>
+                  {t("將由「")}{shiftPrinter.name}{t("」出紙（更改：設備設定 → 打印機 → 交班單打印機）。")}</div>
               )}
 
               {queueSummary.pendingEvents > 0 || queueSummary.failedEvents > 0 ? (
                 <div className="rounded-2xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
                   {queueSummary.pendingEvents > 0
-                    ? `⚠ 仲有 ${queueSummary.pendingEvents} 筆資料未同步上雲，交班前會先強制同步。`
+                    ? t(`⚠ 仲有 {n} 筆資料未同步上雲，交班前會先強制同步。`, { n: queueSummary.pendingEvents })
                     : null}
                   {queueSummary.failedEvents > 0
-                    ? `⚠ ${queueSummary.failedEvents} 筆資料永久同步失敗（已跳過，唔會阻住交班）。`
+                    ? t(`⚠ {n} 筆資料永久同步失敗（已跳過，唔會阻住交班）。`, { n: queueSummary.failedEvents })
                     : null}
                 </div>
               ) : null}
@@ -2832,55 +2792,55 @@ export function ShiftPage() {
                 }`}
               >
                 {closeStoreGate
-                  ? "交班後：將一併關閉本店「線上 + 線下」接單（客人掃碼／自助機／線上點餐一律停單）。"
-                  : "交班後：接單狀態不變（客人仍可掃碼、自助機、線上落單）。"}
+                  ? t("交班後：將一併關閉本店「線上 + 線下」接單（客人掃碼／自助機／線上點餐一律停單）。")
+                  : t("交班後：接單狀態不變（客人仍可掃碼、自助機、線上落單）。")}
               </div>
 
               {previewData ? (
                 <div className="mx-auto w-full max-w-[360px] rounded-2xl border-2 border-dashed border-slate-300 bg-white p-5 font-mono text-[13px] leading-relaxed text-slate-900">
                   <div className="text-center">
-                    <div className="text-base font-semibold tracking-[0.3em]">交班明細</div>
+                    <div className="text-base font-semibold tracking-[0.3em]">{t("交班明細")}</div>
                     {previewData.storeName ? (
                       <div className="mt-1 text-xs text-slate-500">{previewData.storeName}</div>
                     ) : null}
-                    <div className="text-xs text-slate-500">單號：交班單 {previewData.shiftNo}</div>
+                    <div className="text-xs text-slate-500">{t("單號：交班單 ")}{previewData.shiftNo}</div>
                   </div>
 
                   <div className="mt-3 space-y-0.5 border-t border-dashed border-slate-300 pt-2">
-                    <div>班次員工：{previewData.employee}</div>
+                    <div>{t("班次員工：")}{previewData.employee}</div>
                     {previewData.openedAt ? (
-                      <div>開工時間：{formatMacauDateTime(previewData.openedAt)}</div>
+                      <div>{t("開工時間：")}{formatMacauDateTime(previewData.openedAt)}</div>
                     ) : null}
-                    <div>交班時間：{formatMacauDateTime(previewData.closedAt)}</div>
+                    <div>{t("交班時間：")}{formatMacauDateTime(previewData.closedAt)}</div>
                   </div>
 
                   <div className="mt-3 border-t border-dashed border-slate-300 pt-2">
-                    <div className="font-semibold text-slate-700">— 店內（今日）—</div>
+                    <div className="font-semibold text-slate-700">{t("— 店內（今日）—")}</div>
                     <div className="mt-1 space-y-0.5">
                       <div className="flex items-baseline justify-between gap-2">
-                        <span>已結帳訂單</span>
-                        <span>{previewData.store.count} 張</span>
+                        <span>{t("已結帳訂單")}</span>
+                        <span>{previewData.store.count} {t("張")}</span>
                       </div>
                       <div className="flex items-baseline justify-between gap-2">
-                        <span>營業額</span>
+                        <span>{t("營業額")}</span>
                         <span>{formatMoney(previewData.store.revenue)}</span>
                       </div>
                       <div className="flex items-baseline justify-between gap-2">
-                        <span>應收金額合計</span>
+                        <span>{t("應收金額合計")}</span>
                         <span>{formatMoney(previewData.store.receivableTotal)}</span>
                       </div>
                       <div className="flex items-baseline justify-between gap-2">
-                        <span>實收金額合計</span>
+                        <span>{t("實收金額合計")}</span>
                         <span>{formatMoney(previewData.store.paidTotal)}</span>
                       </div>
                       <div className="flex items-baseline justify-between gap-2">
-                        <span>線上已支付（店內單）</span>
+                        <span>{t("線上已支付（店內單）")}</span>
                         <span>{formatMoney(previewData.store.prepaid)}</span>
                       </div>
                       <div className="flex items-baseline justify-between gap-2">
-                        <span>退款</span>
+                        <span>{t("退款")}</span>
                         <span>
-                          {previewData.store.refundCount} 張 / {formatMoney(previewData.store.refundAmount)}
+                          {previewData.store.refundCount} {t("張 / ")}{formatMoney(previewData.store.refundAmount)}
                         </span>
                       </div>
                     </div>
@@ -2888,26 +2848,26 @@ export function ShiftPage() {
 
                   {previewData.online ? (
                     <div className="mt-3 border-t border-dashed border-slate-300 pt-2">
-                      <div className="font-semibold text-slate-700">— 會員通線上（今日）—</div>
+                      <div className="font-semibold text-slate-700">{t("— 會員通線上（今日）—")}</div>
                       <div className="mt-1 space-y-0.5">
                         <div className="flex items-baseline justify-between gap-2">
-                          <span>線上訂單</span>
-                          <span>{previewData.online.orderCount} 張</span>
+                          <span>{t("線上訂單")}</span>
+                          <span>{previewData.online.orderCount} {t("張")}</span>
                         </div>
                         <div className="flex items-baseline justify-between gap-2">
-                          <span>已付線上營業額</span>
+                          <span>{t("已付線上營業額")}</span>
                           <span>{formatMoney(previewData.online.paidMop)}</span>
                         </div>
                         <div className="flex items-baseline justify-between gap-2">
-                          <span>餘額扣點</span>
+                          <span>{t("餘額扣點")}</span>
                           <span>{formatMoney(previewData.online.balancePaidMop)}</span>
                         </div>
                         <div className="flex items-baseline justify-between gap-2">
-                          <span>到店／貨到付款</span>
+                          <span>{t("到店／貨到付款")}</span>
                           <span>{formatMoney(previewData.online.inStorePaidMop)}</span>
                         </div>
                         <div className="flex items-baseline justify-between gap-2 font-semibold">
-                          <span>線上線下合計（線下已含現金）</span>
+                          <span>{t("線上線下合計（線下已含現金）")}</span>
                           <span>{formatMoney(previewData.store.paidTotal + previewData.online.paidMop)}</span>
                         </div>
                       </div>
@@ -2915,9 +2875,9 @@ export function ShiftPage() {
                   ) : null}
 
                   <div className="mt-3 border-t border-dashed border-slate-300 pt-2">
-                    <div className="font-semibold text-slate-700">— 支付方式分項 —</div>
+                    <div className="font-semibold text-slate-700">{t("— 支付方式分項 —")}</div>
                     {previewData.payments.length === 0 ? (
-                      <div className="mt-1 text-slate-500">（今日暫無已結帳線下訂單）</div>
+                      <div className="mt-1 text-slate-500">{t("（今日暫無已結帳線下訂單）")}</div>
                     ) : (
                       <div className="mt-1 space-y-0.5">
                         {previewData.payments.map((bucket) => (
@@ -2925,7 +2885,7 @@ export function ShiftPage() {
                             <span>{bucket.method}</span>
                             <span className="text-right">
                               {formatMoney(bucket.receivable)} / {formatMoney(bucket.paid)}
-                              <span className="text-slate-400"> · {bucket.count} 張</span>
+                              <span className="text-slate-400"> · {bucket.count} {t("張")}</span>
                             </span>
                           </div>
                         ))}
@@ -2936,26 +2896,25 @@ export function ShiftPage() {
                   {previewData.purchase ? (
                     <div className="mt-3 border-t border-dashed border-slate-300 pt-2">
                       <div className="flex items-baseline justify-between gap-2">
-                        <span>今日買貨成本（已付）</span>
+                        <span>{t("今日買貨成本（已付）")}</span>
                         <span>{formatMoney(previewData.purchase.paid)}</span>
                       </div>
                       {previewData.purchase.unpaid > 0 ? (
                         <div className="text-xs text-slate-500">
-                          （未付 {formatMoney(previewData.purchase.unpaid)} 不計入）
-                        </div>
+                          {t("（未付 ")}{formatMoney(previewData.purchase.unpaid)} {t("不計入）")}</div>
                       ) : null}
                     </div>
                   ) : null}
 
                   <div className="mt-3 border-t-2 border-slate-400 pt-2">
-                    <div className="font-semibold text-slate-700">— 現金箱核對 —</div>
+                    <div className="font-semibold text-slate-700">{t("— 現金箱核對 —")}</div>
                     <div className="mt-1 flex items-baseline justify-between gap-2">
-                      <span>應收現金</span>
+                      <span>{t("應收現金")}</span>
                       <span className="text-base font-semibold">{formatMoney(previewData.cash.expected)}</span>
                     </div>
                     {typeof previewData.cash.actual === "number" ? (
                       <div className="flex items-baseline justify-between gap-2">
-                        <span>實收現金（盤點）</span>
+                        <span>{t("實收現金（盤點）")}</span>
                         <span>{formatMoney(previewData.cash.actual)}</span>
                       </div>
                     ) : null}
@@ -2965,7 +2924,7 @@ export function ShiftPage() {
                           previewData.cash.diff < 0 ? "text-red-700" : "text-emerald-700"
                         }`}
                       >
-                        <span>現金差額（{previewData.cash.diff < 0 ? "少收" : "多收"}）</span>
+                        <span>{t("現金差額（")}{previewData.cash.diff < 0 ? t("少收") : t("多收")}）</span>
                         <span>{formatMoney(previewData.cash.diff)}</span>
                       </div>
                     ) : null}
@@ -2973,17 +2932,17 @@ export function ShiftPage() {
 
                   {previewData.note ? (
                     <div className="mt-3 border-t border-dashed border-slate-300 pt-2">
-                      <div className="font-semibold text-slate-700">備註</div>
+                      <div className="font-semibold text-slate-700">{t("備註")}</div>
                       <div className="mt-0.5 whitespace-pre-wrap text-slate-700">{previewData.note}</div>
                     </div>
                   ) : null}
 
                   <div className="mt-4 grid grid-cols-2 gap-3 border-t border-dashed border-slate-300 pt-3 text-xs text-slate-500">
-                    <div>交班人簽名：＿＿＿＿＿＿</div>
-                    <div>接更人簽名：＿＿＿＿＿＿</div>
+                    <div>{t("交班人簽名：＿＿＿＿＿＿")}</div>
+                    <div>{t("接更人簽名：＿＿＿＿＿＿")}</div>
                   </div>
 
-                  <div className="mt-3 text-center text-[11px] text-slate-400">固定格式 · 不可編輯</div>
+                  <div className="mt-3 text-center text-[11px] text-slate-400">{t("固定格式 · 不可編輯")}</div>
                 </div>
               ) : null}
             </>
@@ -3002,17 +2961,18 @@ export function ShiftPage() {
  * 「內容區由 0 高變成幾千 px」造成頁面彈跳。
  */
 function ShiftPageLoading() {
+  const t = useT();
   return (
     <section className="mt-3 rounded-2xl border border-slate-200 bg-white p-4">
       <div className="flex min-h-[320px] flex-col items-center justify-center gap-3">
         <div
           className="h-10 w-10 animate-spin rounded-full border-2 border-slate-300 border-t-slate-600"
           role="status"
-          aria-label="載入中"
+          aria-label={t("載入中")}
         />
-        <div className="text-sm text-slate-500">正在載入交班數據…</div>
+        <div className="text-sm text-slate-500">{t("正在載入交班數據…")}</div>
         <div className="text-xs text-slate-400">
-          整合本機訂單與 Ledger 線上數據，完成後一次顯示。
+          {t("整合本機訂單與 Ledger 線上數據，完成後一次顯示。")}
         </div>
       </div>
     </section>

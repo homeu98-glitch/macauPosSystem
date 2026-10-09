@@ -1,5 +1,7 @@
 "use client";
 
+import { useT } from "@/components/lang-provider";
+
 type NumericKeypadProps = {
   value: string;
   onChange: (value: string) => void;
@@ -24,6 +26,7 @@ export function NumericKeypad({
   onConfirm,
   showConfirm = false,
 }: NumericKeypadProps) {
+  const t = useT();
   function append(token: string) {
     const next = `${value}${token}`.slice(0, maxLength);
     onChange(next);
@@ -52,14 +55,14 @@ export function NumericKeypad({
           onClick={() => onChange("")}
           type="button"
         >
-          清空
+          {t("清空")}
         </button>
         <button
           className="rounded-2xl bg-white px-3 py-4 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
           onClick={() => onChange(value.slice(0, -1))}
           type="button"
         >
-          刪除
+          {t("刪除")}
         </button>
         <button
           className="rounded-2xl bg-slate-50 px-3 py-4 text-lg font-semibold text-slate-900 ring-1 ring-slate-200 hover:bg-slate-100"
@@ -76,7 +79,7 @@ export function NumericKeypad({
           onClick={() => onConfirm?.()}
           type="button"
         >
-          {confirmLabel}
+          {t(confirmLabel)}
         </button>
       ) : null}
     </div>

@@ -1,0 +1,22 @@
+{
+  "營業額": "Revenue",
+  "本期間現金已付出嘅貨款": "Goods paid in cash this period",
+  "本期間已入貨但未付款嘅貨款": "Goods received but unpaid this period",
+  "MFOOD 結算": "MFOOD settlement",
+  "澳覓 結算": "Aomi settlement",
+  "按下單當時快照名稱 · 線上＋線下 · 按金額由高到低": "By name as captured when ordered · online + offline · sorted by amount, high to low",
+  "BOM × 已售份數": "BOM × units sold",
+  "本月 · 按成本": "This month · by cost",
+  "涵蓋範圍內所有已結帳單：店內 POS 單＋線上單投影＋Ledger 純線上單（皆為本店實際收款，各單只計一次）。應收 = 未扣優惠前嘅原價 · 實收 = order.total · 已扣退款；各行實收相加 = 上方「實收金額合計」": "Covers every settled order in range: in-store POS orders + online order projections + Ledger online-only orders (all actual receipts for this store, each order counted once). Receivable = original price before discounts · Collected = order.total · refunds deducted; the collected column sums to “Total collected” above",
+  "即時": "Live",
+  "單數 · 覆蓋人數": "Orders · people covered",
+  "退菜率": "Void rate",
+  "折扣佔比": "Discount share",
+  "線上佔比": "Online share",
+  "vs 7 日均值": "vs 7-day average",
+  "營業額（7日均）": "Revenue (7-day avg)",
+  "線上渠道佔比（7日均）": "Online channel share (7-day avg)",
+  "會員充值（7日均）": "Member top-ups (7-day avg)",
+  "總售出份數": "Total units sold",
+  "自動計算 · 參考用": "Auto-calculated · for reference"
+}
