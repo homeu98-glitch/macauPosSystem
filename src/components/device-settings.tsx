@@ -10,6 +10,7 @@ import { KioskModePanel } from "@/components/kiosk-mode-panel";
 import { ScanModePanel } from "@/components/scan-mode-panel";
 import { ResponsiveModal } from "@/components/responsive-modal";
 import { RelayPairingPanel } from "@/components/relay-pairing-panel";
+import { NumberInput } from "@/components/number-input";
 import { defaultDeviceConfig, defaultPosLocalSettings, mockBootstrap } from "@/lib/mock-data";
 import {
   hasPosLocalSettings,
@@ -2713,20 +2714,20 @@ export function DeviceSettings() {
                                   </option>
                                 ))}
                               </select>
-                              <input
-                                aria-label={t("價格（MOP）")}
-                                className="w-20 shrink-0 rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 text-sm"
-                                inputMode="decimal"
-                                onChange={(event) =>
+                              <NumberInput
+                                ariaLabel={t("價格（MOP）")}
+                                className="w-24 shrink-0 rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 text-sm"
+                                min={0}
+                                title={t("價格（MOP）")}
+                                value={item.price}
+                                onCommit={(n) =>
                                   setMenuDraft((current) => ({
                                     ...current,
                                     menuItems: current.menuItems.map((row) =>
-                                      row.id === item.id ? { ...row, price: Number(event.target.value) || 0 } : row,
+                                      row.id === item.id ? { ...row, price: n } : row,
                                     ),
                                   }))
                                 }
-                                title={t("價格（MOP）")}
-                                value={String(item.price)}
                               />
                               <div className="flex shrink-0 flex-col gap-0.5 text-xs leading-tight text-slate-500">
                                 <label className="flex items-center gap-1.5" title={t("時價菜（落單時改價）")}>
@@ -3523,9 +3524,11 @@ export function DeviceSettings() {
                                 placeholder={t("選項（例如：少冰）")}
                                 value={opt.label}
                               />
-                              <input
+                              <NumberInput
                                 className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
-                                onChange={(event) =>
+                                placeholder={t("加價")}
+                                value={opt.priceDelta}
+                                onCommit={(n) =>
                                   setSpecEditor((current) => ({
                                     ...current,
                                     draft: current.draft.map((row) =>
@@ -3534,15 +3537,12 @@ export function DeviceSettings() {
                                         : {
                                             ...row,
                                             options: row.options.map((o) =>
-                                              o.id === opt.id ? { ...o, priceDelta: Number(event.target.value) || 0 } : o,
+                                              o.id === opt.id ? { ...o, priceDelta: n } : o,
                                             ),
                                           },
                                     ),
                                   }))
                                 }
-                                placeholder={t("加價")}
-                                type="number"
-                                value={String(opt.priceDelta)}
                               />
                               <button
                                 className="rounded-2xl bg-white px-3 py-2 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
@@ -3986,20 +3986,18 @@ export function DeviceSettings() {
                               placeholder={t("選項（例如：少冰）")}
                               value={opt.label}
                             />
-                            <input
+                            <NumberInput
                               className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
-                              inputMode="decimal"
-                              onChange={(event) =>
+                              placeholder={t("加價")}
+                              value={opt.priceDelta}
+                              onCommit={(n) =>
                                 updateQuickSpecDraft((group) => ({
                                   ...group,
                                   options: group.options.map((o) =>
-                                    o.id === opt.id ? { ...o, priceDelta: Number(event.target.value) || 0 } : o,
+                                    o.id === opt.id ? { ...o, priceDelta: n } : o,
                                   ),
                                 }))
                               }
-                              placeholder={t("加價")}
-                              type="number"
-                              value={String(opt.priceDelta)}
                             />
                             <button
                               className="rounded-2xl bg-white px-3 py-2 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"

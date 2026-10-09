@@ -66,20 +66,29 @@ export type OrderDiscountRowProps = {
   currency: string;
   /** 全單折扣 money（order.discountAmount，已經計好嘅金額）。undefined = 冇。 */
   wholeOrderDiscountAmount?: number;
+  /**
+   * 系統抹零 money（docs/88 §5.1，order.roundingAmount）。會獨立顯示一行「系統抹零」，
+   * 並計入「合計優惠」總減免。undefined / 0 = 冇。
+   */
+  roundingAmount?: number;
   /** 顯示樣式："block" = 完整一行；"compact" = 同其他 row 對齊嘅細字一行 */
   variant?: "block" | "compact";
 };
 
 /**
- * 訂單底部折扣行：列出「單品折扣總額」同「全單折扣」分項，最後合計。
+ * 訂單底部折扣行：列出「單品折扣總額」「全單折扣」「系統抹零」分項，最後合計。
  * 當 total == 0 時唔 render。
+ *
+ * 2026-10-08：加 `roundingAmount` —— 抹零係影響實收嘅調整（docs/88），
+ * 必須喺所有訂單明細位見到，並計入「合計優惠」總減免（用家要求「優惠」反映抹零）。
  */
-export function OrderDiscountRow({ items, currency, wholeOrderDiscountAmount, variant = "block" }: OrderDiscountRowProps) {
+export function OrderDiscountRow({ items, currency, wholeOrderDiscountAmount, roundingAmount, variant = "block" }: OrderDiscountRowProps) {
   // ⚠️ useT() 一定要喺 early return（total <= 0）之前（Rules of Hooks）。
   const t = useT();
   const itemSaving = orderItemDiscountTotal(items);
   const wholeSaving = Math.max(0, Number(wholeOrderDiscountAmount ?? 0));
-  const total = round2(itemSaving + wholeSaving);
+  const roundingSaving = Math.max(0, Number(roundingAmount ?? 0));
+  const total = round2(itemSaving + wholeSaving + roundingSaving);
   if (total <= 0) return null;
   const sizeText = variant === "compact" ? "text-xs" : "text-sm";
   return (
@@ -96,7 +105,13 @@ export function OrderDiscountRow({ items, currency, wholeOrderDiscountAmount, va
           <span className="font-semibold tabular-nums text-emerald-700">-{formatMoney(wholeSaving, currency)}</span>
         </div>
       ) : null}
-      {itemSaving > 0 && wholeSaving > 0 ? (
+      {roundingSaving > 0 ? (
+        <div className={`flex items-center justify-between ${sizeText}`}>
+          <span className="text-slate-500">{t("抹零")}</span>
+          <span className="font-semibold tabular-nums text-emerald-700">-{formatMoney(roundingSaving, currency)}</span>
+        </div>
+      ) : null}
+      {total > 0 ? (
         <div className={`flex items-center justify-between border-t border-slate-100 pt-1 ${sizeText}`}>
           <span className="font-semibold text-slate-700">{t("合計優惠")}</span>
           <span className="font-bold tabular-nums text-emerald-700">-{formatMoney(total, currency)}</span>

@@ -2747,6 +2747,14 @@ export function PosApp() {
     total: Math.max(0, payableBeforeMember - memberDeduction),
   };
   /**
+   * 系統抹零（docs/88 §5.1）：由結帳頁 `roundingInput` 即時推算，提升為頂層 const。
+   * 畀「應收額」「找續」無論收銀彈窗邊度都即時反映抹零（輸入即更新，唔使等結帳落單）。
+   * 之前 `rounding`/`due` 只喺 `changeDue` useMemo 入面算，結帳明細嘅「應收」行一直用
+   * `paymentSummary.total`（未扣抹零）→ 輸入抹零後應收唔郁，結帳後先見到，造成混淆。
+   */
+  const rounding = roundingInput ? Math.max(0, round2(Number(roundingInput) || 0)) : 0;
+  const due = Math.max(0, paymentSummary.total - rounding);
+  /**
    * 「線上已付齊、收銀台只需完成」—— 即 `completeOnlinePaidOrder()` 適用嘅場景
    * （客人喺 Ledger／掃碼端已經付咗**全款**，`paymentMethod: "線上已支付"`，唔再扣款）。
    *
@@ -2763,11 +2771,9 @@ export function PosApp() {
 
   const changeDue = useMemo(() => {
     const received = Number(receivedAmount);
-    const rounding = roundingInput ? Math.max(0, round2(Number(roundingInput) || 0)) : 0;
-    const due = Math.max(0, paymentSummary.total - rounding);
     if (!Number.isFinite(received) || received <= 0) return 0;
     return Math.max(0, received - due);
-  }, [receivedAmount, roundingInput, paymentSummary.total]);
+  }, [receivedAmount, due]);
   const selectedTableStatus = activeTableId ? tableOrderMap.get(activeTableId)?.status ?? "idle" : "idle";
   const isAddOnOrder = activeOrder?.status === "sent_to_kitchen";
   const orderedItemQtyMap = (() => {
@@ -6622,11 +6628,12 @@ export function PosApp() {
                   </span>
                 </div>
                 <div className="mt-4 border-t border-slate-200 pt-4">
-                  {/* 折扣分項：單品折扣 + 全單折扣（用戶要求所有訂單明細位都要見到） */}
+                  {/* 折扣分項：單品折扣 + 全單折扣 + 系統抹零（docs/88 §5.1） */}
                   <OrderDiscountRow
                     currency={bootstrap.currency}
                     items={currentSettlementOrder?.items ?? workspaceOrder?.items ?? cartItems}
                     wholeOrderDiscountAmount={paymentSummary.discountAmount}
+                    roundingAmount={rounding}
                   />
                   {(!orderItemDiscountTotal(currentSettlementOrder?.items ?? workspaceOrder?.items ?? cartItems) &&
                     !(paymentSummary.discountAmount > 0)) ? (
@@ -6637,7 +6644,7 @@ export function PosApp() {
                   ) : null}
                   <div className="mt-3 text-xs font-semibold text-slate-500">{t("應收")}</div>
                   <div className="mt-2 text-3xl font-semibold tracking-tight text-orange-600">
-                    {formatMoney(paymentSummary.total, bootstrap.currency)}
+                    {formatMoney(due, bootstrap.currency)}
                   </div>
                 </div>
               </div>
@@ -7458,6 +7465,7 @@ export function PosApp() {
                 currency={bootstrap.currency}
                 items={viewingOrder.items}
                 wholeOrderDiscountAmount={viewingOrder.discountAmount}
+                roundingAmount={viewingOrder.roundingAmount}
               />
               {/* 折扣備註（2026-09-11 需求 #2）：凡影響實收嘅調整都要見到原因 */}
               {viewingOrderDiscountNotes.length > 0 ? (
@@ -7648,12 +7656,13 @@ export function PosApp() {
                       {formatMoney(paymentSummary.subtotal, bootstrap.currency)}
                     </span>
                   </div>
-                  {/* 折扣分項：單品折扣 + 全單折扣（用戶要求所有訂單明細位都要見到） */}
+                  {/* 折扣分項：單品折扣 + 全單折扣 + 系統抹零（docs/88 §5.1；抹零由結帳頁 input 即時反映） */}
                   <OrderDiscountRow
                     currency={bootstrap.currency}
                     items={currentSettlementOrder?.items ?? workspaceOrder?.items ?? cartItems}
                     variant="compact"
                     wholeOrderDiscountAmount={paymentSummary.discountAmount}
+                    roundingAmount={rounding}
                   />
                   {selectedMoneyVoucherAvos > 0 ? (
                     <div className="flex items-center justify-between text-sm">
@@ -7676,7 +7685,7 @@ export function PosApp() {
                       {paymentSummary.prepaidAmount > 0 ? t("剩餘需收") : t("應收")}
                     </span>
                     <span className="text-2xl font-semibold text-orange-600">
-                      {formatMoney(paymentSummary.total, bootstrap.currency)}
+                      {formatMoney(due, bootstrap.currency)}
                     </span>
                   </div>
                   <div className="flex items-center justify-between text-sm">

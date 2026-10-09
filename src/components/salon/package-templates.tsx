@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 
+import { NumberInput } from "@/components/number-input";
 import type {
   SalonPackageTemplate,
   SalonPackageItemEntry,
@@ -283,20 +284,20 @@ function PackageEditor({
           <div className="grid grid-cols-2 gap-3">
             <div>
               <div className="mb-1 text-xs font-medium text-slate-500">售價 (MOP)</div>
-              <input
-                type="number"
-                value={draft.price}
-                onChange={(e) => set({ price: Number(e.target.value) || 0 })}
+              <NumberInput
                 className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-rose-200"
+                min={0}
+                value={draft.price}
+                onCommit={(n) => set({ price: n })}
               />
             </div>
             <div>
               <div className="mb-1 text-xs font-medium text-slate-500">效期 (天，0=永久)</div>
-              <input
-                type="number"
-                value={draft.validityDays}
-                onChange={(e) => set({ validityDays: Number(e.target.value) || 0 })}
+              <NumberInput
                 className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-rose-200"
+                min={0}
+                value={draft.validityDays}
+                onCommit={(n) => set({ validityDays: n })}
               />
             </div>
           </div>
@@ -332,12 +333,12 @@ function PackageEditor({
                         </option>
                       ))}
                     </select>
-                    <input
-                      type="number"
+                    <NumberInput
+                      className="w-20 rounded-xl border border-slate-200 px-2 py-1.5 text-sm outline-none focus:ring-2 focus:ring-rose-200"
+                      inputMode="numeric"
                       min={1}
                       value={it.sessions}
-                      onChange={(e) => setItem(i, { sessions: Number(e.target.value) || 0 })}
-                      className="w-20 rounded-xl border border-slate-200 px-2 py-1.5 text-sm outline-none focus:ring-2 focus:ring-rose-200"
+                      onCommit={(n) => setItem(i, { sessions: n })}
                     />
                     <span className="text-xs text-slate-400">次</span>
                     <button
@@ -356,20 +357,20 @@ function PackageEditor({
           <div className="grid grid-cols-2 gap-3">
             <div>
               <div className="mb-1 text-xs font-medium text-slate-500">贈送積分 (→ Ledger)</div>
-              <input
-                type="number"
-                value={draft.bonusPoints}
-                onChange={(e) => set({ bonusPoints: Number(e.target.value) || 0 })}
+              <NumberInput
                 className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-rose-200"
+                min={0}
+                value={draft.bonusPoints}
+                onCommit={(n) => set({ bonusPoints: n })}
               />
             </div>
             <div>
               <div className="mb-1 text-xs font-medium text-slate-500">贈送儲值 (→ Ledger)</div>
-              <input
-                type="number"
-                value={draft.bonusBalance}
-                onChange={(e) => set({ bonusBalance: Number(e.target.value) || 0 })}
+              <NumberInput
                 className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-rose-200"
+                min={0}
+                value={draft.bonusBalance}
+                onCommit={(n) => set({ bonusBalance: n })}
               />
             </div>
           </div>

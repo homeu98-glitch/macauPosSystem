@@ -17,6 +17,7 @@ import {
 } from "@/lib/retail/catalog-ops";
 import { buildImportPlan, describeImportPlan, type ImportPlan } from "@/lib/retail/csv-import";
 import { createCatalog } from "@/lib/retail/barcode-index";
+import { NumberInput } from "@/components/number-input";
 import { RetailLabelPrint } from "@/components/retail/retail-label-print";
 
 const money = (v: number) => `$${(Number.isFinite(v) ? v : 0).toFixed(2)}`;
@@ -371,11 +372,11 @@ function ProductEditor({
             </datalist>
           </Field>
           <Field label="售價（MOP）">
-            <input
+            <NumberInput
               className={inputCls}
-              inputMode="decimal"
-              onChange={(e) => set("price", Number(e.target.value) || 0)}
+              min={0}
               value={draft.price}
+              onCommit={(n) => set("price", n)}
             />
           </Field>
           <Field label="單位">
@@ -473,11 +474,11 @@ function ProductEditor({
           </div>
           <div className="mt-3 grid gap-3 md:grid-cols-3">
             <Field label="庫存數量">
-              <input
+              <NumberInput
                 className={inputCls}
-                inputMode="decimal"
-                onChange={(e) => set("stockQty", Number(e.target.value) || 0)}
+                min={0}
                 value={draft.stockQty ?? 0}
+                onCommit={(n) => set("stockQty", n)}
               />
             </Field>
             <Field label="補貨警戒線">
@@ -551,12 +552,12 @@ function ProductEditor({
                     placeholder="條碼"
                     value={v.barcode ?? ""}
                   />
-                  <input
+                  <NumberInput
                     className={inputCls}
-                    inputMode="decimal"
-                    onChange={(e) => setVariant(i, { stockQty: Number(e.target.value) || 0 })}
+                    min={0}
                     placeholder="庫存"
                     value={v.stockQty ?? 0}
+                    onCommit={(n) => setVariant(i, { stockQty: n })}
                   />
                   <input
                     className={inputCls}

@@ -1170,6 +1170,7 @@ export const EN_DICT: Record<string, string> = {
   "空閒": "Free",
   "筆未同步": "unsynced",
   "系統抹零": "System rounding",
+  "抹零": "Round-off",
   "結帳時間：": "Checkout time: ",
   "線上菜單已併合": "Online menu merged",
   "線上菜單略過": "Online menu skipped",

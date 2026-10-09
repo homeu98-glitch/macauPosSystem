@@ -237,6 +237,7 @@ function OrderCard({
             items={order.items}
             variant="compact"
             wholeOrderDiscountAmount={order.discountAmount}
+            roundingAmount={order.roundingAmount}
           />
         </div>
       </div>

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 
+import { NumberInput } from "@/components/number-input";
 import { AppSidebar } from "@/components/app-sidebar";
 import { AuthGuard } from "@/components/auth-guard";
 import {
@@ -137,12 +138,12 @@ function BomRowCard({
                 value={ing.name}
                 onChange={(e) => setRow(i, { name: e.target.value })}
               />
-              <input
+              <NumberInput
                 className="rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
-                type="number"
+                min={0}
                 placeholder="用量"
-                value={ing.quantity || ""}
-                onChange={(e) => setRow(i, { quantity: Number(e.target.value) || 0 })}
+                value={ing.quantity}
+                onCommit={(n) => setRow(i, { quantity: n })}
               />
               <input
                 className="rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
@@ -150,12 +151,12 @@ function BomRowCard({
                 value={ing.unit}
                 onChange={(e) => setRow(i, { unit: e.target.value })}
               />
-              <input
+              <NumberInput
                 className="rounded-lg border border-slate-200 px-2 py-1.5 text-sm"
-                type="number"
+                min={0}
                 placeholder="單位成本 MOP"
-                value={ing.unitCost || ""}
-                onChange={(e) => setRow(i, { unitCost: Number(e.target.value) || 0 })}
+                value={ing.unitCost}
+                onCommit={(n) => setRow(i, { unitCost: n })}
               />
               <button
                 className="rounded-lg px-2 py-1.5 text-xs text-rose-600 hover:bg-rose-50"

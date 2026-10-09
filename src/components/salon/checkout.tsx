@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState, useCallback } from "react";
 import type { ReactNode } from "react";
+import { NumberInput } from "@/components/number-input";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
@@ -1280,18 +1281,12 @@ export function Checkout({ bookingId }: { bookingId: string }) {
                         </label>
                         {on && (
                           <>
-                            <input
-                              type="number"
-                              min={0}
-                              max={a.pointsPrice}
-                              value={a.allocated}
-                              onChange={(e) =>
-                                setPointsFor(
-                                  a.index,
-                                  Math.max(0, Math.min(a.pointsPrice, Number(e.target.value) || 0)),
-                                )
-                              }
+                            <NumberInput
                               className="w-24 rounded-lg border border-slate-200 px-2 py-1.5 text-sm text-right outline-none focus:ring-2 focus:ring-rose-200"
+                              max={a.pointsPrice}
+                              min={0}
+                              value={a.allocated}
+                              onCommit={(n) => setPointsFor(a.index, n)}
                             />
                             <span className="text-xs text-slate-400">分（可少於 {a.pointsPrice} 以 mix）</span>
                             <span className="ml-auto text-xs font-semibold text-emerald-700">
@@ -1352,12 +1347,11 @@ export function Checkout({ bookingId }: { bookingId: string }) {
               <div className="grid gap-2">
                 <div className="flex items-center gap-2">
                   <span className="text-xs text-slate-500">小費總池</span>
-                  <input
-                    type="number"
+                  <NumberInput
+                    className="w-28 rounded-lg border border-slate-200 px-2 py-1.5 text-sm outline-none focus:ring-2 focus:ring-rose-200"
                     min={0}
                     value={tipPool}
-                    onChange={(e) => setTipPool(Math.max(0, Number(e.target.value) || 0))}
-                    className="w-28 rounded-lg border border-slate-200 px-2 py-1.5 text-sm outline-none focus:ring-2 focus:ring-rose-200"
+                    onCommit={(n) => setTipPool(n)}
                   />
                   <button
                     type="button"
@@ -1374,12 +1368,11 @@ export function Checkout({ bookingId }: { bookingId: string }) {
                   >
                     <span className="text-sm text-slate-700">{t.staffName}</span>
                     <div className="flex items-center gap-1">
-                      <input
-                        type="number"
+                      <NumberInput
+                        className="w-24 rounded-lg border border-slate-200 px-2 py-1.5 text-sm text-right outline-none focus:ring-2 focus:ring-rose-200"
                         min={0}
                         value={t.amount}
-                        onChange={(e) => updateTipAmount(t.staffId, Math.max(0, Number(e.target.value) || 0))}
-                        className="w-24 rounded-lg border border-slate-200 px-2 py-1.5 text-sm text-right outline-none focus:ring-2 focus:ring-rose-200"
+                        onCommit={(n) => updateTipAmount(t.staffId, n)}
                       />
                       <span className="text-xs text-slate-400">{currency}</span>
                     </div>
@@ -1505,12 +1498,11 @@ export function Checkout({ bookingId }: { bookingId: string }) {
                           </option>
                         ))}
                       </select>
-                      <input
-                        type="number"
+                      <NumberInput
+                        className="w-24 rounded-lg border border-slate-200 px-2 py-1.5 text-sm text-right outline-none focus:ring-2 focus:ring-rose-200"
                         min={0}
                         value={p.amount}
-                        onChange={(e) => updatePayment(p.id, { amount: Math.max(0, Number(e.target.value) || 0) })}
-                        className="w-24 rounded-lg border border-slate-200 px-2 py-1.5 text-sm text-right outline-none focus:ring-2 focus:ring-rose-200"
+                        onCommit={(n) => updatePayment(p.id, { amount: n })}
                       />
                       <span className="text-xs text-slate-400">{currency}</span>
                       <button

@@ -1046,6 +1046,7 @@ export function LocalOrdersPanel({
               currency={currency}
               items={viewingOrder.items}
               wholeOrderDiscountAmount={viewingOrder.discountAmount}
+              roundingAmount={viewingOrder.roundingAmount}
             />
             {/* 折扣備註（2026-09-11 需求 #2）：凡影響實收嘅調整都要見到原因 */}
             {viewingOrderDiscountNotes.length > 0 ? (

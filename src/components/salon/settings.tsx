@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback, type ReactNode } from "react";
 
+import { NumberInput } from "@/components/number-input";
 import type {
   SalonBootstrap,
   SalonServiceCategory,
@@ -1126,15 +1127,11 @@ export function Settings() {
           {/* 每店積分配比 */}
           <Section title="積分配比（每店）">
             <Field label="每消費多少 MOP 得 1 分">
-              <input
-                type="number"
-                min={0}
-                step="0.1"
-                value={loyalty.pointsPerDollar}
-                onChange={(e) =>
-                  patchLoyalty({ pointsPerDollar: Number(e.target.value) || 0 })
-                }
+              <NumberInput
                 className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-rose-200"
+                min={0}
+                value={loyalty.pointsPerDollar}
+                onCommit={(n) => patchLoyalty({ pointsPerDollar: n })}
               />
             </Field>
             <p className="mt-1 text-xs text-slate-400">
@@ -1157,15 +1154,12 @@ export function Settings() {
               </button>
             </div>
             <Field label="推薦積分（發給推薦人）">
-              <input
-                type="number"
+              <NumberInput
+                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-rose-200 disabled:bg-slate-50 disabled:text-slate-400"
+                disabled={!loyalty.referralEnabled}
                 min={0}
                 value={loyalty.referralPoints}
-                disabled={!loyalty.referralEnabled}
-                onChange={(e) =>
-                  patchLoyalty({ referralPoints: Number(e.target.value) || 0 })
-                }
-                className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-rose-200 disabled:bg-slate-50 disabled:text-slate-400"
+                onCommit={(n) => patchLoyalty({ referralPoints: n })}
               />
             </Field>
             <p className="mt-1 text-xs text-slate-400">
@@ -1201,29 +1195,22 @@ export function Settings() {
               </select>
             </Field>
             <Field label="生日折扣 %（0 = 不打折）">
-              <input
-                type="number"
-                min={0}
-                max={100}
-                value={loyalty.birthdayDiscountPercent}
-                disabled={!loyalty.birthdayEnabled}
-                onChange={(e) =>
-                  patchLoyalty({ birthdayDiscountPercent: Number(e.target.value) || 0 })
-                }
+              <NumberInput
                 className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-rose-200 disabled:bg-slate-50 disabled:text-slate-400"
+                disabled={!loyalty.birthdayEnabled}
+                max={100}
+                min={0}
+                value={loyalty.birthdayDiscountPercent}
+                onCommit={(n) => patchLoyalty({ birthdayDiscountPercent: n })}
               />
             </Field>
             <Field label="生日積分倍率（0 = 不加倍；1 = 不變；2 = 雙倍）">
-              <input
-                type="number"
-                min={0}
-                step="0.5"
-                value={loyalty.birthdayPointsMultiplier}
-                disabled={!loyalty.birthdayEnabled}
-                onChange={(e) =>
-                  patchLoyalty({ birthdayPointsMultiplier: Number(e.target.value) || 0 })
-                }
+              <NumberInput
                 className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-rose-200 disabled:bg-slate-50 disabled:text-slate-400"
+                disabled={!loyalty.birthdayEnabled}
+                min={0}
+                value={loyalty.birthdayPointsMultiplier}
+                onCommit={(n) => patchLoyalty({ birthdayPointsMultiplier: n })}
               />
             </Field>
             <p className="mt-1 text-xs text-slate-400">
