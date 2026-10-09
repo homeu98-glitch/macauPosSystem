@@ -6203,7 +6203,7 @@ export function PosApp() {
               {isQuickMode ? (
                 <div className="mt-3 grid grid-cols-3 gap-2 rounded-2xl border border-slate-200 bg-white p-2">
                   <button
-                    className={`rounded-2xl px-3 py-2 text-xs font-semibold ${
+                    className={`min-w-0 rounded-2xl px-2 py-2 text-center text-[11px] font-semibold leading-tight ${
                       quickOrderType === "dine_in" ? "bg-orange-500 text-white" : "bg-slate-100 text-slate-700"
                     }`}
                     onClick={() => setQuickOrderType("dine_in")}
@@ -6212,7 +6212,7 @@ export function PosApp() {
                     {t("堂食")}
                   </button>
                   <button
-                    className={`rounded-2xl px-3 py-2 text-xs font-semibold ${
+                    className={`min-w-0 rounded-2xl px-2 py-2 text-center text-[11px] font-semibold leading-tight ${
                       quickOrderType === "delivery" ? "bg-orange-500 text-white" : "bg-slate-100 text-slate-700"
                     }`}
                     onClick={() => setQuickOrderType("delivery")}
@@ -6221,7 +6221,7 @@ export function PosApp() {
                     {t("外賣")}
                   </button>
                   <button
-                    className={`rounded-2xl px-3 py-2 text-xs font-semibold ${
+                    className={`min-w-0 rounded-2xl px-2 py-2 text-center text-[11px] font-semibold leading-tight ${
                       quickOrderType === "pickup" ? "bg-orange-500 text-white" : "bg-slate-100 text-slate-700"
                     }`}
                     onClick={() => setQuickOrderType("pickup")}

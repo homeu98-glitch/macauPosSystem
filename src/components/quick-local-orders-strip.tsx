@@ -151,7 +151,7 @@ function OrderCard({
         </div>
         <div className="flex shrink-0 flex-col items-end gap-1.5">
           <span
-            className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[20px] font-semibold ${
+            className={`inline-flex max-w-[130px] items-center justify-center gap-1.5 rounded-full px-3 py-1 text-center text-sm font-semibold leading-tight ${
               isDraftSelfOrder
                 ? "bg-slate-100 text-slate-600"
                 : mode === "waiting"
