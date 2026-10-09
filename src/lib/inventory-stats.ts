@@ -255,7 +255,7 @@ function rollingPeriodForKey(key: ReportRangeKey, now: Date): { start: string; e
   return { start: `${startKey}T00:00:00+08:00`, end: `${endKey}T23:59:59.999+08:00` };
 }
 
-export function buildPurchaseSummary(receipts: StatReceipt[]): PurchaseSummary {
+export function buildPurchaseSummary(receipts: StatReceipt[], fullItems = false): PurchaseSummary {
   let total = 0;
   let paid = 0;
   let unpaid = 0;
@@ -283,7 +283,7 @@ export function buildPurchaseSummary(receipts: StatReceipt[]): PurchaseSummary {
     trend: buildTrendSummary(receipts),
     paymentMethodBreakdown: buildPaymentMethodBreakdown(receipts),
     priceTrendSeries: buildPriceTrendSeries(receipts, 6),
-    items: allItems.slice(0, PURCHASE_ITEMS_PREVIEW),
+    items: fullItems ? allItems : allItems.slice(0, PURCHASE_ITEMS_PREVIEW),
     itemsTotal: allItems.length,
   };
 }
@@ -459,7 +459,11 @@ export {
 /** 客戶端封裝：呼叫庫存收據 API 並取回買貨統計（含 schemaReady/matched 降級）。
  *
  * 「自訂」區間經 `start` / `end` query 傳（server 端唔識 derive，只有 key 冇用）。 */
-export async function fetchPurchaseSummary(account: string, range: ReportRangeArg): Promise<PurchaseApiResponse | null> {
+export async function fetchPurchaseSummary(
+  account: string,
+  range: ReportRangeArg,
+  fullItems = false,
+): Promise<PurchaseApiResponse | null> {
   const { key, custom } = splitReportRangeArg(range);
   try {
     const qs = new URLSearchParams({ account, range: key });
@@ -467,6 +471,7 @@ export async function fetchPurchaseSummary(account: string, range: ReportRangeAr
       qs.set("start", custom.start);
       qs.set("end", custom.end);
     }
+    if (fullItems) qs.set("fullItems", "1");
     const res = await fetch(`/api/inventory/receipts?${qs.toString()}`);
     if (!res.ok) return null;
     const json = (await res.json()) as PurchaseApiResponse;

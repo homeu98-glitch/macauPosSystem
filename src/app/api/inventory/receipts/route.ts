@@ -70,6 +70,10 @@ export async function GET(request: Request) {
   if (range === "custom" && !custom) range = "all";
   const rangeArg: ReportRangeArg = range === "custom" && custom ? { key: "custom", custom } : range;
 
+  // 按需拉「貨品細項全量」—— 預設 summary 會截斷（避免常駐 egress），
+  // 只有用家明確「查看全部」先會帶 fullItems=1 要齊全清單。
+  const fullItems = searchParams.get("fullItems") === "1" || searchParams.get("fullItems") === "true";
+
   const client = getExpenseSupabaseClient();
   if (!client) return NextResponse.json({ ok: false, error: "expense client 未設定" }, { status: 503 });
 
@@ -240,7 +244,7 @@ export async function GET(request: Request) {
     };
   });
 
-  const summary = buildPurchaseSummary(statReceipts);
+  const summary = buildPurchaseSummary(statReceipts, fullItems);
 
   return NextResponse.json({ ok: true, matched: true, range, receipts: enriched, summary });
 }

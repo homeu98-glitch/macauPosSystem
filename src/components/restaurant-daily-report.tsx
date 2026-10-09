@@ -16,7 +16,7 @@ import type { LedgerOnlineOrder } from "@/lib/ledger/order-mapper";
 // 🔴 支付方式標籤唯一真源（2026-10-07）：`pos_orders.payment_method` 會載住
 // Ledger enum 原文（`in_store` / `balance`），唔過呢層就會有英文行出畫面。
 import { posPaymentMethodLabel } from "@/lib/pos/payment-method-label";
-import { fetchPurchaseSummary, type PurchaseSummary } from "@/lib/inventory-stats";
+import { fetchPurchaseSummary, type PurchaseSummary, type ItemStat } from "@/lib/inventory-stats";
 import {
   loadAuthSession,
   loadBootstrapCache,
@@ -1391,6 +1391,31 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
   // 菜品銷售排行「更多」彈窗
   const [dishModalOpen, setDishModalOpen] = useState(false);
   const [dishModalPage, setDishModalPage] = useState(1);
+  // 買貨明細「貨品細項」完整列表彈窗（按需拉全量，唔喺常駐 summary 入面）
+  const [purchaseItemsModalOpen, setPurchaseItemsModalOpen] = useState(false);
+  const [purchaseAllItems, setPurchaseAllItems] = useState<ItemStat[]>([]);
+  const [purchaseItemsLoading, setPurchaseItemsLoading] = useState(false);
+  const [purchaseItemsError, setPurchaseItemsError] = useState<string | null>(null);
+  const openPurchaseItemsModal = async () => {
+    if (purchaseItemsLoading) return;
+    setPurchaseItemsModalOpen(true);
+    setPurchaseItemsLoading(true);
+    setPurchaseItemsError(null);
+    const acc = loadAuthSession()?.account;
+    if (!acc) {
+      setPurchaseItemsError(t("貨品細項載入失敗，請稍後再試。"));
+      setPurchaseItemsLoading(false);
+      return;
+    }
+    const res = await fetchPurchaseSummary(acc, range, true);
+    if (!res || !res.summary || !res.summary.items) {
+      setPurchaseItemsError(t("貨品細項載入失敗，請稍後再試。"));
+      setPurchaseItemsLoading(false);
+      return;
+    }
+    setPurchaseAllItems(res.summary.items);
+    setPurchaseItemsLoading(false);
+  };
   /**
    * 訂單明細預設收合（2026-09-10）。
    *
@@ -3478,8 +3503,22 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                   <div className="mb-4 grid gap-4 lg:grid-cols-2">
                     {/* 左：貨品細項（按金額倒序，API 已排好） */}
                     <div>
-                      <div className="mb-2 text-xs font-semibold text-slate-500">
-                        {t("貨品細項（按金額）")}
+                      <div className="mb-2 flex items-center justify-between gap-2">
+                        <span className="text-xs font-semibold text-slate-500">
+                          {t("貨品細項（按金額）")}
+                        </span>
+                        {purchase.sel.itemsTotal > 5 ? (
+                          <button
+                            type="button"
+                            onClick={openPurchaseItemsModal}
+                            disabled={purchaseItemsLoading}
+                            className="shrink-0 rounded-md bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-600 hover:bg-slate-200 disabled:opacity-50"
+                          >
+                            {purchaseItemsLoading
+                              ? t("載入中")
+                              : t("查看全部（共 {n} 款）", { n: purchase.sel.itemsTotal })}
+                          </button>
+                        ) : null}
                       </div>
                       {purchase.sel.items.length === 0 ? (
                         <div className="text-sm text-slate-400">{t("本期間冇貨品細項資料。")}</div>
@@ -3792,6 +3831,70 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                         </button>
                       </div>
                     ) : null}
+                  </div>
+                </div>
+              ) : null}
+
+              {/* 買貨明細 · 貨品細項完整列表彈窗（按需拉全量，唔喺常駐 summary） */}
+              {purchaseItemsModalOpen ? (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+                  <div className="max-h-[80vh] w-full max-w-2xl overflow-hidden rounded-2xl bg-white p-4 shadow-xl">
+                    <div className="mb-3 flex items-center justify-between">
+                      <div>
+                        <div className="text-base font-semibold text-slate-900">{t("貨品細項（按金額）")}</div>
+                        <div className="text-xs text-slate-500">
+                          {t("共 {n} 款品項", { n: purchaseAllItems.length })}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setPurchaseItemsModalOpen(false)}
+                        className="rounded-lg bg-slate-100 px-3 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-200"
+                      >
+                        {t("關閉")}
+                      </button>
+                    </div>
+                    {purchaseItemsLoading ? (
+                      <div className="py-12 text-center text-sm text-slate-400">{t("載入中")}</div>
+                    ) : purchaseItemsError ? (
+                      <div className="py-12 text-center text-sm text-slate-400">{purchaseItemsError}</div>
+                    ) : purchaseAllItems.length === 0 ? (
+                      <div className="py-12 text-center text-sm text-slate-400">{t("本期間冇貨品細項資料。")}</div>
+                    ) : (
+                      <>
+                        <div className="max-h-[55vh] overflow-y-auto pr-1">
+                          <table className="w-full text-sm">
+                            <thead className="sticky top-0 bg-white">
+                              <tr className="text-left text-[11px] text-slate-400">
+                                <th className="pb-1 font-medium">{t("品項")}</th>
+                                <th className="pb-1 text-right font-medium">{t("數量")}</th>
+                                <th className="pb-1 text-right font-medium">{t("單價")}</th>
+                                <th className="pb-1 text-right font-medium">{t("金額")}</th>
+                              </tr>
+                            </thead>
+                            <tbody className="tabular-nums">
+                              {purchaseAllItems.map((it) => (
+                                <tr key={it.key} className="border-t border-slate-100">
+                                  <td className="py-1.5 pr-2 text-slate-700">{it.name}</td>
+                                  <td className="py-1.5 text-right text-slate-600">
+                                    {it.qty}
+                                    {it.unit ? ` ${it.unit}` : ""}
+                                  </td>
+                                  <td className="py-1.5 text-right text-slate-600">{formatMoney(it.avgPrice)}</td>
+                                  <td className="py-1.5 text-right font-semibold text-slate-900">{formatMoney(it.amount)}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                        <div className="mt-3 flex items-center justify-between border-t-2 border-slate-300 pt-2">
+                          <span className="text-sm font-semibold text-slate-900">{t("合計")}</span>
+                          <span className="text-sm font-semibold text-slate-900">
+                            {formatMoney(purchase.sel?.total ?? 0)}
+                          </span>
+                        </div>
+                      </>
+                    )}
                   </div>
                 </div>
               ) : null}
