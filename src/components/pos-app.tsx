@@ -329,6 +329,9 @@ export function PosApp() {
     ? applyLedgerMerchantToBootstrap(normalizeBootstrapPayload(cachedBootstrapRaw), loadAuthSession())
     : null;
   const initialHasBootstrapRef = useRef(Boolean(cachedBootstrap));
+  // 🔴 2026-10-11：記住上一批「有單但本機搵唔到枱」嘅 tableId 集合，
+  //    避免 self-heal effect 同一批孤兒單重覆觸發無限重拉雲端。
+  const orphanTableSigRef = useRef<string>("");
   const [operatingMode, setOperatingModeState] = useState(() => loadOperatingMode());
   const [bootstrap, setBootstrap] = useState<PosBootstrap | null>(() => cachedBootstrap);
   const [activeTableId, setActiveTableId] = useState<string>(() => cachedBootstrap?.tables[0]?.id ?? "");
@@ -2580,6 +2583,27 @@ export function PosApp() {
       ),
     [openOrders],
   );
+
+  // 🔴 2026-10-11 self-healing：枱卡綁單係 `tableOrderMap.get(table.id)`，
+  //    所以「有未結帳單、但本機枱清單搵唔到嗰個 tableId」＝ 枱配置已經同雲端脫節
+  //    （典型：iOS PWA 獨立 localStorage 分區抱住舊枱 id；另一部機純雲端就正常）。
+  //    症狀＝枱卡顯示「空閒」但單其實喺度，客人以為冇落單。
+  //    唔加呢個就只可以靠人手撳「手動更新」，而且撳完都未必清得走過期本機枱。
+  const knownTableIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const floor of floors) for (const t of floor.tables) ids.add(t.id);
+    return ids;
+  }, [floors]);
+
+  useEffect(() => {
+    const orphans = openOrders.filter((o) => o.tableId && !knownTableIds.has(o.tableId));
+    if (orphans.length === 0) return;
+    // 避免重覆觸發（同一批孤兒單只報一次）
+    const sig = orphans.map((o) => o.tableId).sort().join("|");
+    if (orphanTableSigRef.current === sig) return;
+    orphanTableSigRef.current = sig;
+    void refreshBootstrapFromServer({ quiet: true });
+  }, [openOrders, knownTableIds, refreshBootstrapFromServer]);
   const activeOrder = useMemo(() => {
     if (activeOrderId) {
       return (
