@@ -1,6 +1,6 @@
 # 整合文檔索引
 
-> **最後更新**：2026-09-26
+> **最後更新**：2026-10-11
 
 本目錄包含 macauPosSystem 與外部系統的所有對接說明。
 
@@ -21,11 +21,19 @@
 | [pos-offline-report-reply-2026-09-25.md](./pos-offline-report-reply-2026-09-25.md) | 回覆 Ledger：要佢哋改嘅 5 處、實際 payload、三條待回問題 | 同 Ledger 對契約 |
 | [pos-offline-report-v1-addendum-2026-09-26.md](./pos-offline-report-v1-addendum-2026-09-26.md) | **v1 增補**：加 `orders[]`（訂單明細）+ `dishes[]`（菜品排名）；caps 標頭、截斷、口徑 | 2026-09-26 之後嘅整合（可直接轉貼） |
 | [pos-offline-report-channel-addendum-2026-10-07.md](./pos-offline-report-channel-addendum-2026-10-07.md) | 🔴 **渠道增補 v2（最新）**：菜品分渠道、訂單來源、支付方式分項、渠道 KPI。**舊欄一個數字都唔改** | **要畀 Ledger 嘅就係呢份**（可直接轉貼） |
+| [ledger-purchase-report-api.md](./ledger-purchase-report-api.md) | 🆕 **Ledger → expenseRecorder 買貨報表契約 v1**：買貨單據、品項、供應商、幣別拆分。**定稿，可直接轉貼** | **要畀 Ledger 嘅就係呢份**（2026-10-11） |
 
 > 📦 **畀 Ledger 嘅 offline-report 交付包**（三份一齊）：
 > ① [`pos-offline-report-api.md`](./pos-offline-report-api.md)（v1 主契約）
 > ② [`pos-offline-report-v1-addendum-2026-09-26.md`](./pos-offline-report-v1-addendum-2026-09-26.md)（09-26 增補）
 > ③ [`pos-offline-report-channel-addendum-2026-10-07.md`](./pos-offline-report-channel-addendum-2026-10-07.md)（10-07 渠道增補，**重點**）
+
+> 📦 **畀 Ledger 嘅 purchase-report 交付包**（兩條 API 服務不同系統，要分清）：
+> ① **銷售（線下營業）** → POS 系統，用上面嗰個 offline-report 包
+> ② **買貨（庫存）** → expenseRecorder 系統，用 [`ledger-purchase-report-api.md`](./ledger-purchase-report-api.md)（單一文件，已含全部）
+>
+> ⚠️ 唔好混淆：買貨數據**唔喺 POS**（POS 只有銷售），亦唔喺 Ledger；
+> 買貨單據真源喺 expenseRecorder（`receipts` / `receipt_items`）。
 
 ---
 
@@ -64,12 +72,20 @@
 | 打印配置回寫 | `/api/pos/device-config` |
 | 了解充值/派送 | ecosystem-modules.md |
 | 會員／錢包／優惠券對接 | pos-member-system-requirements.md → 待 Ledger 回覆 |
+| **查看買貨／庫存分析** | **expenseRecorder** `purchase-report` API → ledger-purchase-report-api.md |
 
 ---
 
 ## 外部 Repo
 
-- [Macau-Ledger](https://github.com/EricChang1015/Macau-Ledger) — 主系統、Supabase migrations
-- [macau-ledger-merchant](https://github.com/EricChang1015/macau-ledger-merchant) — Android 商戶 App
-- [topUpAutomation](https://github.com/homeu98-glitch/topUpAutomation) — 充值審核
-- [macauMemebershipDeliveryDriver](https://github.com/homeu98-glitch/macauMemebershipDeliveryDriver) — 外賣派單
+| Repo | 角色 | Supabase 專案 |
+| --- | --- | --- |
+| [Macau-Ledger](https://github.com/EricChang1015/Macau-Ledger) | 主系統、會員/錢包 | Ledger（`zymdemjflsckicwcinxl`） |
+| **expenseRecorder**（本機 `C:\dev\macauPos\expenseRecorder`） | **買貨／庫存真源**、OCR 收據 | `fjvfvpedklhdenavbcjg` |
+| macauPosSystem（本 repo） | POS／銷售／庫存主檔 | `iyrywzormzisyppkokbi` |
+| [macau-ledger-merchant](https://github.com/EricChang1015/macau-ledger-merchant) | Android 商戶 App | — |
+| [topUpAutomation](https://github.com/homeu98-glitch/topUpAutomation) | 充值審核 | — |
+| [macauMemebershipDeliveryDriver](https://github.com/homeu98-glitch/macauMemebershipDeliveryDriver) | 外賣派單 | — |
+
+⚠️ **收支分離**：銷售（營業額）真源喺 **POS**；買貨（成本）真源喺 **expenseRecorder**。
+兩者係**唔同**嘅 Supabase 專案，唔好互相假設資料喺同一個庫。

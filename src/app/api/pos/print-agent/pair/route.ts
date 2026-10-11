@@ -12,6 +12,7 @@ import { NextResponse } from "next/server";
 import { getSupabaseWriteClient } from "@/lib/supabase-server";
 import { getLedgerServiceClient } from "@/lib/ledger/supabase-ledger-service";
 import { loadPairedAgent, resolveRelayRealtimeConfig, sha256Hex } from "@/lib/print-agent-server";
+import { readGrabberSharedSecret } from "@/lib/grabber/grabber-secret";
 import { isPlaceholderStoreId } from "@/lib/pos/store-id-guard";
 
 export const dynamic = "force-dynamic";
@@ -107,6 +108,13 @@ export async function GET(request: Request) {
         "APK 會配對成功但拎唔到 Realtime 憑證，只能靠 30s 輪詢兜底。請喺部署環境補齊並重新部署。",
     );
   }
+  // 🔴 2026-10-11：對帳逐筆上送用嘅共享密鑰（`GRABBER_SHARED_SECRET`）。
+  // 一併派發落已配對嘅 agent —— 商戶 APK 唔使手填，配對成功就自動取得。
+  // ⚠️ 信任邊界：呢度嘅回應已經要求 agent 配對成功（上面 `loadPairedAgent`
+  //    過濾咗 revoked／未配對），同 `anonKey`/`supabaseUrl` 同一條已認證通道；
+  //    未配對嘅 agent 只會攞到 `status:"pending"`，攞唔到密鑰。
+  //    缺值（POS 未設該 env）就回 null，APK 側唔會拎個 null 蓋走本機舊值。
+  const grabberSharedSecret = readGrabberSharedSecret();
   return NextResponse.json({
     status: "paired",
     storeId: agent.storeId,
@@ -115,6 +123,7 @@ export async function GET(request: Request) {
     // 「未拎到憑證」而唔係「拎到一個空值」。
     supabaseUrl: realtime?.url ?? null,
     anonKey: realtime?.anonKey ?? null,
+    grabberSharedSecret: grabberSharedSecret ?? null,
   });
 }
 
