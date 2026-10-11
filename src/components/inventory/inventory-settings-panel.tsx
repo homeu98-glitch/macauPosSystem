@@ -18,21 +18,22 @@ export type Supplier = { id: string; name: string };
  * 擺埋一齊睇先知道邊個供應商／品類仲未建）。單選 tab 會令商家要撳兩次先睇齊兩邊。
  * 所以 chips ＝「要唔要顯示呢個 panel」，預設開 供應商 ＋ 品類，最少要開一個。
  */
-type PanelId = "supplier" | "category" | "unit" | "product" | "payment";
+type PanelId = "supplier" | "category" | "unit" | "currency" | "product" | "payment";
 
-const PANEL_ORDER: PanelId[] = ["supplier", "category", "unit", "product", "payment"];
+const PANEL_ORDER: PanelId[] = ["supplier", "category", "unit", "currency", "product", "payment"];
 
 const PANEL_LABEL: Record<PanelId, string> = {
   supplier: "供應商",
   category: "品類",
   unit: "單位",
+  currency: "幣值",
   product: "庫存品",
   payment: "支付方式顯示",
 };
 
 type Msg = { ok: boolean; text: string } | null;
 
-type DragState = { kind: "supplier" | "category" | "unit"; from: number; to: number };
+type DragState = { kind: "supplier" | "category" | "unit" | "currency"; from: number; to: number };
 
 /**
  * 「庫存・設置」面板（2026-09-25 初版、2026-09-26 對齊確認稿）。
@@ -72,6 +73,12 @@ export function InventorySettingsPanel({
   unitOrder,
   onSaveUnits,
   onSaveUnitOrder,
+  /** 幣值清單（`PosLocalSettings.invCurrencies`，門店層設定）。 */
+  currencies,
+  /** 幣值顯示次序（`PosLocalSettings.invCurrencyOrder`）。 */
+  currencyOrder,
+  onSaveCurrencies,
+  onSaveCurrencyOrder,
   paymentMethods,
   paymentWarning,
   highlightSupplierId,
@@ -98,6 +105,12 @@ export function InventorySettingsPanel({
   unitOrder: string[];
   onSaveUnits: (next: string[]) => void | Promise<void>;
   onSaveUnitOrder: (next: string[]) => void | Promise<void>;
+  /** 幣值清單（`PosLocalSettings.invCurrencies`，門市層設定，2026-10-11 多幣值）。 */
+  currencies: string[];
+  /** 幣值顯示次序（`PosLocalSettings.invCurrencyOrder`）。 */
+  currencyOrder: string[];
+  onSaveCurrencies: (next: string[]) => void | Promise<void>;
+  onSaveCurrencyOrder: (next: string[]) => void | Promise<void>;
   /** 支付方式主檔（唯讀；由 expenseRecorder admin 派發）。 */
   paymentMethods: PaymentMethodDef[];
   paymentWarning?: string | null;
@@ -110,6 +123,7 @@ export function InventorySettingsPanel({
     supplier: true,
     category: true,
     unit: false,
+    currency: false,
     product: false,
     payment: false,
   });
@@ -128,16 +142,21 @@ export function InventorySettingsPanel({
   const [editingUnit, setEditingUnit] = useState<{ from: string; to: string } | null>(null);
   const [confirmDeleteUnit, setConfirmDeleteUnit] = useState<string | null>(null);
 
+  const [currencyDraft, setCurrencyDraft] = useState("");
+  const [editingCurrency, setEditingCurrency] = useState<{ from: string; to: string } | null>(null);
+  const [confirmDeleteCurrency, setConfirmDeleteCurrency] = useState<string | null>(null);
+
   /** 「用過 N 次」（lazy：只喺供應商 panel 開住嘅時候先拉一次）。 */
   const [usage, setUsage] = useState<Record<string, number>>({});
   const [usageNote, setUsageNote] = useState<string | null>(null);
   const [usageTick, setUsageTick] = useState(0);
 
   const [dragState, setDragState] = useState<DragState | null>(null);
-  const dragRef = useRef<{ kind: "supplier" | "category" | "unit"; from: number; to: number; midYs: number[] } | null>(null);
+  const dragRef = useRef<{ kind: "supplier" | "category" | "unit" | "currency"; from: number; to: number; midYs: number[] } | null>(null);
   const supplierListRef = useRef<HTMLUListElement | null>(null);
   const categoryListRef = useRef<HTMLUListElement | null>(null);
   const unitListRef = useRef<HTMLUListElement | null>(null);
+  const currencyListRef = useRef<HTMLUListElement | null>(null);
 
   useEffect(() => {
     if (open) {
@@ -148,7 +167,9 @@ export function InventorySettingsPanel({
       setConfirmDeleteCategory(null);
       setEditingUnit(null);
       setConfirmDeleteUnit(null);
-      setVisible({ supplier: true, category: true, unit: false, product: false, payment: false });
+      setEditingCurrency(null);
+      setConfirmDeleteCurrency(null);
+      setVisible({ supplier: true, category: true, unit: false, currency: false, product: false, payment: false });
       setUsageTick((n) => n + 1);
     }
   }, [open]);
@@ -205,13 +226,26 @@ export function InventorySettingsPanel({
   const orderedSuppliers = reorderByStored(suppliers, supplierOrder, (s) => s.name);
   const orderedCategories = reorderByStored(categories, categoryOrder, (c) => c);
   const orderedUnits = reorderByStored(units, unitOrder, (u) => u);
+  const orderedCurrencies = reorderByStored(currencies, currencyOrder, (c) => c);
 
-  const listRefFor = (kind: "supplier" | "category" | "unit") =>
-    kind === "supplier" ? supplierListRef.current : kind === "category" ? categoryListRef.current : unitListRef.current;
-  const countFor = (kind: "supplier" | "category" | "unit") =>
-    kind === "supplier" ? orderedSuppliers.length : kind === "category" ? orderedCategories.length : orderedUnits.length;
+  const listRefFor = (kind: "supplier" | "category" | "unit" | "currency") =>
+    kind === "supplier"
+      ? supplierListRef.current
+      : kind === "category"
+        ? categoryListRef.current
+        : kind === "unit"
+          ? unitListRef.current
+          : currencyListRef.current;
+  const countFor = (kind: "supplier" | "category" | "unit" | "currency") =>
+    kind === "supplier"
+      ? orderedSuppliers.length
+      : kind === "category"
+        ? orderedCategories.length
+        : kind === "unit"
+          ? orderedUnits.length
+          : orderedCurrencies.length;
 
-  function beginDrag(kind: "supplier" | "category" | "unit", index: number, e: React.PointerEvent<HTMLButtonElement>) {
+  function beginDrag(kind: "supplier" | "category" | "unit" | "currency", index: number, e: React.PointerEvent<HTMLButtonElement>) {
     const listEl = listRefFor(kind);
     if (!listEl) return;
     const rows = Array.from(listEl.querySelectorAll<HTMLElement>("[data-drag-row]"));
@@ -254,6 +288,10 @@ export function InventorySettingsPanel({
       const next = orderKeys(moveWithin(orderedCategories, d.from, d.to), (c) => c);
       setMsg({ ok: true, text: "已更新品類次序。" });
       void onSaveCategoryOrder(next);
+    } else if (d.kind === "currency") {
+      const next = orderKeys(moveWithin(orderedCurrencies, d.from, d.to), (c) => c);
+      setMsg({ ok: true, text: "已更新幣值次序。" });
+      void onSaveCurrencyOrder(next);
     } else {
       const next = orderKeys(moveWithin(orderedUnits, d.from, d.to), (u) => u);
       setMsg({ ok: true, text: "已更新單位次序。" });
@@ -434,6 +472,52 @@ export function InventorySettingsPanel({
     setMsg({ ok: true, text: `已刪除單位「${name}」。舊收據不受影響。` });
   }
 
+  /* ─────────────── 幣值（結構完全對齊單位）─────────────── */
+
+  async function addCurrency() {
+    const name = currencyDraft.trim();
+    if (!name) return;
+    if (currencies.some((c) => c === name)) {
+      setMsg({ ok: false, text: `已經有「${name}」呢個幣值。` });
+      return;
+    }
+    await onSaveCurrencies([...currencies, name]);
+    await onSaveCurrencyOrder(orderKeys([...orderedCurrencies, name], (c) => c));
+    setCurrencyDraft("");
+    setMsg({ ok: true, text: `已新增幣值「${name}」。` });
+  }
+
+  async function renameCurrency(from: string, to: string) {
+    const trimmed = to.trim();
+    if (!trimmed || trimmed === from) {
+      setEditingCurrency(null);
+      return;
+    }
+    if (currencies.some((c) => c === trimmed)) {
+      setMsg({ ok: false, text: `已經有「${trimmed}」呢個幣值。` });
+      setEditingCurrency(null);
+      return;
+    }
+    await onSaveCurrencies(currencies.map((c) => (c === from ? trimmed : c)));
+    if (currencyOrder.includes(from)) {
+      await onSaveCurrencyOrder(currencyOrder.map((n) => (n === from ? trimmed : n)));
+    }
+    setEditingCurrency(null);
+    setMsg({
+      ok: true,
+      text: `已改名為「${trimmed}」。⚠️ 舊收據仍然顯示「${from}」，改名唔會追溯。`,
+    });
+  }
+
+  async function deleteCurrency(name: string) {
+    await onSaveCurrencies(currencies.filter((c) => c !== name));
+    if (currencyOrder.includes(name)) {
+      await onSaveCurrencyOrder(currencyOrder.filter((n) => n !== name));
+    }
+    setConfirmDeleteCurrency(null);
+    setMsg({ ok: true, text: `已刪除幣值「${name}」。舊收據嘅幣值顯示唔會自動改。` });
+  }
+
   function togglePanel(id: PanelId) {
     setMsg(null);
     setVisible((cur) => {
@@ -470,7 +554,7 @@ export function InventorySettingsPanel({
           <div className="min-w-0">
             <h3 className="text-xl font-semibold text-slate-900">庫存・設置</h3>
             <p className="mt-0.5 text-xs leading-snug text-slate-500">
-              只放「唔常用但一定要改到」嘅主檔：供應商、品類、單位、庫存品、支付方式顯示。改動即時儲存。
+              只放「唔常用但一定要改到」嘅主檔：供應商、品類、單位、幣值、庫存品、支付方式顯示。改動即時儲存。
             </p>
           </div>
           <button
@@ -879,6 +963,123 @@ export function InventorySettingsPanel({
                   disabled={false}
                   placeholder="輸入單位名稱（例：kg）"
                   ariaLabel="新增單位名稱"
+                  className={fieldCls}
+                  btnClass={btnPrimary}
+                />
+              </Panel>
+            )}
+
+            {/* ══════════ 幣值 ══════════ */}
+            {visible.currency && (
+              <Panel
+                title="幣值"
+                hint="新增收據時「幣值」欄會以 chips 形式出現；買貨統計會按幣值分開計總數"
+                badge={`${orderedCurrencies.length} 個`}
+                testId="panel-currency"
+              >
+                <ul ref={currencyListRef} className="flex flex-col gap-2">
+                  {orderedCurrencies.length === 0 ? (
+                    <li className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-5 text-center text-xs text-slate-500">
+                      尚無幣值。喺下面輸入名稱撳「新增」就得（例：MOP／HKD／RMB），之後開收據會直接出現喺幣值選單。
+                    </li>
+                  ) : (
+                    orderedCurrencies.map((c, index) => {
+                      const dragging = dragState?.kind === "currency" && dragState.from === index;
+                      const dropTarget = dragState?.kind === "currency" && dragState.to === index && dragState.from !== index;
+                      return (
+                        <li
+                          key={c}
+                          data-drag-row
+                          className={`grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 rounded-2xl border px-2 py-1.5 transition ${
+                            dragging
+                              ? "border-slate-900 bg-slate-50"
+                              : dropTarget
+                                ? "border-dashed border-slate-400 bg-slate-50"
+                                : "border-slate-100 bg-slate-50/60"
+                          }`}
+                        >
+                          <button
+                            type="button"
+                            aria-label={`拖動排序：${c}`}
+                            title="按住拖動排序"
+                            className={gripCls}
+                            onPointerDown={(e) => beginDrag("currency", index, e)}
+                            onPointerMove={moveDrag}
+                            onPointerUp={endDrag}
+                            onPointerCancel={endDrag}
+                          >
+                            ⠿
+                          </button>
+
+                          {editingCurrency?.from === c ? (
+                            <input
+                              autoFocus
+                              className="min-w-0 rounded-lg border border-slate-300 px-3 py-2.5 text-base outline-none"
+                              defaultValue={c}
+                              onBlur={(e) => void renameCurrency(c, e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") void renameCurrency(c, (e.target as HTMLInputElement).value);
+                                if (e.key === "Escape") setEditingCurrency(null);
+                              }}
+                            />
+                          ) : (
+                            <button
+                              type="button"
+                              className="min-w-0 text-left"
+                              onClick={() => setEditingCurrency({ from: c, to: c })}
+                              title="撳一下改名"
+                            >
+                              <span className="block truncate text-sm font-semibold text-slate-800">{c}</span>
+                              <span className="block text-[11px] text-slate-400">收據幣值共用</span>
+                            </button>
+                          )}
+
+                          {editingCurrency?.from === c ? (
+                            <div className="flex gap-1.5">
+                              <button type="button" className={btnGhost} onClick={() => setEditingCurrency(null)}>
+                                取消
+                              </button>
+                            </div>
+                          ) : confirmDeleteCurrency === c ? (
+                            <div className="flex gap-1.5">
+                              <button type="button" className={btnGhost} onClick={() => setConfirmDeleteCurrency(null)}>
+                                取消
+                              </button>
+                              <button
+                                type="button"
+                                className="rounded-xl bg-red-600 px-3.5 py-2.5 text-sm font-semibold text-white"
+                                onClick={() => void deleteCurrency(c)}
+                              >
+                                確定刪除
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="flex gap-1.5">
+                              <button type="button" className={btnGhost} onClick={() => setEditingCurrency({ from: c, to: c })}>
+                                改名
+                              </button>
+                              <button type="button" className={btnDanger} onClick={() => setConfirmDeleteCurrency(c)}>
+                                刪
+                              </button>
+                            </div>
+                          )}
+                        </li>
+                      );
+                    })
+                  )}
+                </ul>
+
+                <p className="mt-3 rounded-xl bg-slate-50 px-3 py-2 text-[11px] leading-relaxed text-slate-500 ring-1 ring-slate-100">
+                  幣值係你門店自己嘅主檔（MOP／HKD／RMB…），預設已經有 MOP／HKD／RMB。喺呢度加好之後，新增收據頂部就會多一個「幣值」選單。
+                </p>
+
+                <AddBar
+                  value={currencyDraft}
+                  onChange={setCurrencyDraft}
+                  onSubmit={() => void addCurrency()}
+                  disabled={false}
+                  placeholder="輸入幣值名稱（例：MOP）"
+                  ariaLabel="新增幣值名稱"
                   className={fieldCls}
                   btnClass={btnPrimary}
                 />

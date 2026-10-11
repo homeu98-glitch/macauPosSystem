@@ -11,6 +11,8 @@ export type InventoryReceiptInput = {
   category?: string;
   payment_method?: string;
   payment_status?: string;
+  /** 幣值（MOP／HKD／RMB…）。每張收據一個幣值；存 `raw_ocr_data.currency`。 */
+  currency?: string;
   date?: string;
   total_amount?: number;
   items?: Array<{ name?: string; unit_price?: number; quantity?: number; quantity_unit?: string }>;

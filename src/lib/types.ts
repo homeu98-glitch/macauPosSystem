@@ -1097,6 +1097,22 @@ export interface PosLocalSettings {
   invUnits: string[];
   /** 單位嘅顯示次序（拖 ⠿ 排序；用**單位名**做 key，同上）。 */
   invUnitOrder: string[];
+  /**
+   * **幣值**清單（2026-10-11「設置 → 幣值」）。
+   *
+   * 用於「新增單據」頂部嘅「幣值」欄：建好之後嗰欄變成** chip 選單**
+   * （MOP／HKD／RMB…），單據可以揀一種幣值。每張收據**一個**幣值
+   * （唔係每行一個），買貨統計會按幣值分開計總數。
+   *
+   * ⚠️ 完全跟 `invUnits` 嘅結構同規矩：
+   *   · 一定要加落 `normalizePosLocalSettings()` 白名單 ＋ `defaultPosLocalSettings`
+   *     （嗰度逐欄重建，漏咗就會喺 reload / 雲端同步被**靜靜剷走**）。
+   *   · **門店層**設定（`local_settings` jsonb），由商家自己管，唔係 admin 主檔。
+   *   · 預設值 `["MOP","HKD","RMB"]`（澳門店最常見嘅三種幣值）。
+   */
+  invCurrencies: string[];
+  /** 幣值嘅顯示次序（拖 ⠿ 排序；用**幣值名**做 key，同上）。 */
+  invCurrencyOrder: string[];
 }
 
 /**

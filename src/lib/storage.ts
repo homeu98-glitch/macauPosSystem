@@ -661,6 +661,22 @@ export function normalizePosLocalSettings(settings: Partial<PosLocalSettings> | 
     invSupplierOrder: sanitizeKeyList(settings?.invSupplierOrder) ?? defaultPosLocalSettings.invSupplierOrder,
     invCategoryOrder: sanitizeKeyList(settings?.invCategoryOrder) ?? defaultPosLocalSettings.invCategoryOrder,
     invUnitOrder: sanitizeKeyList(settings?.invUnitOrder) ?? defaultPosLocalSettings.invUnitOrder,
+    /**
+     * ⚠️ 2026-10-11 新增：幣值清單（庫存 → 設置 → 幣值），單據「幣值」欄用佢做 chip 選單。
+     *
+     * 同 `invUnits` **完全同一個坑**（逐欄重建，漏咗就靜靜剷走）。
+     * 清洗邏輯刻意一致：剔非字串、trim、剔空、去重、保序。
+     */
+    invCurrencies: Array.isArray(settings?.invCurrencies)
+      ? Array.from(
+          new Set(
+            settings.invCurrencies
+              .map((c) => (typeof c === "string" ? c.trim() : ""))
+              .filter((c) => c.length > 0),
+          ),
+        )
+      : defaultPosLocalSettings.invCurrencies,
+    invCurrencyOrder: sanitizeKeyList(settings?.invCurrencyOrder) ?? defaultPosLocalSettings.invCurrencyOrder,
   };
 }
 

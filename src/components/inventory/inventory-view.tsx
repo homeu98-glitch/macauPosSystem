@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   loadAuthSession,
@@ -77,6 +77,8 @@ type Receipt = {
    *    要經 `/api/inventory/receipt-photos/url` 換 signed URL（見 `ReceiptPhotos`）。
    */
   photo_paths?: string[];
+  /** 幣值（MOP／HKD／RMB…）。每張收據一個幣值。存 `raw_ocr_data.currency`。 */
+  currency?: string | null;
   items: ReceiptItem[];
 };
 
@@ -100,6 +102,10 @@ type ReceiptsResponse = {
 
 const money = (n: number) =>
   `MOP ${Number(n || 0).toLocaleString("zh-MO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+/** 幣值感知嘅金額格式（2026-10-11 多幣值）。 */
+const fmtMoney = (currency: string, n: number) =>
+  `${currency || "MOP"} ${Number(n || 0).toLocaleString("zh-MO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 const todayStr = () => new Date().toLocaleDateString("en-CA");
 /**
@@ -135,6 +141,8 @@ type FormState = {
   category: string;
   payment_method: string;
   payment_status: string;
+  /** 幣值（MOP／HKD／RMB…）。每張收據一個幣值。 */
+  currency: string;
   items: FormItem[];
   /**
    * 已上傳成功嘅相片路徑（expenseRecorder Storage）。
@@ -156,7 +164,7 @@ type PendingPhoto = {
   size: number;
 };
 
-function emptyForm(paymentMethods: PaymentMethodDef[]): FormState {
+function emptyForm(paymentMethods: PaymentMethodDef[], currencies: string[]): FormState {
   return {
     merchant_id: "",
     merchant_name: "",
@@ -166,12 +174,14 @@ function emptyForm(paymentMethods: PaymentMethodDef[]): FormState {
     // 第一個可用嘅進貨付款方式做預設（主檔次序 = 商家想嘅優先次序）。
     payment_method: paymentMethods[0]?.code ?? "on_delivery",
     payment_status: "unpaid",
+    // 第一個幣值做預設（主檔次序 = 商家想嘅優先次序；預設 MOP／HKD／RMB）。
+    currency: currencies[0] ?? "MOP",
     items: [{ name: "", unit_price: "", quantity: "1", unit: "" }],
     photo_paths: [],
   };
 }
 
-function formFromReceipt(r: Receipt): FormState {
+function formFromReceipt(r: Receipt, currencies: string[]): FormState {
   return {
     id: r.id,
     merchant_id: r.merchant_id ?? "",
@@ -181,6 +191,8 @@ function formFromReceipt(r: Receipt): FormState {
     category: r.category ?? "",
     payment_method: r.payment_method,
     payment_status: r.payment_status,
+    // 舊收據冇幣值（2026-10-11 之前）⇒ 退回第一個幣值（通常 MOP）。
+    currency: r.currency && r.currency.trim() ? r.currency : currencies[0] ?? "MOP",
     items: r.items.length
       ? r.items.map((it) => ({
           name: it.name,
@@ -360,6 +372,7 @@ function ReceiptFormModal({
   suppliers,
   categories,
   units,
+  currencies,
   paymentMethods,
   labelMap,
   recentItems,
@@ -379,6 +392,12 @@ function ReceiptFormModal({
    *    唔會因為清單空咗就鎖死欄位（同一個取態：`invCategories`）。
    */
   units: string[];
+  /**
+   * 幣值選單（`PosLocalSettings.invCurrencies`，經「庫存 → 設置 → 幣值」維護）。
+   *
+   * 每張收據一個幣值。清單預設 MOP／HKD／RMB，商家可以加／改名／刪。
+   */
+  currencies: string[];
   /** 進貨可見嘅付款方式（已按 scope 過濾，保持主檔次序）。 */
   paymentMethods: PaymentMethodDef[];
   labelMap: Record<string, string>;
@@ -388,7 +407,7 @@ function ReceiptFormModal({
   onSaved: () => void;
   onSuppliersChanged: () => void | Promise<void>;
 }) {
-  const [form, setForm] = useState<FormState>(() => emptyForm(paymentMethods));
+  const [form, setForm] = useState<FormState>(() => emptyForm(paymentMethods, currencies));
   const [err, setErr] = useState<string | null>(null);
   /**
    * 🔴 2026-10-08：驗證失敗時要標紅嘅欄位（`null` = 全部正常）。
@@ -479,7 +498,7 @@ function ReceiptFormModal({
 
   useEffect(() => {
     if (open) {
-      setForm(initial ? formFromReceipt(initial) : emptyForm(paymentMethods));
+      setForm(initial ? formFromReceipt(initial, currencies) : emptyForm(paymentMethods, currencies));
       setErr(null);
       setFieldErr(null);
       setAskDelete(false);
@@ -879,6 +898,7 @@ function ReceiptFormModal({
       category: form.category.trim() || undefined,
       payment_method: form.payment_method,
       payment_status: form.payment_status,
+      currency: form.currency,
       date: form.date,
       total_amount: Math.round(total * 100) / 100,
       items,
@@ -992,13 +1012,12 @@ function ReceiptFormModal({
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-3"
-      onClick={onClose}
     >
       <div
-        className="max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-3xl bg-white p-5 pb-6 shadow-2xl"
+        className="flex max-h-[92vh] w-full max-w-2xl flex-col overflow-hidden rounded-3xl bg-white shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="mb-4 flex items-center justify-between">
+        <div className="flex shrink-0 items-center justify-between border-b border-slate-100 px-5 py-4">
           <h3 className="text-xl font-semibold text-slate-900">{form.id ? "編輯收據" : "新增收據"}</h3>
           <button
             type="button"
@@ -1009,7 +1028,7 @@ function ReceiptFormModal({
           </button>
         </div>
 
-        <div className="space-y-5">
+        <div className="flex-1 space-y-5 overflow-y-auto px-5 py-5">
           {/* ── 供應商：下拉（已有）＋ 即時新增 ── */}
           <div>
             <label className={labelCls}>供應商</label>
@@ -1022,11 +1041,13 @@ function ReceiptFormModal({
                   // 2026-10-08：一改供應商就收返「顯示全部品項」嘅逃生門 ——
                   // 否則商家切到下一個供應商仍然望住全店清單，會誤以為嗰啲都買過。
                   setShowAllItems(false);
-                  if (v === "__custom__") setForm({ ...form, merchant_id: "", merchant_name: form.merchant_name });
-                  else if (!v) setForm({ ...form, merchant_id: "", merchant_name: "" });
+                  // 🔴 2026-10-11：一律改成函數式更新，避免 render-scope 嘅 `form` 喺觸屏
+                  //    快速連續操作（切供應商 → 改其他欄 → 即時新增供應商）時靜默覆蓋輸入。
+                  if (v === "__custom__") setForm((f) => ({ ...f, merchant_id: "", merchant_name: f.merchant_name }));
+                  else if (!v) setForm((f) => ({ ...f, merchant_id: "", merchant_name: "" }));
                   else {
                     const hit = suppliers.find((s) => s.id === v);
-                    setForm({ ...form, merchant_id: v, merchant_name: hit?.name ?? "" });
+                    setForm((f) => ({ ...f, merchant_id: v, merchant_name: hit?.name ?? "" }));
                   }
                 }}
               >
@@ -1078,7 +1099,7 @@ function ReceiptFormModal({
               <input
                 className={`${fieldCls} mt-2`}
                 value={form.merchant_name}
-                onChange={(e) => setForm({ ...form, merchant_id: "", merchant_name: e.target.value })}
+                onChange={(e) => setForm((f) => ({ ...f, merchant_id: "", merchant_name: e.target.value }))}
                 placeholder="輸入供應商名稱（新的會自動建立）"
                 aria-label="供應商名稱"
               />
@@ -1125,7 +1146,7 @@ function ReceiptFormModal({
                 <input
                   className={fieldCls}
                   value={form.category}
-                  onChange={(e) => setForm({ ...form, category: e.target.value })}
+                  onChange={(e) => setForm((f) => ({ ...f, category: e.target.value }))}
                   placeholder="輸入品類（必填，例如：食材）"
                   aria-label="品類"
                   required
@@ -1146,7 +1167,7 @@ function ReceiptFormModal({
                     key={c}
                     type="button"
                     className={chipCls(form.category === c)}
-                    onClick={() => setForm({ ...form, category: c })}
+                    onClick={() => setForm((f) => ({ ...f, category: c }))}
                   >
                     {c}
                   </button>
@@ -1161,7 +1182,7 @@ function ReceiptFormModal({
               <input
                 className={fieldCls}
                 value={form.receipt_number}
-                onChange={(e) => setForm({ ...form, receipt_number: e.target.value })}
+                onChange={(e) => setForm((f) => ({ ...f, receipt_number: e.target.value }))}
                 placeholder="選填"
               />
             </div>
@@ -1179,7 +1200,7 @@ function ReceiptFormModal({
                     type="button"
                     className={chipCls(form.date === c.value)}
                     onClick={() => {
-                      setForm({ ...form, date: c.value });
+                      setForm((f) => ({ ...f, date: c.value }));
                       setShowDatePicker(false);
                     }}
                   >
@@ -1200,7 +1221,7 @@ function ReceiptFormModal({
                   className={`${fieldCls} mt-2`}
                   value={form.date}
                   autoFocus
-                  onChange={(e) => setForm({ ...form, date: e.target.value })}
+                  onChange={(e) => setForm((f) => ({ ...f, date: e.target.value }))}
                   aria-label="收據日期"
                 />
               )}
@@ -1232,7 +1253,7 @@ function ReceiptFormModal({
                     key={m.code}
                     type="button"
                     className={chipCls(form.payment_method === m.code)}
-                    onClick={() => setForm({ ...form, payment_method: m.code })}
+                    onClick={() => setForm((f) => ({ ...f, payment_method: m.code }))}
                   >
                     {m.label}
                   </button>
@@ -1271,9 +1292,26 @@ function ReceiptFormModal({
                   key={s.code}
                   type="button"
                   className={chipCls(form.payment_status === s.code)}
-                  onClick={() => setForm({ ...form, payment_status: s.code })}
+                  onClick={() => setForm((f) => ({ ...f, payment_status: s.code }))}
                 >
                   {s.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* ── 幣值：chip（每張收據一個幣值）── */}
+          <div>
+            <label className={labelCls}>幣值</label>
+            <div className="flex flex-wrap gap-2">
+              {(currencies.length === 0 ? ["MOP"] : currencies).map((c) => (
+                <button
+                  key={c}
+                  type="button"
+                  className={chipCls(form.currency === c)}
+                  onClick={() => setForm((f) => ({ ...f, currency: c }))}
+                >
+                  {c}
                 </button>
               ))}
             </div>
@@ -1407,7 +1445,7 @@ function ReceiptFormModal({
               <button
                 type="button"
                 className="rounded-lg bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-700"
-                onClick={() => setForm({ ...form, items: [...form.items, { name: "", unit_price: "", quantity: "1", unit: "" }] })}
+                onClick={() => setForm((f) => ({ ...f, items: [...f.items, { name: "", unit_price: "", quantity: "1", unit: "" }] }))}
               >
                 ＋ 品項
               </button>
@@ -1416,7 +1454,7 @@ function ReceiptFormModal({
               {form.items.map((it, i) => {
                 const suggestions = pickerIndex === i ? suggestionsFor(it.name) : [];
                 return (
-                  <div key={i}>
+                  <div key={i} className="relative">
                     {/* 🔴 2026-09-25 修正：以前係 `flex` + `${fieldCls} w-28`，而 fieldCls
                         內含 `w-full`；本專案 Tailwind v4 產生順序係 `.w-full` 喺 `.w-28`
                         之後 ⇒ `w-full` 勝出 ⇒ 單價／數量 flex-basis = 100%，
@@ -1558,7 +1596,7 @@ function ReceiptFormModal({
                       <button
                         type="button"
                         className="col-span-2 shrink-0 rounded-xl bg-red-50 px-4 py-3.5 text-base font-medium text-red-600 hover:bg-red-100 sm:col-span-1"
-                        onClick={() => setForm({ ...form, items: form.items.filter((_, idx) => idx !== i) })}
+                        onClick={() => setForm((f) => ({ ...f, items: f.items.filter((_, idx) => idx !== i) }))}
                         aria-label="刪除品項"
                       >
                         ✕
@@ -1573,7 +1611,11 @@ function ReceiptFormModal({
                          所以空狀態要自己再判一次 `pickerIndex === i`。
                     */}
                     {(suggestions.length > 0 || (pickerIndex === i && scopedEmpty)) && (
-                      <div className="mt-2 rounded-2xl border border-slate-200 bg-slate-50 p-2">
+                      // 🔴 2026-10-11：改為浮層（absolute），唔再 in-flow block 推擠下面嘅品項
+                      //    —— 之前展開建議會把後面嘅品項／合計推走、甚至超出可視範圍，
+                      //    造成「明明入咗字但下一行唔見咗」嘅錯覺。浮層 z-20 蓋喺下一行上面，
+                      //    唔影響 DOM 順序，撳建議先真係填得到（onPointerDown 已防 onBlur 吞點擊）。
+                      <div className="absolute inset-x-0 top-full z-20 mt-1 rounded-2xl border border-slate-200 bg-slate-50 p-2 shadow-lg">
                         <p className="px-2 pb-1 text-xs font-medium text-slate-500">
                           {supplierScopeId && !showAllItems ? (
                             <>
@@ -1639,15 +1681,6 @@ function ReceiptFormModal({
             </div>
           </div>
 
-          <div className="flex items-center justify-between rounded-xl bg-slate-50 px-4 py-3.5 text-base font-semibold text-slate-900 ring-1 ring-slate-200">
-            <span>合計</span>
-            <span>{money(total)}</span>
-          </div>
-
-          {err && (
-            <div className="rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700 ring-1 ring-red-200">{err}</div>
-          )}
-
           {form.id && !askDelete && (
             <button
               type="button"
@@ -1679,6 +1712,18 @@ function ReceiptFormModal({
                 </button>
               </div>
             </div>
+          )}
+        </div>
+
+        {/* 🔴 sticky footer：合計 ＋ 儲存 永遠可見（觸屏長表單唔使捲到底先撳到儲存）。 */}
+        <div className="shrink-0 space-y-3 border-t border-slate-200 bg-white px-5 py-4">
+          <div className="flex items-center justify-between rounded-xl bg-slate-50 px-4 py-3 text-base font-semibold text-slate-900 ring-1 ring-slate-200">
+            <span>合計（{form.currency || "MOP"}）</span>
+            <span>{fmtMoney(form.currency, total)}</span>
+          </div>
+
+          {err && (
+            <div className="rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700 ring-1 ring-red-200">{err}</div>
           )}
 
           <button
@@ -1759,6 +1804,10 @@ export function InventoryView() {
   const [units, setUnits] = useState<string[]>([]);
   /** 單位顯示次序（`PosLocalSettings.invUnitOrder`；拖 ⠿ 之後先寫入）。 */
   const [unitOrder, setUnitOrder] = useState<string[]>([]);
+  /** 幣值清單（來源：`PosLocalSettings.invCurrencies`，2026-10-11 多幣值）。 */
+  const [currencies, setCurrencies] = useState<string[]>([]);
+  /** 幣值顯示次序（`PosLocalSettings.invCurrencyOrder`；拖 ⠿ 之後先寫入）。 */
+  const [currencyOrder, setCurrencyOrder] = useState<string[]>([]);
   /**
    * 庫存表嘅「重載鑰匙」。
    *
@@ -1828,6 +1877,8 @@ export function InventoryView() {
     setCategoryOrder(local.invCategoryOrder);
     setUnits(local.invUnits);
     setUnitOrder(local.invUnitOrder);
+    setCurrencies(local.invCurrencies);
+    setCurrencyOrder(local.invCurrencyOrder);
   }, []);
 
   /**
@@ -1862,7 +1913,9 @@ export function InventoryView() {
     const nothingMissing =
       local.invCategories.length > 0 &&
       local.invUnits.length > 0 &&
-      local.invSupplierOrder.length > 0;
+      local.invSupplierOrder.length > 0 &&
+      local.invCurrencies.length > 0 &&
+      local.invCurrencyOrder.length > 0;
     if (nothingMissing) {
       cloudHydrateDone.current = true;
       return;
@@ -1896,6 +1949,12 @@ export function InventoryView() {
         if (base.invUnitOrder.length === 0 && cloud.invUnitOrder.length > 0) {
           patch.invUnitOrder = cloud.invUnitOrder;
         }
+        if (base.invCurrencies.length === 0 && cloud.invCurrencies.length > 0) {
+          patch.invCurrencies = cloud.invCurrencies;
+        }
+        if (base.invCurrencyOrder.length === 0 && cloud.invCurrencyOrder.length > 0) {
+          patch.invCurrencyOrder = cloud.invCurrencyOrder;
+        }
         if (Object.keys(patch).length === 0) return; // 雲端都係空 → 冇嘢好補
         const merged = normalizePosLocalSettings({ ...base, ...patch });
         savePosLocalSettings(merged);
@@ -1904,6 +1963,8 @@ export function InventoryView() {
         setCategoryOrder(merged.invCategoryOrder);
         setUnits(merged.invUnits);
         setUnitOrder(merged.invUnitOrder);
+        setCurrencies(merged.invCurrencies);
+        setCurrencyOrder(merged.invCurrencyOrder);
       } catch {
         // 離線 / 未登入 / 401 → 保持本機值（拉唔到唔可以清空任何嘢）。
       }
@@ -2044,6 +2105,8 @@ export function InventoryView() {
     setCategoryOrder(merged.invCategoryOrder);
     setUnits(merged.invUnits);
     setUnitOrder(merged.invUnitOrder);
+    setCurrencies(merged.invCurrencies);
+    setCurrencyOrder(merged.invCurrencyOrder);
 
     // ── 推雲（best-effort；本機已寫入，失敗唔影響商家操作） ──
     const storeId = loadAuthSession()?.merchantId;
@@ -2099,6 +2162,18 @@ export function InventoryView() {
   /** 儲存品類顯示次序（拖 ⠿ 之後）。 */
   const saveCategoryOrder = useCallback(
     async (next: string[]) => patchLocalSettings({ invCategoryOrder: next }),
+    [patchLocalSettings],
+  );
+
+  /** 儲存幣值清單（2026-10-11 多幣值；同 `saveCategories` 同一通道）。 */
+  const saveCurrencies = useCallback(
+    async (next: string[]) => patchLocalSettings({ invCurrencies: next }),
+    [patchLocalSettings],
+  );
+
+  /** 儲存幣值顯示次序（拖 ⠿ 之後）。 */
+  const saveCurrencyOrder = useCallback(
+    async (next: string[]) => patchLocalSettings({ invCurrencyOrder: next }),
     [patchLocalSettings],
   );
 
@@ -2388,17 +2463,16 @@ export function InventoryView() {
         {error && (
           <div className="mb-4 rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700 ring-1 ring-red-200">{error}</div>
         )}
-        {/* KPI */}
+        {/* KPI ── 各幣值分開統計（2026-10-11 多幣值）
+            🔴 唔可以將唔同幣值嘅 total 加埋做一個數（MOP+HKD 加埋會錯），
+            所以 總支出／已付／未付 一律按 `summary.byCurrency` 逐幣值出卡，
+            唔再用 `money(summary.total)` 呢類跨幣值原始累加。 */}
         <div className="mb-5 grid grid-cols-2 gap-3 md:grid-cols-4">
           <div className="rounded-2xl border border-slate-200 bg-white p-4">
             <div className="text-xs text-slate-500">
               {rangeLabel}
-              {methodLabel}總支出
+              {methodLabel}收據數
             </div>
-            <div className="mt-1 text-lg font-semibold text-slate-900">{money(summary?.total ?? 0)}</div>
-          </div>
-          <div className="rounded-2xl border border-slate-200 bg-white p-4">
-            <div className="text-xs text-slate-500">收據數</div>
             <div className="mt-1 text-lg font-semibold text-slate-900">
               {summary?.count ?? 0}
               {methodFilter !== ALL_METHODS && visibleReceipts.length !== receipts.length ? (
@@ -2406,14 +2480,22 @@ export function InventoryView() {
               ) : null}
             </div>
           </div>
-          <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
-            <div className="text-xs text-emerald-700">已付</div>
-            <div className="mt-1 text-lg font-semibold text-emerald-700">{money(summary?.paid ?? 0)}</div>
-          </div>
-          <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
-            <div className="text-xs text-amber-700">未付</div>
-            <div className="mt-1 text-lg font-semibold text-amber-700">{money(summary?.unpaid ?? 0)}</div>
-          </div>
+          {Object.entries(summary?.byCurrency ?? {}).map(([cur, b]) => (
+            <Fragment key={cur}>
+              <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                <div className="text-xs text-slate-500">總支出（{cur}）</div>
+                <div className="mt-1 text-lg font-semibold text-slate-900">{fmtMoney(cur, b.total)}</div>
+              </div>
+              <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
+                <div className="text-xs text-emerald-700">已付（{cur}）</div>
+                <div className="mt-1 text-lg font-semibold text-emerald-700">{fmtMoney(cur, b.paid)}</div>
+              </div>
+              <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
+                <div className="text-xs text-amber-700">未付（{cur}）</div>
+                <div className="mt-1 text-lg font-semibold text-amber-700">{fmtMoney(cur, b.unpaid)}</div>
+              </div>
+            </Fragment>
+          ))}
         </div>
 
         {/* 收據清單：點擊任意位置開啟置中 modal（編輯+刪除） */}
@@ -2482,16 +2564,23 @@ export function InventoryView() {
                         )}
                       </div>
                       <div className="flex shrink-0 flex-col items-end gap-1">
-                        <div className="text-base font-semibold text-slate-900">{money(r.total_amount)}</div>
-                        <span
-                          className={`inline-block rounded-full px-2 py-0.5 text-[11px] font-semibold ${
-                            paid
-                              ? "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200"
-                              : "bg-amber-50 text-amber-700 ring-1 ring-amber-200"
-                          }`}
-                        >
-                          {paid ? "已付款" : "未付款"}
-                        </span>
+                        <div className="text-base font-semibold text-slate-900">
+                          {fmtMoney(r.currency ?? "MOP", r.total_amount)}
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <span className="inline-block rounded-full bg-indigo-50 px-2 py-0.5 text-[11px] font-semibold text-indigo-700 ring-1 ring-indigo-200">
+                            {r.currency && r.currency.trim() ? r.currency : "MOP"}
+                          </span>
+                          <span
+                            className={`inline-block rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                              paid
+                                ? "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200"
+                                : "bg-amber-50 text-amber-700 ring-1 ring-amber-200"
+                            }`}
+                          >
+                            {paid ? "已付款" : "未付款"}
+                          </span>
+                        </div>
                       </div>
                     </div>
                   </button>
@@ -2591,6 +2680,7 @@ export function InventoryView() {
         categories={orderedCategories}
         units={orderedUnits}
         paymentMethods={purchaseMethods}
+        currencies={currencies}
         labelMap={labelMap}
         recentItems={recentItems}
         account={account}
@@ -2628,6 +2718,10 @@ export function InventoryView() {
         unitOrder={unitOrder}
         onSaveUnits={saveUnits}
         onSaveUnitOrder={saveUnitOrder}
+        currencies={currencies}
+        currencyOrder={currencyOrder}
+        onSaveCurrencies={saveCurrencies}
+        onSaveCurrencyOrder={saveCurrencyOrder}
         paymentMethods={masterMethods}
         paymentWarning={masterWarning}
         highlightSupplierId={highlightSupplierId}

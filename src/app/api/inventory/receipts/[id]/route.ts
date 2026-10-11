@@ -9,6 +9,7 @@ import {
   stripQuantityUnit,
   type InventoryReceiptInput,
 } from "@/lib/expense-inventory";
+import { diffReceiptItems, type ExistingReceiptItem, type ReceiptItemContent } from "@/lib/inventory-receipt-diff";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -55,6 +56,8 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
   if (body.category !== undefined) raw.category = body.category || null;
   if (body.payment_method) raw.payment_method = normalizePaymentMethod(body.payment_method);
   if (body.payment_status) raw.payment_status = normalizePaymentStatus(body.payment_status);
+  // 2026-10-11：幣值（每張收據一個）。`undefined` ＝ 唔改（保留原有）；空字串＝清走。
+  if (body.currency !== undefined) raw.currency = body.currency && body.currency.trim() ? body.currency.trim() : null;
   /*
    * 🔴 2026-10-07（P3）：相片路徑。
    *
@@ -79,15 +82,72 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
   if (uErr) return NextResponse.json({ ok: false, error: uErr.message }, { status: 500 });
 
   if (Array.isArray(body.items)) {
-    const { error: dErr } = await client.from("receipt_items").delete().eq("receipt_id", id);
-    if (dErr) return NextResponse.json({ ok: false, error: dErr.message }, { status: 500 });
-    const itemRows = buildReceiptItems(id, userId, body.items);
-    if (itemRows.length > 0) {
-      let { error: iErr } = await client.from("receipt_items").insert(itemRows);
+    /*
+     * 🔴 2026-10-11：由「先刪再插」改為 content-diff（insert → update → delete）。
+     *
+     * 舊做法：先 `delete().eq("receipt_id", id)` 再 `insert(itemRows)`。
+     *   若 insert 失敗（例如 receipt_items.quantity_unit 欄未加 ⇒ 42703），
+     *   原本嘅品項已經被 delete 清走 ⇒ 商家見到「原有品項無故消失」。
+     *   呢個就係用家回報「新增品項時原有品項被莫名刪除」嘅根因。
+     *
+     * 新做法：先拉現有品項（帶 id），同前端送嚟嘅 desired 做 content-diff，
+     *   順序**先 insert 新行 → 再 update 改動行 → 最後先 delete 多咗出嚟嘅行**。
+     *   任何一步失敗都唔會丟掉已經存在嘅品項（delete 排最後，而且只刪尾段多餘行）。
+     *
+     *   ⚠️ 順序係鐵律：一定要 insert→update→delete，唔可以 delete 排頭。
+     */
+    const desiredRows = buildReceiptItems(id, userId, body.items);
+    const desired: ReceiptItemContent[] = desiredRows.map((r) => ({
+      name: r.name,
+      unit_price: r.unit_price,
+      quantity: r.quantity,
+      quantity_unit: typeof r.quantity_unit === "string" ? r.quantity_unit : "",
+    }));
+
+    const { data: existingRows, error: exErr } = await client
+      .from("receipt_items")
+      .select("id, name, unit_price, quantity, quantity_unit")
+      .eq("receipt_id", id)
+      .order("id", { ascending: true });
+    if (exErr) return NextResponse.json({ ok: false, error: exErr.message }, { status: 500 });
+
+    const existing: ExistingReceiptItem[] = (existingRows ?? []).map((r) => ({
+      id: String((r as Record<string, unknown>).id),
+      name: String((r as Record<string, unknown>).name ?? ""),
+      unit_price: Number((r as Record<string, unknown>).unit_price) || 0,
+      quantity: Number((r as Record<string, unknown>).quantity) || 0,
+      quantity_unit: typeof (r as Record<string, unknown>).quantity_unit === "string" ? ((r as Record<string, unknown>).quantity_unit as string) : "",
+    }));
+
+    const diff = diffReceiptItems(existing, desired);
+
+    // ① insert（新行）
+    for (const row of diff.toInsert) {
+      const insertRow = { receipt_id: id, user_id: userId, ...row };
+      let { error: iErr } = await client.from("receipt_items").insert(insertRow);
       if (iErr && isMissingColumn(iErr)) {
-        ({ error: iErr } = await client.from("receipt_items").insert(stripQuantityUnit(itemRows)));
+        ({ error: iErr } = await client.from("receipt_items").insert(stripQuantityUnit([insertRow])));
       }
       if (iErr) return NextResponse.json({ ok: false, error: iErr.message }, { status: 500 });
+    }
+
+    // ② update（改動行）
+    for (const row of diff.toUpdate) {
+      const { id: itemId, ...patch } = row;
+      let { error: uErr } = await client.from("receipt_items").update(patch as Record<string, unknown>).eq("id", itemId);
+      if (uErr && isMissingColumn(uErr)) {
+        ({ error: uErr } = await client
+          .from("receipt_items")
+          .update(stripQuantityUnit([patch])[0] as Record<string, unknown>)
+          .eq("id", itemId));
+      }
+      if (uErr) return NextResponse.json({ ok: false, error: uErr.message }, { status: 500 });
+    }
+
+    // ③ delete（多咗出嚟嘅行，排最後 → 失敗唔會動到仲要用嘅品項）
+    if (diff.toDelete.length > 0) {
+      const { error: dErr } = await client.from("receipt_items").delete().in("id", diff.toDelete);
+      if (dErr) return NextResponse.json({ ok: false, error: dErr.message }, { status: 500 });
     }
   }
 

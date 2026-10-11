@@ -585,4 +585,9 @@ export const defaultPosLocalSettings: PosLocalSettings = {
   // 空 = 品項 row 嘅單位欄照可以用（手動輸入），唔會鎖死。
   invUnits: [],
   invUnitOrder: [],
+  // 幣值清單（2026-10-11）：預設 MOP／HKD／RMB —— 澳門店最常見嘅三種幣值。
+  // ⚠️ 同單位**相反**：幣值預設就填好，商家開單即刻可以揀，唔使先去設置加。
+  // 商家仍然可以喺「庫存 → 設置 → 幣值」加／改名／刪／拖排序。
+  invCurrencies: ["MOP", "HKD", "RMB"],
+  invCurrencyOrder: [],
 };

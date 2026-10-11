@@ -166,6 +166,8 @@ export type StatReceipt = {
   payment_status: string; // "paid" | "unpaid" | ...
   payment_method: string;
   category?: string;
+  /** 幣值（MOP／HKD／RMB…）。每張收據一個；舊收據冇值 ⇒ "MOP"。可為空（前端 receipt 型別一致）。 */
+  currency?: string | null;
   items: StatItem[];
 };
 
@@ -193,6 +195,12 @@ export type PurchaseSummary = {
   items: ItemStat[];
   /** 未截斷前嘅不同品項總數（畀 UI 講「共 N 款」）。 */
   itemsTotal: number;
+  /**
+   * 各幣值分開統計（2026-10-11 多幣值）。
+   * 用家決策：各幣值**分開**計總數，唔可以匯總做一個數（唔同幣值加埋會錯）。
+   * key = 幣值（MOP／HKD／RMB…），value 含 total／paid／unpaid／count。
+   */
+  byCurrency: Record<string, { total: number; paid: number; unpaid: number; count: number }>;
 };
 
 export type PurchaseApiResponse = {
@@ -259,11 +267,19 @@ export function buildPurchaseSummary(receipts: StatReceipt[], fullItems = false)
   let total = 0;
   let paid = 0;
   let unpaid = 0;
+  // 2026-10-11：各幣值分開計（唔可以匯總做一個數）。
+  const byCurrency: Record<string, { total: number; paid: number; unpaid: number; count: number }> = {};
   for (const r of receipts) {
     const amt = normalizeNumber(r.total_amount, 0);
     total += amt;
     if (r.payment_status === "paid") paid += amt;
     else unpaid += amt;
+    const cur = (r.currency && r.currency.trim()) || "MOP";
+    const bucket = byCurrency[cur] ?? (byCurrency[cur] = { total: 0, paid: 0, unpaid: 0, count: 0 });
+    bucket.total += amt;
+    bucket.count += 1;
+    if (r.payment_status === "paid") bucket.paid += amt;
+    else bucket.unpaid += amt;
   }
   /**
    * 🔴 2026-10-05：貨品細項要截斷，唔可以原樣回全部。
@@ -285,6 +301,7 @@ export function buildPurchaseSummary(receipts: StatReceipt[], fullItems = false)
     priceTrendSeries: buildPriceTrendSeries(receipts, 6),
     items: fullItems ? allItems : allItems.slice(0, PURCHASE_ITEMS_PREVIEW),
     itemsTotal: allItems.length,
+    byCurrency,
   };
 }
 

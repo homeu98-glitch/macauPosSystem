@@ -194,6 +194,8 @@ export async function GET(request: Request) {
       payment_status: normalizePaymentStatus(getRaw("payment_status")),
       payment_method: normalizePaymentMethod(getRaw("payment_method")),
       category: getRaw("category") || "",
+      // 2026-10-11：幣值（每張收據一個）。舊收據冇幣值 ⇒ 退回 "MOP" 令統計有得分組。
+      currency: getRaw("currency") || "MOP",
       items: receiptItems,
     };
   };
@@ -214,6 +216,8 @@ export async function GET(request: Request) {
       payment_method: sr.payment_method,
       payment_status: sr.payment_status,
       category: sr.category ?? "",
+      // 2026-10-11：幣值（每張收據一個），前端 Receipt 明細顯示用。
+      currency: sr.currency ?? null,
       raw_ocr_data: src?.raw_ocr_data ?? null,
       items: sr.items,
       /*
@@ -303,6 +307,8 @@ export async function POST(request: Request) {
       category: String(body.category).trim(),
       payment_method: normalizePaymentMethod(body.payment_method),
       payment_status: normalizePaymentStatus(body.payment_status),
+      // 2026-10-11：幣值（每張收據一個）。空／未提供 → 落 "MOP" 降級（唔可以留空令統計分唔到組）。
+      currency: body.currency && String(body.currency).trim() ? String(body.currency).trim() : "MOP",
       input_method: "pos_manual",
       /*
        * 2026-10-07（P3）：收據相片路徑 —— 存 expenseRecorder Storage。
