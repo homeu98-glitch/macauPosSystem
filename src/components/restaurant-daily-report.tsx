@@ -3612,6 +3612,10 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                       <div className="mb-2 text-xs font-semibold text-slate-500">
                         {t("近 6 個月買貨支出")}
                       </div>
+                      {/* 🔴 柱一定要 h-full：row 係 `items-end`（align-items:flex-end），
+                          欄冇 h-full 就會塌陷做「內容高度」——柱體 flex-1 冇嘢撐 ＝ 0px、
+                          % 高度對住 0 計 ⇒ 成排柱隱形，淨低月份文字（2026-10-11 實測）。
+                          同下方 DurationBarChart 同一套路（嗰邊欄有 h-full 所以畫得出）。 */}
                       <div className="flex items-end gap-2" style={{ height: 96 }}>
                         {(() => {
                           const max = Math.max(
@@ -3620,7 +3624,7 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                           );
                           const lastIdx = purchase.sel.monthlyExpenses.length - 1;
                           return purchase.sel.monthlyExpenses.map((m, idx) => (
-                            <div key={m.key} className="flex flex-1 flex-col items-center gap-1">
+                            <div key={m.key} className="flex h-full flex-1 flex-col items-center gap-1">
                               <div className="flex w-full flex-1 items-end">
                                 <div
                                   className={`w-full rounded-t ${idx === lastIdx ? "bg-orange-500" : "bg-slate-300"}`}
