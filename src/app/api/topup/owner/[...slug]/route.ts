@@ -2,6 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { fetchTopupShopId } from "@/lib/topup/fetch-shop-id.server";
 import {
+  createTopupSessionStore,
+  type TopupOwnerIdentity,
+} from "@/lib/topup/owner-session.server";
+import {
   getTopupBaseUrl,
   isTopupSsoConfigured,
   signTopupOwnerSsoToken,
@@ -15,12 +19,21 @@ import {
  * 店主審核 API 嘅 server-side proxy。
  *
  * 目的：取代 macau-pos 入面嵌 topup 嘅 iframe —— macau-pos 原生 React UI 改為 call 呢度，
- * 呢度再簽 Site A（macau-pos）owner JWT、Bearer 轉發去 topup 嘅 /api/owner/* 端點。
- * topup 嗰邊嘅 owner 端點經 resolveOwnerRequest 接受呢支 JWT（見 topup lib/topup-service.js）。
+ * 呢度再簽 Site A（macau-pos）owner JWT、轉發去 topup 嘅 /api/owner/* 端點。
+ *
+ * ⚠️ 唔好再假設「topup 嘅 owner 端點經 resolveOwnerRequest 接受 Bearer」—— 嗰個版本
+ *    從來冇進過部署 repo（只喺另一份本地副本出現過），詳情見下面第 5 步。
  *
  * 認證流程完全 mirror 現有 /api/topup/owner-embed 與 /api/topup/pending-count：
  *   1. 驗 Ledger Bearer → 2. merchant_staff → 3. fetchTopupShopId 拎 8 位編號
- *   4. signTopupOwnerSsoToken 簽 JWT → 5. Bearer 轉發去 topup。
+ *   4. signTopupOwnerSsoToken 簽 JWT → 5. 轉發去 topup。
+ *
+ * 🔴 第 5 步嘅關鍵（2026-10-13）：已部署嘅 topup 係 `api/index.js` catch-all → `routes/owner/*.js`，
+ *   嗰啲 route 用 `readSession(req)` **只認 `topup_session` cookie**，完全唔讀 `Authorization`。
+ *   直接 Bearer 轉發會 100% 返 401「請先以店主身份登入」（實測：帶同冇帶 JWT 回應完全一樣）。
+ *   所以呢度要先 `POST /api/auth/sso-login {ssoToken}` 換一條 session cookie 出嚟（鏡像
+ *   `public/owner.html?ssoToken=` 嘅瀏覽器行為），再用 `Cookie` 頭打 `/api/owner/*`。
+ *   Bearer 仍然一併帶住：將來 topup 升級到支援 `resolveOwnerRequest` 之後可以無痛過渡。
  *
  * 靜態路徑 /api/topup/owner-embed 與 /api/topup/owner/pending-count 唔會中呢度（Next 優先靜態段）。
  */
@@ -34,12 +47,31 @@ function readBearerToken(request: Request): string | null {
 
 type ProxyContext = { params: Promise<{ slug: string[] }> };
 
+/** 每個 server instance 一份 session cookie 快取（同一間舖 6 小時內唔使重複換票）。 */
+const topupSessions = createTopupSessionStore();
+
 export async function GET(request: NextRequest, ctx: ProxyContext) {
-  return proxyOwnerRequest(request, ctx, "GET");
+  return guard(proxyOwnerRequest(request, ctx, "GET"));
 }
 
 export async function POST(request: NextRequest, ctx: ProxyContext) {
-  return proxyOwnerRequest(request, ctx, "POST");
+  return guard(proxyOwnerRequest(request, ctx, "POST"));
+}
+
+/**
+ * 換票／轉發失敗要出**可讀**嘅中文原因畀面板（否則只會見到 Network error，
+ * 根本睇唔出係 SSO secret 唔夾定係 topup 嗰邊拒絕）。
+ */
+async function guard(pending: Promise<NextResponse>): Promise<NextResponse> {
+  try {
+    return await pending;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    return NextResponse.json(
+      { ok: false, error: message || "無法連線到充值審核服務。" },
+      { status: 502 },
+    );
+  }
 }
 
 async function proxyOwnerRequest(
@@ -127,21 +159,43 @@ async function proxyOwnerRequest(
 
   const shopName = merchant?.name?.trim() || shopId;
   const ownerLogin = /^\d{8}$/.test(staffAccount) ? staffAccount : shopId;
-  const topupJwt = signTopupOwnerSsoToken({ shopId, shopName, ownerLogin });
+  const identity = { shopId, shopName, ownerLogin };
 
   const slug = (await ctx.params).slug;
   const topupPath = slug.join("/");
   const topupUrl = `${getTopupBaseUrl()}/api/owner/${topupPath}${request.nextUrl.search}`;
 
-  const topupRes = await fetch(topupUrl, {
+  let sessionCookie = await topupSessions.get(identity);
+  let topupRes = await callTopupOwnerApi(topupUrl, method, body, sessionCookie, identity);
+
+  // session 過期／被踢：重新換一次票再試一次（jti 一次性，必須重簽）。
+  if (topupRes.status === 401) {
+    sessionCookie = await topupSessions.refresh(identity);
+    topupRes = await callTopupOwnerApi(topupUrl, method, body, sessionCookie, identity);
+  }
+
+  // topup 每次成功都會 refreshSession 回一條新 cookie，順手更新快取。
+  topupSessions.remember(shopId, topupRes);
+
+  const payload = (await topupRes.json().catch(() => ({}))) as Record<string, unknown>;
+  return NextResponse.json(payload, { status: topupRes.status });
+}
+
+async function callTopupOwnerApi(
+  topupUrl: string,
+  method: "GET" | "POST",
+  body: Record<string, unknown>,
+  sessionCookie: string,
+  identity: TopupOwnerIdentity,
+): Promise<Response> {
+  return fetch(topupUrl, {
     method,
     headers: {
-      Authorization: `Bearer ${topupJwt}`,
+      // topup 嘅 /api/owner/* 靠呢條 cookie 認身分；Bearer 只係向前相容（見檔案頭註解）。
+      Cookie: sessionCookie,
+      Authorization: `Bearer ${signTopupOwnerSsoToken(identity)}`,
       "Content-Type": "application/json",
     },
     body: method === "POST" ? JSON.stringify(body) : undefined,
   });
-
-  const payload = (await topupRes.json().catch(() => ({}))) as Record<string, unknown>;
-  return NextResponse.json(payload, { status: topupRes.status });
 }

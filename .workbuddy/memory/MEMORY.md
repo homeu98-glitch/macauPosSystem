@@ -3,6 +3,11 @@
 > 開工前必讀 `docs/113-agent-gotchas.md`；先睇 `pos-task-router` skill。細節→`DETAIL-2026-09.md`。
 > POS=`iyrywzormzisyppkokbi`；Ledger=`zymdemjflsckicwcinxl`。0050 已跑；0051–0057 已寫未部署。
 
+## 充值審核（topUpAutomation）
+- 🔴 已部署 topup（`homeu98-glitch/topUpAutomation`，本地 `C:\dev\macauPos\topUpAutomation`）係 `api/index.js` catch-all → `routes/owner/*.js`，用 `readSession(req)` **只認 `topup_session` cookie、唔讀 Bearer** ⇒ 直接 Bearer 轉發 `/api/owner/*` 必 401「請先以店主身份登入」。
+- 正解：`/api/topup/owner/*` proxy 要先 `POST /api/auth/sso-login {ssoToken}` 換 cookie（`owner-session.server.ts`），再帶 `Cookie` 打 owner API；換票**每次要重簽 jti**（`membership_token_logins.jti` unique）。換票亦會順便 provision `shops.external_shop_id`。
+- ⚠️ `C:\dev\topUpAutomation`（非 git 副本）有支援 Bearer 嘅 `resolveOwnerRequest()`，但**從未入部署 repo**，唔可以假設 production 有。
+
 ## 同步／數字口徑
 - 下單機＝本機優先／第二台＝純雲端 state／交班＝LWW／報表＝純雲端永不 merge。實收＝毛＝`agg.paidTotal`。
 - 訂單時間唯一真源＝`orderEventInstant()`（settledAt→reopenedAt→originalSettledAt→updatedAt→createdAt）。澳覓單 `created_at` +8h（aomi-bridge）⇒ admin 總覽（created_at 無上限）同報表可差幾張。
