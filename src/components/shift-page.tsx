@@ -1763,7 +1763,7 @@ export function ShiftPage() {
             <div className="flex flex-wrap justify-end gap-2">
               {!shift.openedAt ? (
                 <button
-                  className="rounded-2xl bg-emerald-600 px-4 py-2 text-sm font-semibold text-white"
+                  className="h-11 rounded-2xl bg-emerald-600 px-5 text-sm font-semibold text-white"
                   onClick={() => void openShiftNow()}
                   type="button"
                 >
@@ -1771,7 +1771,7 @@ export function ShiftPage() {
                 </button>
               ) : (
                 <button
-                  className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white"
+                  className="h-11 rounded-2xl bg-slate-900 px-5 text-sm font-semibold text-white"
                   onClick={() => {
                     setClosingDiff("");
                     setClosingNote("");
@@ -2471,7 +2471,7 @@ export function ShiftPage() {
             confirmStep === 1 ? (
               <>
                 <button
-                  className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                  className="h-11 rounded-2xl bg-white px-5 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
                   disabled={closingShift}
                   onClick={() => setConfirmOpen(false)}
                   type="button"
@@ -2479,7 +2479,7 @@ export function ShiftPage() {
                   {t("取消")}
                 </button>
                 <button
-                  className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                  className="h-11 rounded-2xl bg-slate-900 px-5 text-sm font-semibold text-white disabled:opacity-60"
                   disabled={closingDiffInvalid}
                   onClick={() => setConfirmStep(2)}
                   type="button"
@@ -2490,7 +2490,7 @@ export function ShiftPage() {
             ) : confirmStep === 2 ? (
               <>
                 <button
-                  className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                  className="h-11 rounded-2xl bg-white px-5 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
                   disabled={closingShift}
                   onClick={() => setConfirmStep(1)}
                   type="button"
@@ -2498,7 +2498,7 @@ export function ShiftPage() {
                   {t("返回修改")}
                 </button>
                 <button
-                  className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                  className="h-11 rounded-2xl bg-slate-900 px-5 text-sm font-semibold text-white disabled:opacity-60"
                   disabled={closingShift}
                   onClick={() => {
                     // 進入 step3 嗰刻固化快照：之後打印/跳過/交班記錄都用同一份。
@@ -2513,7 +2513,7 @@ export function ShiftPage() {
             ) : (
               <>
                 <button
-                  className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                  className="h-11 rounded-2xl bg-white px-5 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
                   disabled={closingShift}
                   onClick={() => setConfirmStep(2)}
                   type="button"
@@ -2521,7 +2521,7 @@ export function ShiftPage() {
                   {t("返回修改")}
                 </button>
                 <button
-                  className="rounded-2xl bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm ring-1 ring-slate-200 disabled:opacity-60"
+                  className="h-11 rounded-2xl bg-white px-5 text-sm font-semibold text-slate-700 shadow-sm ring-1 ring-slate-200 disabled:opacity-60"
                   disabled={closingShift}
                   onClick={() => void closeShift(closingDiff, closingNote, previewData ?? undefined, false)}
                   type="button"
@@ -2530,7 +2530,7 @@ export function ShiftPage() {
                 </button>
                 <button
                   aria-busy={closingShift}
-                  className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                  className="h-11 rounded-2xl bg-slate-900 px-5 text-sm font-semibold text-white disabled:opacity-60"
                   disabled={closingShift || !shiftPrinter}
                   onClick={() => void closeShift(closingDiff, closingNote, previewData ?? undefined, true)}
                   type="button"
@@ -2577,9 +2577,15 @@ export function ShiftPage() {
               <label className="grid gap-1.5">
                 <span className="text-sm font-semibold text-slate-900">{t("現金差額（有落差先填）")}</span>
                 <div className="flex flex-wrap items-center gap-2">
+                  {/*
+                    🔴 2026-10-12 商家實紙（iPad）：**唔可以加 autoFocus**。
+                    開彈窗即自動取焦 ⇒ iPad 軟鍵盤隨即彈起 ⇒ 完全遮蓋底部「取消／下一步」
+                    （橫向鍵盤約 300px 高，action bar 必被蓋住）⇒ 每次交班都要先收鍵盤
+                    先撳到下一步（實片：開彈窗→鍵盤彈→收鍵盤→先撳到，循環三次）。
+                    呢欄係**選填**（「有落差先填」）：要填差額嘅人自己會撳入嚟，唔使代勞。
+                  */}
                   <input
-                    autoFocus
-                    className="w-48 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-right font-mono text-base font-semibold text-slate-900 focus:border-slate-400 focus:outline-none"
+                    className="h-11 w-48 rounded-2xl border border-slate-200 bg-white px-3 text-right font-mono text-base font-semibold text-slate-900 focus:border-slate-400 focus:outline-none"
                     inputMode="decimal"
                     onChange={(event) => setClosingDiff(sanitizeCashInput(event.target.value))}
                     placeholder="0"

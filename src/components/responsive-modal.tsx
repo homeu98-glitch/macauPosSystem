@@ -1,6 +1,6 @@
 "use client";
 
-import { CSSProperties, ReactNode, Ref } from "react";
+import { CSSProperties, ReactNode, Ref, useRef } from "react";
 
 import { useT } from "@/components/lang-provider";
 
@@ -44,10 +44,30 @@ export function ResponsiveModal({
   allowPointerEventsOnOverlay = true,
 }: ResponsiveModalProps) {
   const t = useT();
+  /**
+   * 🔴 2026-10-12 商家實紙（iPad 交班流程）：「撳遮罩關閉」要分辨**真正嘅遮罩撳**
+   * 同「面板內撳落、手指滑到遮罩先鬆手」。
+   *
+   * 瀏覽器規矩：若 pointerdown 同 pointerup 嘅元素唔同，click 會派發去兩者
+   * **最近公共祖先**。action bar 貼面板底緣（屏幕底緣）時，細按鈕＋手指精度有限，
+   * 好易「壓到按鈕底緣、鬆手時跌咗出面板」→ click 落到遮罩 → 彈窗無故關閉，
+   * 成個流程重頭嚟（實片實證：撳按鈕正中＝成功入下一步；壓底緣＝彈窗消失）。
+   *
+   * 對策：pointerdown 記住「壓力起點係咪遮罩本身」；click 只有喺起點同終點都係
+   * 遮罩時先叫 onClose。面板內嘅撳（包括边缘滾動）一律唔會意外關閉彈窗。
+   */
+  const backdropPressStartedOnBackdrop = useRef(false);
   return (
     <div
       className={`fixed inset-0 ${zIndexClassName} ${placement === "bottom" ? "flex items-end justify-center" : "grid place-items-center"} bg-slate-900/45 p-2 sm:p-4 ${allowPointerEventsOnOverlay ? "" : "pointer-events-none"} ${overlayClassName}`}
-      onClick={onClose}
+      onPointerDown={(event) => {
+        backdropPressStartedOnBackdrop.current = event.target === event.currentTarget;
+      }}
+      onClick={(event) => {
+        if (backdropPressStartedOnBackdrop.current && event.target === event.currentTarget) {
+          onClose?.();
+        }
+      }}
     >
       <div
         ref={panelRef}
