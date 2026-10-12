@@ -388,6 +388,44 @@ describe("付款方式：admin 主檔驅動（唔可以再硬編碼）", () => {
       /purchase\.sel\?\.itemsPaidTotal \?\? 0/.test(report),
       "貨品細項彈窗「合計」行要用 itemsPaidTotal",
     );
+    // 2026-10-13 J 拍板：成張卡都係 paid-only ⇒ 連出現條件都要用 paidCount
+    // （期間得未付收據 ⇒ 唔好出一張空白 0 蚊卡）
+    assert.ok(/purchase\.sel\.paidCount > 0/.test(report), "買貨明細卡出現條件要用 paidCount");
+    assert.ok(/n: purchase\.sel\.paidCount/.test(report), "買貨明細卡 tag 張數要用 paidCount");
+  });
+
+  it("🔴 供貨商／付款方式分佈／月度支出全部都係 paid-only（2026-10-13 J：全卡唔計未付）", () => {
+    const stats = read("src/lib/inventory-stats.ts");
+    for (const fn of [
+      "buildSupplierStats",
+      "buildMonthlyExpenses",
+      "buildTrendSummary",
+      "buildPaymentMethodBreakdown",
+      "buildPriceTrendSeries",
+    ]) {
+      assert.ok(
+        new RegExp(`${fn}\\(paidReceipts[,)]`).test(stats),
+        `${fn} 一定要食 paidReceipts，唔可以食全部 receipts`,
+      );
+    }
+    // KPI 三格要繼續用全部收據（unpaid 係刻意顯示嘅欠款）
+    assert.ok(/count: receipts\.length/.test(stats), "KPI count 仍然用全部收據");
+  });
+
+  it("🔴 付款方式／月度支出嘅金額基數要係 Σ品項（同細項逐行同一口徑，合計先会对得上）", () => {
+    const stats = read("src/lib/inventory-stats.ts");
+    assert.ok(/function receiptItemAmount/.test(stats), "要有統一基數 helper");
+    assert.ok(
+      /sum > 0 \? round2\(sum\) : normalizeNumber\(r\.total_amount, 0\)/.test(stats),
+      "冇品項行嘅舊單要 fallback 去 total_amount，唔可以令單據消失",
+    );
+    // 逐個函式取出主體檢查：金額一定要黎自 receiptItemAmount，唔可以再用 r.total_amount
+    for (const fn of ["buildSupplierStats", "buildMonthlyExpenses", "buildPaymentMethodBreakdown"]) {
+      const m = new RegExp(`export function ${fn}\\([\\s\\S]*?\\n}\\n`).exec(stats);
+      assert.ok(m, `搵到 ${fn} 嘅函式主體`);
+      assert.ok(m[0].includes("receiptItemAmount(r)"), `${fn} 要用 receiptItemAmount 做金額基數`);
+      assert.equal(/r\.total_amount/.test(m[0]), false, `${fn} 唔可以再用 r.total_amount 做金額`);
+    }
   });
 
   it("舊單據嘅付款方式唔喺主檔時，要顯示得到而唔係變裸英文／靜靜被改走", () => {

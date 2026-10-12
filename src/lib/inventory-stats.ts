@@ -195,6 +195,8 @@ export type PurchaseSummary = {
   items: ItemStat[];
   /** 未截斷前嘅不同品項總數（畀 UI 講「共 N 款」）。 */
   itemsTotal: number;
+  /** 已付款收據張數（2026-10-13）：買貨明細卡係 paid-only 視圖，張數要用呢個唔係 `count`。 */
+  paidCount: number;
   /**
    * 貨品細項合計（2026-10-13 J）＝ **只計已付款收據**嘅 Σ(單價×數量)，未截斷前全量。
    * ⚠️ 呢個**唔等於** `paid`（嗰個係收據 `total_amount` 加總，同 Σ品項有折扣／雜費差異），
@@ -296,14 +298,19 @@ export function buildPurchaseSummary(receipts: StatReceipt[], fullItems = false)
    * ⚠️ 截斷只影響「明細列表」，**唔影響** `total`/`paid`/`unpaid`（嗰啲由 receipts 直接加）。
    */
   /**
-   * 🔴 2026-10-13（J）：貨品細項只計**已付款**收據。
-   * 未付款（unpaid／月結／稍後付款…）唔係實際支出，唔應該出現喺「貨品細項」排行
-   * （原本連未付收據嘅品項都計晒入去，J 報 bug）。
-   * ⚠️ 口徑唔變嘅部分：`total`/`paid`/`unpaid` KPI、供貨商／付款方式分佈／月度支出
-   *    **照舊計全部收據** —— unpaid 係刻意獨立顯示嘅 KPI，唔係錯數。
-   *    只有細項排行（`items`/`itemsTotal`）同細項合計（`itemsPaidTotal`）改為只計 paid。
-   * ⚠️ `normalizePaymentStatus()` 對空值回 "unpaid" ⇒ 舊收據冇記付款狀態嘅，
-   *    會當 unpaid 而唔入細項 —— 同 KPI 口徑一致（KPI 都係咁計 unpaid）。
+   * 🔴 2026-10-13（J 拍板）：**成張「買貨明細」卡只計已付款收據**。
+   * 未付款（unpaid／月結／稍後付款…）唔係已實現支出。
+   *
+   * ── 受影響（全改 paid-only）────────────────────────────────
+   * · `items`／`itemsTotal`／`itemsPaidTotal`（貨品細項排行 + 合計）
+   * · `paymentMethodBreakdown`（付款方式分佈）
+   * · `monthlyExpenses`（近 6 個月買貨支出柱狀圖）
+   * · `supplierStats`、`trend`、`priceTrendSeries`
+   * ── 唔受影響（KPI 用途，刻意保留全量）───────────────────────
+   * · `total`/`paid`/`unpaid`：KPI 三格要靠 unpaid 獨立顯示欠款，
+   *   同埋毛利計算用嘅 cogs 以 `total` 為準（見 restaurant-daily-report）。
+   * · `count`（全部收據張數）／`byCurrency`。
+   * ⚠️ `normalizePaymentStatus()` 對空值回 "unpaid" ⇒ 舊收據冇記付款狀態嘅一律當 unpaid。
    */
   const paidReceipts = receipts.filter((r) => r.payment_status === "paid");
   const allItems = buildItemStats(paidReceipts);
@@ -313,11 +320,13 @@ export function buildPurchaseSummary(receipts: StatReceipt[], fullItems = false)
     paid: round2(paid),
     unpaid: round2(unpaid),
     count: receipts.length,
-    supplierStats: buildSupplierStats(receipts),
-    monthlyExpenses: buildMonthlyExpenses(receipts, 6),
-    trend: buildTrendSummary(receipts),
-    paymentMethodBreakdown: buildPaymentMethodBreakdown(receipts),
-    priceTrendSeries: buildPriceTrendSeries(receipts, 6),
+    /** 已付款收據張數（2026-10-13）：買貨明細卡係「只計已付款」嘅視圖，張數要同步用呢個。 */
+    paidCount: paidReceipts.length,
+    supplierStats: buildSupplierStats(paidReceipts),
+    monthlyExpenses: buildMonthlyExpenses(paidReceipts, 6),
+    trend: buildTrendSummary(paidReceipts),
+    paymentMethodBreakdown: buildPaymentMethodBreakdown(paidReceipts),
+    priceTrendSeries: buildPriceTrendSeries(paidReceipts, 6),
     items: fullItems ? allItems : allItems.slice(0, PURCHASE_ITEMS_PREVIEW),
     itemsTotal: allItems.length,
     itemsPaidTotal,
@@ -330,12 +339,31 @@ export function buildPurchaseSummary(receipts: StatReceipt[], fullItems = false)
  * 呢度經下方 re-export 轉出，避免兩個檔各有一份定義而靜默走樣。
  */
 
+/**
+ * 「實際買貨金額」統一基數 ＝ 單據內 Σ(單價×數量)（2026-10-13 J 拍板）。
+ *
+ * 點解唔再用 `total_amount`：細項表逐行係 Σ品項，而付款方式分佈／月度支出原本用
+ * `total_amount` ⇒ 同一張卡兩個「合計」會差少少（實測 2026-10-12：438.20 vs 438.21），
+ * 商家望住兩個唔同嘅數會以為系統計錯。全部統一做 Σ品項後，
+ * **每一行加埋必然等於 `itemsPaidTotal`**。
+ *
+ * ⚠️ 防禦：完全冇品項行嘅舊單據（例如淨 OCR 總額）Σ 會係 0 ⇒ 退回 `total_amount`，
+ *    唔可以令單據喺圖表入面「消失」。
+ */
+function receiptItemAmount(r: StatReceipt): number {
+  const sum = (r.items ?? []).reduce(
+    (acc, it) => acc + normalizeNumber(it.unit_price, 0) * normalizeNumber(it.quantity, 0),
+    0,
+  );
+  return sum > 0 ? round2(sum) : normalizeNumber(r.total_amount, 0);
+}
+
 export function buildSupplierStats(receipts: StatReceipt[]): SupplierStat[] {
   const totals = new Map<string, { name: string; count: number; total: number }>();
   for (const r of receipts) {
     const current = totals.get(r.merchant_name) ?? { name: r.merchant_name, count: 0, total: 0 };
     current.count += 1;
-    current.total += normalizeNumber(r.total_amount, 0);
+    current.total += receiptItemAmount(r);
     totals.set(r.merchant_name, current);
   }
   return Array.from(totals.values())
@@ -348,7 +376,7 @@ export function buildPaymentMethodBreakdown(receipts: StatReceipt[]): PaymentMet
   for (const r of receipts) {
     const method = r.payment_method || "unknown";
     const current = totals.get(method) ?? { total: 0, count: 0 };
-    current.total += normalizeNumber(r.total_amount, 0);
+    current.total += receiptItemAmount(r);
     current.count += 1;
     totals.set(method, current);
   }
@@ -378,7 +406,7 @@ export function buildMonthlyExpenses(receipts: StatReceipt[], months = 6): Month
     const d = new Date(r.receipt_date);
     if (Number.isNaN(d.getTime())) continue;
     const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-    if (buckets.has(key)) buckets.set(key, (buckets.get(key) ?? 0) + normalizeNumber(r.total_amount, 0));
+    if (buckets.has(key)) buckets.set(key, (buckets.get(key) ?? 0) + receiptItemAmount(r));
   }
   return keys.map((key) => ({
     key,

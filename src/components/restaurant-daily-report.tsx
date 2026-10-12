@@ -3491,12 +3491,17 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
               ⚠️ 品項細項已喺 API 側截斷（`PURCHASE_ITEMS_PREVIEW`）——
                  呢度唔可以再拉全量（egress）。
             */}
-            {purchaseUnavailable ? null : purchase.sel && purchase.sel.count > 0 ? (
+            {/* 🔴 渲染條件都用 `paidCount`：全張卡係 paid-only 視圖，
+                若期間得未付收據（冇任何已付品項）⇒ 成張卡唔出，避免空白卡 + 0 合計。 */}
+            {purchaseUnavailable ? null : purchase.sel && purchase.sel.paidCount > 0 ? (
               <div className="mb-4">
                 <Card
                   title={t("買貨明細")}
+                  // 🔴 2026-10-13：全卡只計已付款 ⇒ 張數一定要用 `paidCount`，
+                  //    唔可以用 `count`（全部收據，含未付）—— 否則上面寫 11 張、
+                  //    下面逐行淨係 9 張嘅錢，商家會以為計錯數。
                   tag={t("{n} 張收據 · {k} 款品項", {
-                    n: purchase.sel.count,
+                    n: purchase.sel.paidCount,
                     k: purchase.sel.itemsTotal,
                   })}
                 >
@@ -3602,8 +3607,11 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                             ))}
                             <tr className="border-t-2 border-slate-300 font-semibold text-slate-900">
                               <td className="py-1.5 pr-2">{t("合計")}</td>
-                              <td className="py-1.5 text-right">{purchase.sel.count}</td>
-                              <td className="py-1.5 text-right">{formatMoney(purchase.sel.total)}</td>
+                              {/* 🔴 2026-10-13：付款方式分佈已係 paid-only + Σ品項基數，
+                                  逐行加埋 = `itemsPaidTotal` ⇒ 左右兩條「合計」必然同一個數。
+                                  唔可以用 `total`（全部收據，含未付／月結）。 */}
+                              <td className="py-1.5 text-right">{purchase.sel.paidCount}</td>
+                              <td className="py-1.5 text-right">{formatMoney(purchase.sel.itemsPaidTotal)}</td>
                             </tr>
                           </tbody>
                         </table>

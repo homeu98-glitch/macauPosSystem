@@ -1031,6 +1031,7 @@ export const EN_DICT: Record<string, string> = {
   "全額減免 · 應收 {due} → 實收 {paid}": "Full waiver · due {due} → received {paid}",
   "冇單": "no orders",
   "列印失敗 ": "Print failed ",
+  "失敗": "Failed",
   "券已核銷，扣款失敗。請重試扣款（勿重複核銷券）。": "Voucher redeemed but the deduction failed. Retry the deduction (do not redeem the voucher again).",
   "剩餘需收": "Remaining due",
   "加備註": "Add note",

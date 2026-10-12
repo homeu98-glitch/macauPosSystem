@@ -1844,7 +1844,7 @@ export function ShiftPage() {
                         <span className="mt-1 block">
                           {t("＝今日收據入面")}<span className="font-semibold">{t("「已付款」")}</span>{t("嗰批嘅總額， 即今日真正流出嘅貨錢。")}</span>
                         <span className="mt-1 block tabular-nums text-slate-600">
-                          {purchaseToday.summary.count} {t("張收據")}<br />{t("已付 ")}{formatMoney(purchaseToday.summary.paid)}
+                          {purchaseToday.summary.paidCount} {t("張收據")}<br />{t("已付 ")}{formatMoney(purchaseToday.summary.paid)}
                         </span>
                         {/* ⚠️ 未付**唔顯示**（2026-10-05 J 拍板）—— 資料照抓、只係收埋。
                             唔好因為「有資料」就加返，商家會誤以為要即刻俾錢。 */}
@@ -1859,7 +1859,9 @@ export function ShiftPage() {
                       {formatMoney(purchaseToday.summary.paid)}
                     </div>
                     <div className="mt-1 text-xs text-slate-500">
-                      {purchaseToday.summary.count} {t("張收據 · 供貨商 ")}{purchaseToday.summary.supplierStats.length} {t("間")}</div>
+                      {/* 2026-10-13：全購貨統計已改 paid-only（`supplierStats` 亦然），
+                          故張數要用 `paidCount`，唔可以用 `count`（全部收據含未付）。 */}
+                      {purchaseToday.summary.paidCount} {t("張收據 · 供貨商 ")}{purchaseToday.summary.supplierStats.length} {t("間")}</div>
                     {/* 供貨商分拆：預設收起（J 拍板），撳一下先展開 */}
                     {purchaseToday.summary.supplierStats.length > 0 ? (
                       <details className="mt-2 rounded-xl border border-rose-200 bg-white/70 px-3 py-2 text-xs text-slate-600">
