@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 
 import { AppSidebar } from "@/components/app-sidebar";
 import { FixedNumberPad } from "@/components/fixed-number-pad";
+import { ResponsiveModal } from "@/components/responsive-modal";
 import { useT } from "@/components/lang-provider";
 import { MemberTopupPanel } from "@/components/member-topup-panel";
 import { PendingDot } from "@/components/pending-dot";
@@ -20,9 +21,14 @@ import {
   LedgerCustomerSummary,
   LedgerMemberGrantRecord,
   LedgerMemberProfile,
+  LedgerRewardGrant,
 } from "@/lib/ledger/member-types";
 import { applyPosTopup, lookupCustomerWallet } from "@/lib/ledger/members";
-import { listCustomerRewardGrants } from "@/lib/ledger/rewards";
+import {
+  listCustomerRewardGrants,
+  listRedeemableGrantsForCustomer,
+  redeemRewardGrants,
+} from "@/lib/ledger/rewards";
 import { getLedgerMerchantId } from "@/lib/ledger/session";
 import { clearLegacyMembersCache } from "@/lib/storage";
 import { useTopupPendingCount } from "@/lib/topup/use-topup-pending-count";
@@ -76,6 +82,59 @@ function GrantList({
   );
 }
 
+function RedeemableGrantList({
+  emptyLabel,
+  grants,
+  busyId,
+  disabled,
+  onUse,
+}: {
+  emptyLabel: string;
+  grants: LedgerRewardGrant[];
+  busyId: string | null;
+  disabled: boolean;
+  onUse: (grant: LedgerRewardGrant) => void;
+}) {
+  const t = useT();
+  if (grants.length === 0) {
+    return <div className="text-sm text-slate-500">{t(emptyLabel)}</div>;
+  }
+
+  return (
+    <div className="grid gap-2">
+      {grants.map((grant) => {
+        const busy = busyId === grant.grantId;
+        return (
+          <div
+            key={grant.grantId}
+            className="flex items-start justify-between gap-3 rounded-2xl border border-slate-200 bg-white px-3 py-3"
+          >
+            <div className="min-w-0">
+              <div className="truncate text-sm font-semibold text-slate-900">{grant.title}</div>
+              <div className="mt-1 text-xs text-slate-500">
+                {t(grantTypeLabel(grant.prizeType))}
+                {grant.prizeType === "money_voucher"
+                  ? ` · ${formatMoney(avosToMop(grant.rewardAmountAvos))}`
+                  : null}
+                {" · "}
+                {t("到期 {date}", { date: formatGrantExpiry(grant.expiresAt) })}
+              </div>
+            </div>
+            <button
+              type="button"
+              disabled={disabled || busy}
+              onClick={() => onUse(grant)}
+              className="shrink-0 rounded-2xl bg-orange-500 px-4 py-2 text-sm font-semibold text-white hover:bg-orange-600 disabled:opacity-50"
+            >
+              {busy ? t("處理中…") : t("使用")}
+            </button>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function MembersTabButton({
   active,
   label,
@@ -118,6 +177,18 @@ export function MembersPage() {
   const [member, setMember] = useState<LedgerMemberProfile | null>(null);
   const [searchHint, setSearchHint] = useState("");
   const [searching, setSearching] = useState(false);
+  // 可核銷獎賞券（RPC `list_redeemable_grants_for_customer`，只返而家可核銷、高面額優先）。
+  const [redeemableGrants, setRedeemableGrants] = useState<LedgerRewardGrant[]>([]);
+  // 確認核銷彈窗：暫存緊要核銷嘅券。
+  const [confirmGrant, setConfirmGrant] = useState<LedgerRewardGrant | null>(null);
+  // 核銷中嘅券 id（避免重複撳）。
+  const [redeemBusyId, setRedeemBusyId] = useState<string | null>(null);
+  // 自包含 toast（唔經 pos-app，見 POS_COUPON_REDEEM.md：POS 只做畫面）。
+  const [toast, setToast] = useState<{
+    tone: "ok" | "err" | "info";
+    text: string;
+    vars?: Record<string, string | number>;
+  } | null>(null);
   const [topupAmount, setTopupAmount] = useState("");
   // 未註冊建檔用：會員名稱（可選，契約 §5.7.7 displayName ≤ 50 字）。
   // 只在 unregistered 分支（ensure-customer）提交；已註冊會員唔經呢條。
@@ -152,6 +223,13 @@ export function MembersPage() {
     };
   }, []);
 
+  // toast 自動消失（唔攔截切語言，每次新物件都會重設計時）。
+  useEffect(() => {
+    if (!toast) return;
+    const id = window.setTimeout(() => setToast(null), 2800);
+    return () => window.clearTimeout(id);
+  }, [toast]);
+
   useEffect(() => {
     const nextTab: MembersTab = searchParams.get("tab") === "topup" ? "topup" : "manage";
     setTab(nextTab);
@@ -171,6 +249,7 @@ export function MembersPage() {
     if (nextPhone.length !== 8) {
       setSearching(false);
       setMember(null);
+      setRedeemableGrants([]);
       setSearchHint("");
       return;
     }
@@ -179,6 +258,7 @@ export function MembersPage() {
       void (async () => {
         if (offlineMode) {
           setMember(null);
+          setRedeemableGrants([]);
           setSearchHint("會員查詢須連線，請恢復網絡後再試。");
           return;
         }
@@ -186,6 +266,7 @@ export function MembersPage() {
         const merchantId = getLedgerMerchantId();
         if (!merchantId) {
           setMember(null);
+          setRedeemableGrants([]);
           setSearchHint("無法取得商家 ID，請重新登入。");
           return;
         }
@@ -196,20 +277,100 @@ export function MembersPage() {
           const wallet = await lookupCustomerWallet(merchantId, nextPhone);
           if (!wallet.registered || !wallet.customerId) {
             setMember(null);
+            setRedeemableGrants([]);
             setSearchHint("此電話尚未註冊會員通，請顧客先登入會員通或聯絡店主。");
             return;
           }
 
           const allGrants = await listCustomerRewardGrants(merchantId, wallet.customerId);
+          // 可核銷券 RPC 獨立拉取：失敗唔影響會員/歷史券顯示（降級＝可核銷區留空）。
+          let redeemable: LedgerRewardGrant[] = [];
+          try {
+            redeemable = await listRedeemableGrantsForCustomer(merchantId, wallet.customerId);
+          } catch {
+            redeemable = [];
+          }
           setMember({ ...wallet, allGrants });
+          setRedeemableGrants(redeemable);
         } catch (error) {
           setMember(null);
+          setRedeemableGrants([]);
           setSearchHint(friendlyLedgerMemberError(error instanceof Error ? error.message : String(error)));
         } finally {
           setSearching(false);
         }
       })();
     }, 300);
+  }
+
+  /**
+   * 重新拉取錢包＋可核銷券＋歷史券（核銷成功 / 充值後刷新用）。
+   * 可核銷 RPC 失敗不致命：降級為空列表，會員資料照樣更新。
+   */
+  async function reloadMember(targetPhone: string) {
+    const merchantId = getLedgerMerchantId();
+    if (!merchantId) return;
+    const wallet = await lookupCustomerWallet(merchantId, targetPhone);
+    if (!wallet.registered || !wallet.customerId) {
+      setMember(null);
+      setRedeemableGrants([]);
+      return;
+    }
+    const allGrants = await listCustomerRewardGrants(merchantId, wallet.customerId);
+    let redeemable: LedgerRewardGrant[] = [];
+    try {
+      redeemable = await listRedeemableGrantsForCustomer(merchantId, wallet.customerId);
+    } catch {
+      redeemable = [];
+    }
+    setMember({ ...wallet, allGrants });
+    setRedeemableGrants(redeemable);
+  }
+
+  /** 核銷成功後刷新；刷新失敗唔蓋過成功 toast（UI 已樂觀移除該券）。 */
+  async function refreshAfterRedeem() {
+    if (!member?.customerPhone) return;
+    try {
+      await reloadMember(member.customerPhone);
+    } catch {
+      /* 靜默：成功 toast 已彈，下次搜尋會補回 */
+    }
+  }
+
+  /**
+   * 核銷一張券（POS_COUPON_REDEEM.md）：
+   *  - 成功（redeemed === 1）：樂觀移除該券 → 成功 toast → 重拉錢包（贈送餘額）＋列表。
+   *  - 暫時核銷唔到（redeemed === 0）：唔當成功，提示並重拉列表（券可能已過期／剛被核銷）。
+   *  - 例外：錯誤 toast。
+   */
+  async function handleConfirmRedeem() {
+    const grant = confirmGrant;
+    if (!grant || redeemBusyId) return;
+    setRedeemBusyId(grant.grantId);
+    try {
+      const result = await redeemRewardGrants([grant.grantId]);
+      if (result.redeemed === 1) {
+        setRedeemableGrants((prev) => prev.filter((g) => g.grantId !== grant.grantId));
+        setToast({ tone: "ok", text: "已核銷：{title}", vars: { title: grant.title } });
+        setConfirmGrant(null);
+        await refreshAfterRedeem();
+      } else {
+        setToast({
+          tone: "info",
+          text: "呢張券暫時核銷唔到，可能已過期或剛被核銷，已為你重新整理列表。",
+        });
+        setConfirmGrant(null);
+        await refreshAfterRedeem();
+      }
+    } catch (err) {
+      setToast({
+        tone: "err",
+        text: "核銷失敗：{msg}",
+        vars: { msg: friendlyLedgerMemberError(err instanceof Error ? err.message : String(err)) },
+      });
+    } finally {
+      setRedeemBusyId(null);
+    }
   }
 
   function handlePhoneChange(value: string) {
@@ -333,10 +494,15 @@ export function MembersPage() {
       // 刷新錢包餘額與券（建檔後 lookup 應由 registered=false 變 true）
       const wallet = await lookupCustomerWallet(merchantId, targetPhone);
       if (wallet.registered && wallet.customerId) {
-        const allGrants = await listCustomerRewardGrants(merchantId, wallet.customerId);
+        const [allGrants, redeemableGrants] = await Promise.all([
+          listCustomerRewardGrants(merchantId, wallet.customerId),
+          listRedeemableGrantsForCustomer(merchantId, wallet.customerId).catch(() => [] as LedgerRewardGrant[]),
+        ]);
         setMember({ ...wallet, allGrants });
+        setRedeemableGrants(redeemableGrants);
       } else {
         setMember(null);
+        setRedeemableGrants([]);
       }
     } catch (err) {
       setTopupMsg({ tone: "err", text: friendlyLedgerMemberError(err instanceof Error ? err.message : String(err)) });
@@ -560,7 +726,7 @@ export function MembersPage() {
                       </div>
                       <div className="rounded-2xl bg-orange-50 p-3 text-sm text-orange-900">
                         {t("可核銷 {a} 張 · 共 {b} 張獎賞券", {
-                          a: grantGroups.active.length,
+                          a: redeemableGrants.length,
                           b: member.allGrants.length,
                         })}
                       </div>
@@ -571,7 +737,13 @@ export function MembersPage() {
                     <section className="rounded-2xl border border-slate-200 bg-white p-4">
                       <div className="text-sm font-semibold text-slate-900">{t("可核銷獎賞券")}</div>
                       <div className="mt-3">
-                        <GrantList emptyLabel="目前沒有可核銷獎賞券" grants={grantGroups.active} />
+                        <RedeemableGrantList
+                          emptyLabel="目前沒有可核銷獎賞券"
+                          grants={redeemableGrants}
+                          busyId={redeemBusyId}
+                          disabled={offlineMode}
+                          onUse={(grant) => setConfirmGrant(grant)}
+                        />
                       </div>
                     </section>
 
@@ -645,6 +817,66 @@ export function MembersPage() {
           </div>
         ) : null}
       </div>
+
+      {confirmGrant ? (
+        <ResponsiveModal
+          title={t("確定核銷這張券？")}
+          description={t("核銷後不能撤銷，請確認是這張券。")}
+          onClose={() => setConfirmGrant(null)}
+          actions={
+            <>
+              <button
+                type="button"
+                onClick={() => setConfirmGrant(null)}
+                className="rounded-2xl bg-slate-100 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-200"
+              >
+                {t("取消")}
+              </button>
+              <button
+                type="button"
+                disabled={redeemBusyId === confirmGrant.grantId}
+                onClick={() => void handleConfirmRedeem()}
+                className="rounded-2xl bg-orange-500 px-4 py-2 text-sm font-semibold text-white hover:bg-orange-600 disabled:opacity-50"
+              >
+                {redeemBusyId === confirmGrant.grantId ? t("處理中…") : t("確定核銷")}
+              </button>
+            </>
+          }
+        >
+          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+            <div className="text-sm font-semibold text-slate-900">{confirmGrant.title}</div>
+            <div className="mt-1 text-xs text-slate-500">
+              {t(grantTypeLabel(confirmGrant.prizeType))}
+              {confirmGrant.prizeType === "money_voucher"
+                ? ` · ${formatMoney(avosToMop(confirmGrant.rewardAmountAvos))}`
+                : null}
+              {" · "}
+              {t("到期 {date}", { date: formatGrantExpiry(confirmGrant.expiresAt) })}
+            </div>
+          </div>
+          <div className="mt-3 rounded-2xl bg-amber-50 p-3 text-xs leading-relaxed text-amber-800">
+            {confirmGrant.prizeType === "money_voucher"
+              ? t("現金券核銷後會把面額加入本店「贈送餘額」，不會從帳單扣錢、亦非線上付款。")
+              : t("禮品券核銷後只標記已兌換，請現場將礼品交予客人。")}
+          </div>
+        </ResponsiveModal>
+      ) : null}
+
+      {toast ? (
+        <div className="pointer-events-none fixed inset-x-0 top-4 z-[60] flex justify-center px-4">
+          <div
+            className={`pointer-events-auto rounded-2xl px-4 py-2 text-sm font-semibold shadow-lg ${
+              toast.tone === "ok"
+                ? "bg-emerald-600 text-white"
+                : toast.tone === "err"
+                  ? "bg-rose-600 text-white"
+                  : "bg-slate-900 text-white"
+            }`}
+          >
+            {t(toast.text, toast.vars)}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

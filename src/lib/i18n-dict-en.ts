@@ -1787,6 +1787,15 @@ export const EN_DICT: Record<string, string> = {
   "固定格式 · 不可編輯": "Fixed format · not editable",
   "正在載入交班數據…": "Loading shift data…",
   "整合本機訂單與 Ledger 線上數據，完成後一次顯示。": "Consolidating local orders and Ledger online data; shown all at once when ready.",
+  "確定核銷這張券？": "Confirm redeeming this coupon?",
+  "核銷後不能撤銷，請確認是這張券。": "This cannot be undone. Please confirm it's this coupon.",
+  "確定核銷": "Confirm redeem",
+  "使用": "Use",
+  "現金券核銷後會把面額加入本店「贈送餘額」，不會從帳單扣錢、亦非線上付款。": "For cash vouchers, redemption adds the face value to this store's gift balance. It does not deduct from the bill or count as online payment.",
+  "禮品券核銷後只標記已兌換，請現場將礼品交予客人。": "For gift vouchers, redemption only marks it as redeemed. Please hand the gift to the customer on site.",
+  "已核銷：{title}": "Redeemed: {title}",
+  "核銷失敗：{msg}": "Redeem failed: {msg}",
+  "呢張券暫時核銷唔到，可能已過期或剛被核銷，已為你重新整理列表。": "This coupon can't be redeemed right now — it may have expired or was just redeemed. The list has been refreshed.",
 };
 
 /**
