@@ -58,11 +58,22 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       <body className="h-full overflow-hidden flex flex-col">
         <ClientOnly
           fallback={
-            <div className="grid min-h-screen place-items-center bg-slate-100 px-6 text-center">
-              <div>
-                <div className="text-base font-semibold text-slate-900">正在載入頁面…</div>
-                <div className="mt-2 text-sm text-slate-500">請稍候</div>
-              </div>
+            /*
+             * 🔴 2026-10-12：fallback **刻意無可見文字**（淨係 spinner）。
+             *
+             * 之前係「正在載入頁面…／請稍候」——正正係翻譯類瀏覽器擴充嘅靶子：
+             * 擴充喺 React 載入之前改寫 server 出嚟嘅 HTML 文字節點 → hydration
+             * 時 React 19 hard throw（#418「server rendered text didn't match」）
+             * → 全屏白屏（2026-10-12 實機影片診斷，見 memory 同日記錄）。
+             * 移除可見文字節點後翻譯擴充無從下手；`aria-label` 係 attribute、
+             * 擴充改唔到，讀屏軟件依然讀到「正在載入頁面」。
+             */
+            <div className="grid min-h-screen place-items-center bg-slate-100">
+              <div
+                aria-label="正在載入頁面"
+                className="h-10 w-10 animate-spin rounded-full border-4 border-slate-300 border-t-slate-900"
+                role="status"
+              />
             </div>
           }
         >

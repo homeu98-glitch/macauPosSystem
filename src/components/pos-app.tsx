@@ -8437,10 +8437,13 @@ export function PosApp() {
               </div>
             </div>
             <input
+              autoCapitalize="off"
+              autoCorrect="off"
               autoFocus
               className="mt-4 w-full rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm"
               onChange={(event) => setVoidReason(event.target.value)}
               placeholder={t("例如：客人取消 / 廚房售罄")}
+              spellCheck={false}
               value={voidReason}
             />
         </ResponsiveModal>

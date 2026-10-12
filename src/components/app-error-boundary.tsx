@@ -10,7 +10,73 @@ type AppErrorBoundaryState = {
   hasError: boolean;
   message: string;
   detail: string;
+  /** true = 顯示「正在自動恢復」過渡畫面（自癒 reload 進行中） */
+  autoHealing: boolean;
+  /** true = 已複製錯誤詳情（按鈕短暫反饋） */
+  copied: boolean;
+  /** true = 剪貼板不可用，改 render 純文字方塊俾人手複製 */
+  copyFallback: boolean;
 };
+
+/**
+ * 🔴 2026-10-12（實機影片診斷）：「可自癒」錯誤模式。
+ *
+ * 場景：瀏覽器擴充功能（翻譯／比價／拼寫檢查類）喺 React 載入前或 commit
+ * 期間改動 DOM，造成兩類錯——
+ *  · `Failed to execute 'removeChild' on 'Node': The node to be removed is not a child of this node.`
+ *    （React commit 想移除節點，已被擴充搬走／刪走）
+ *  · React #418/#419/#423「Hydration failed ... didn't match」
+ *    （server 出嘅 HTML 文字節點被擴充翻譯／改寫）
+ *
+ * 呢兩類錯**重新載入頁面大概率就好**（重新走一次 hydration／commit，
+ * 擴充唔一定再改）。所以：第一次遇到 → 自動 reload 一次（**唔清任何本機
+ * 資料**）；再崩先至彈完整修復頁。
+ *
+ * ⚠️ 限流：同一個 tab session 只自動 reload 一次（sessionStorage 記 ts，
+ * 60 秒內 reload 過就唔再自動），防止擴充持續作妖造成死循環刷新。
+ */
+const SELF_HEAL_ERROR_PATTERNS = [
+  "removeChild",
+  "insertBefore",
+  "Hydration failed",
+  "didn't match",
+  "Minified React error #418",
+  "Minified React error #419",
+  "Minified React error #423",
+];
+
+const AUTO_RELOAD_KEY = "macau-pos/crash-auto-reload";
+const AUTO_RELOAD_COOLDOWN_MS = 60_000;
+
+/** 純判斷（唔碰 storage）：呢隻錯屬唔屬於「重新載入就好」類。 */
+function isSelfHealableError(input: unknown): boolean {
+  const message =
+    input instanceof Error
+      ? `${input.message}\n${input.stack ?? ""}`
+      : typeof input === "string"
+        ? input
+        : "";
+  if (!message) return false;
+  return SELF_HEAL_ERROR_PATTERNS.some((pattern) => message.includes(pattern));
+}
+
+/**
+ * 消耗一次自動 reload 預算。返回 false = 60 秒內已經自動 reload 過
+ *（或 sessionStorage 唔可用）→ 唔再自動，轉交完整修復頁。
+ */
+function consumeAutoReloadBudget(): boolean {
+  try {
+    const raw = window.sessionStorage.getItem(AUTO_RELOAD_KEY);
+    const last = raw ? Number(raw) : 0;
+    if (Number.isFinite(last) && last > 0 && Date.now() - last < AUTO_RELOAD_COOLDOWN_MS) {
+      return false;
+    }
+    window.sessionStorage.setItem(AUTO_RELOAD_KEY, String(Date.now()));
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 function normalizeError(input: unknown): { message: string; detail: string } {
   if (input instanceof Error) {
@@ -35,6 +101,9 @@ export class AppErrorBoundary extends Component<AppErrorBoundaryProps, AppErrorB
     hasError: false,
     message: "",
     detail: "",
+    autoHealing: false,
+    copied: false,
+    copyFallback: false,
   };
 
   static getDerivedStateFromError(error: unknown): AppErrorBoundaryState {
@@ -43,15 +112,26 @@ export class AppErrorBoundary extends Component<AppErrorBoundaryProps, AppErrorB
       hasError: true,
       message: normalized.message,
       detail: normalized.detail,
+      autoHealing: isSelfHealableError(error),
+      copied: false,
+      copyFallback: false,
     };
   }
 
   componentDidCatch(error: unknown, errorInfo: ErrorInfo) {
+    // 可自癒錯誤（removeChild / hydration 類）：自動 reload 一次，唔清資料。
+    // 預算已用完（60 秒內 reload 過）→ 轉完整修復頁。
+    if (this.state.autoHealing && consumeAutoReloadBudget()) {
+      window.location.reload();
+      return;
+    }
+
     const normalized = normalizeError(error);
     this.setState({
       hasError: true,
       message: normalized.message,
       detail: normalized.detail || errorInfo.componentStack || "",
+      autoHealing: false,
     });
   }
 
@@ -67,6 +147,12 @@ export class AppErrorBoundary extends Component<AppErrorBoundaryProps, AppErrorB
 
   handleWindowError = (event: ErrorEvent) => {
     if (this.state.hasError) return;
+    // removeChild 類運行時錯先試自癒（同 render 期錯同一策略）
+    if (isSelfHealableError(event.error ?? event.message) && consumeAutoReloadBudget()) {
+      this.setState({ autoHealing: true });
+      window.location.reload();
+      return;
+    }
     const normalized = normalizeError(event.error ?? event.message);
     this.setState({
       hasError: true,
@@ -85,14 +171,29 @@ export class AppErrorBoundary extends Component<AppErrorBoundaryProps, AppErrorB
    * 而被踢出收銀畫面 —— 比原本（只 console warn）**更差**，屬回歸。
    *
    * 所以：只 log，唔改 state（＝維持掛載前嘅既有行為）。
-   * 真正需要攔截嘅係 **render 期錯誤**（`getDerivedStateFromError`）
-   * 同 **window error**（`handleWindowError`）—— 嗰兩條路照舊觸發修復畫面。
+   * render 期錯誤（`getDerivedStateFromError`）同 window error
+   *（`handleWindowError`）會觸發畫面——但 2026-10-12 起，屬「可自癒」類
+   *（removeChild / hydration mismatch，多由瀏覽器擴充改 DOM 引起）會先
+   * 自動 reload 一次，只有再崩先至顯示完整修復頁。
    */
   handleUnhandledRejection = (event: PromiseRejectionEvent) => {
     console.error("[app-error-boundary] 未處理嘅 promise rejection（唔會中斷畫面）：", event.reason);
   };
 
   clearLocalDataAndReload = async () => {
+    const confirmed = window.confirm(
+      [
+        "「清除本機快取並重開」會刪除：",
+        "· 所有本機暫存（未落單嘅購物車、離線佇列）",
+        "· service worker 快取",
+        "並且會返回登入頁要重新登入。",
+        "",
+        "一般白屏撳「重新載入頁面」就得（唔會丟資料）。",
+        "確定仍要清除嗎？",
+      ].join("\n")
+    );
+    if (!confirmed) return;
+
     try {
       const keysToDelete: string[] = [];
       for (let index = 0; index < window.localStorage.length; index += 1) {
@@ -135,9 +236,59 @@ export class AppErrorBoundary extends Component<AppErrorBoundaryProps, AppErrorB
     window.location.replace(`/login?from=crash&ts=${Date.now()}`);
   };
 
+  buildErrorReport = () => {
+    return [
+      `[頁面修復模式] ${new Date().toISOString()}`,
+      `URL: ${window.location.href}`,
+      `UA: ${navigator.userAgent}`,
+      "",
+      "── 錯誤摘要 ──",
+      this.state.message || "未知錯誤",
+      "",
+      "── 詳細資訊 ──",
+      this.state.detail || "(空)",
+    ].join("\n");
+  };
+
+  copyErrorDetail = async () => {
+    try {
+      await navigator.clipboard.writeText(this.buildErrorReport());
+      this.setState({ copied: true, copyFallback: false });
+    } catch {
+      // 剪貼板唔可用（非 HTTPS／無權限）→ 顯示純文字方塊俾人手複製
+      this.setState({ copyFallback: true, copied: false });
+    }
+  };
+
   render() {
     if (!this.state.hasError) {
       return this.props.children;
+    }
+
+    // 自癒過渡畫面：自動 reload 已觸發，呢個畫面只會出現極短時間
+    if (this.state.autoHealing) {
+      return (
+        <div className="grid min-h-screen place-items-center bg-slate-100 px-6 text-center">
+          <div>
+            <div
+              aria-label="正在自動恢復"
+              className="mx-auto h-10 w-10 animate-spin rounded-full border-4 border-slate-300 border-t-slate-900"
+              role="status"
+            />
+            <div className="mt-4 text-base font-semibold text-slate-900">正在自動恢復…</div>
+            <div className="mt-2 text-sm text-slate-500">
+              偵測到暫時性畫面錯誤，系統為你自動重新載入（唔會刪除任何資料）。
+            </div>
+            <button
+              className="mt-5 rounded-2xl bg-slate-900 px-5 py-3 text-sm font-semibold text-white"
+              onClick={this.reloadPage}
+              type="button"
+            >
+              立即重新載入
+            </button>
+          </div>
+        </div>
+      );
     }
 
     return (
@@ -146,7 +297,7 @@ export class AppErrorBoundary extends Component<AppErrorBoundaryProps, AppErrorB
           <div className="text-sm font-semibold tracking-widest text-red-600">頁面修復模式</div>
           <div className="mt-2 text-2xl font-semibold text-slate-900">偵測到前端初始化失敗</div>
           <div className="mt-3 text-sm text-slate-600">
-            系統已攔截白屏錯誤。你可以先重新載入，如果仍有問題，再清除本機快取與 service worker 後重開。
+            系統已攔截白屏錯誤。請先撳「重新載入頁面」——呢類錯誤多數重新載入就恢復，而且唔會丟資料。
           </div>
 
           <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
@@ -160,29 +311,46 @@ export class AppErrorBoundary extends Component<AppErrorBoundaryProps, AppErrorB
                 </pre>
               </details>
             ) : null}
+            {this.state.copyFallback ? (
+              <textarea
+                className="mt-3 h-32 w-full rounded-2xl border border-slate-200 bg-white p-2 text-xs"
+                onFocus={(event) => event.currentTarget.select()}
+                readOnly
+                value={this.buildErrorReport()}
+              />
+            ) : null}
           </div>
 
-          <div className="mt-5 grid gap-2 sm:grid-cols-2">
+          <div className="mt-5 grid gap-2">
             <button
-              className="rounded-2xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white"
+              className="rounded-2xl bg-slate-900 px-4 py-3 text-base font-semibold text-white"
               onClick={this.reloadPage}
               type="button"
             >
-              重新載入頁面
+              重新載入頁面（先試呢個）
             </button>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <button
+                className="rounded-2xl bg-white px-4 py-3 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                onClick={() => void this.copyErrorDetail()}
+                type="button"
+              >
+                {this.state.copied ? "已複製" : "複製錯誤詳情"}
+              </button>
+              <button
+                className="rounded-2xl bg-white px-4 py-3 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                onClick={this.goToLogin}
+                type="button"
+              >
+                返回登入頁
+              </button>
+            </div>
             <button
-              className="rounded-2xl bg-white px-4 py-3 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
-              onClick={this.goToLogin}
-              type="button"
-            >
-              返回登入頁
-            </button>
-            <button
-              className="sm:col-span-2 rounded-2xl bg-red-600 px-4 py-3 text-sm font-semibold text-white"
+              className="mt-1 rounded-2xl bg-white px-4 py-3 text-sm font-semibold text-red-600 shadow-sm ring-1 ring-red-200"
               onClick={() => void this.clearLocalDataAndReload()}
               type="button"
             >
-              清除本機快取並重開
+              清除本機快取並重開（會刪除未落單資料，唔好亂撳）
             </button>
           </div>
         </div>
