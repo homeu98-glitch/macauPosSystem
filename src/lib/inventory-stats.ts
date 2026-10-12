@@ -196,6 +196,13 @@ export type PurchaseSummary = {
   /** 未截斷前嘅不同品項總數（畀 UI 講「共 N 款」）。 */
   itemsTotal: number;
   /**
+   * 貨品細項合計（2026-10-13 J）＝ **只計已付款收據**嘅 Σ(單價×數量)，未截斷前全量。
+   * ⚠️ 呢個**唔等於** `paid`（嗰個係收據 `total_amount` 加總，同 Σ品項有折扣／雜費差異），
+   *    亦**唔等於** `total`。UI 嘅細項表「合計」行一定要用呢個欄位，
+   *    唔可以用 `paid`／`total` —— 否則同細項逐行加埋對唔上（原本 2026-10-13 bug）。
+   */
+  itemsPaidTotal: number;
+  /**
    * 各幣值分開統計（2026-10-11 多幣值）。
    * 用家決策：各幣值**分開**計總數，唔可以匯總做一個數（唔同幣值加埋會錯）。
    * key = 幣值（MOP／HKD／RMB…），value 含 total／paid／unpaid／count。
@@ -288,7 +295,19 @@ export function buildPurchaseSummary(receipts: StatReceipt[], fullItems = false)
    * 故此喺**呢度**截斷（`PURCHASE_ITEMS_PREVIEW`），並回 `itemsTotal` 講「共 N 款」。
    * ⚠️ 截斷只影響「明細列表」，**唔影響** `total`/`paid`/`unpaid`（嗰啲由 receipts 直接加）。
    */
-  const allItems = buildItemStats(receipts);
+  /**
+   * 🔴 2026-10-13（J）：貨品細項只計**已付款**收據。
+   * 未付款（unpaid／月結／稍後付款…）唔係實際支出，唔應該出現喺「貨品細項」排行
+   * （原本連未付收據嘅品項都計晒入去，J 報 bug）。
+   * ⚠️ 口徑唔變嘅部分：`total`/`paid`/`unpaid` KPI、供貨商／付款方式分佈／月度支出
+   *    **照舊計全部收據** —— unpaid 係刻意獨立顯示嘅 KPI，唔係錯數。
+   *    只有細項排行（`items`/`itemsTotal`）同細項合計（`itemsPaidTotal`）改為只計 paid。
+   * ⚠️ `normalizePaymentStatus()` 對空值回 "unpaid" ⇒ 舊收據冇記付款狀態嘅，
+   *    會當 unpaid 而唔入細項 —— 同 KPI 口徑一致（KPI 都係咁計 unpaid）。
+   */
+  const paidReceipts = receipts.filter((r) => r.payment_status === "paid");
+  const allItems = buildItemStats(paidReceipts);
+  const itemsPaidTotal = round2(allItems.reduce((sum, it) => sum + it.amount, 0));
   return {
     total: round2(total),
     paid: round2(paid),
@@ -301,6 +320,7 @@ export function buildPurchaseSummary(receipts: StatReceipt[], fullItems = false)
     priceTrendSeries: buildPriceTrendSeries(receipts, 6),
     items: fullItems ? allItems : allItems.slice(0, PURCHASE_ITEMS_PREVIEW),
     itemsTotal: allItems.length,
+    itemsPaidTotal,
     byCurrency,
   };
 }

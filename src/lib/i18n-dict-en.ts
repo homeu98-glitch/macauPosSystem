@@ -637,6 +637,7 @@ export const EN_DICT: Record<string, string> = {
   "負債口徑，唔可以當營業額": "Liability basis — must not be counted as revenue",
   "買貨明細": "Purchase details",
   "貨品細項（按金額）": "Item breakdown (by amount)",
+  "只計已付款收據": "Paid receipts only",
   "查看全部（共 {n} 款）": "View all ({n} items)",
   "共 {n} 款品項": "Total {n} items",
   "貨品細項載入失敗，請稍後再試。": "Failed to load item details. Please try again.",

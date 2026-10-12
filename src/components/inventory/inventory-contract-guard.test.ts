@@ -370,6 +370,26 @@ describe("付款方式：admin 主檔驅動（唔可以再硬編碼）", () => {
     assert.ok(/buildPurchaseSummary\(visibleReceipts\)/.test(src));
   });
 
+  it("🔴 貨品細項只計已付款收據（2026-10-13 J：未付款唔係實際支出，唔准入細項排行）", () => {
+    const stats = read("src/lib/inventory-stats.ts");
+    // 聚合入口要過濾 paid，唔可以將全部 receipts 餵入 buildItemStats
+    assert.ok(/buildItemStats\(paidReceipts\)/.test(stats), "buildItemStats 一定要食 paidReceipts");
+    assert.ok(
+      /paidReceipts = receipts\.filter\(\(r\) => r\.payment_status === "paid"\)/.test(stats),
+      "過濾條件 = payment_status === \"paid\"",
+    );
+    // UI 兩個「合計」行要用 itemsPaidTotal（只計已付款嘅 Σ品項金額），唔可以用 total
+    const report = read("src/components/restaurant-daily-report.tsx");
+    assert.ok(
+      /purchase\.sel\.itemsPaidTotal/.test(report),
+      "買貨明細卡細項表「合計」行要用 itemsPaidTotal",
+    );
+    assert.ok(
+      /purchase\.sel\?\.itemsPaidTotal \?\? 0/.test(report),
+      "貨品細項彈窗「合計」行要用 itemsPaidTotal",
+    );
+  });
+
   it("舊單據嘅付款方式唔喺主檔時，要顯示得到而唔係變裸英文／靜靜被改走", () => {
     const view = read(VIEW);
     assert.ok(/!paymentMethods\.some\(\(m\) => m\.code === form\.payment_method\)/.test(view));

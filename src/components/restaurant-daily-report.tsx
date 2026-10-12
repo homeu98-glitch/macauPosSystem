@@ -3554,7 +3554,10 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                                 <td className="py-1.5 text-right text-slate-400">—</td>
                                 <td className="py-1.5 text-right text-slate-400">—</td>
                                 <td className="py-1.5 text-right">
-                                  {formatMoney(purchase.sel.total)}
+                                  {/* 🔴 2026-10-13：要用 `itemsPaidTotal`（只計已付款嘅 Σ品項金額），
+                                      唔可以用 `total`（全部收據 total_amount，含未付）——
+                                      否則同上面逐行加埋對唔上，仲會將未付計咗入「已花錢」。 */}
+                                  {formatMoney(purchase.sel.itemsPaidTotal)}
                                 </td>
                               </tr>
                             </tbody>
@@ -3566,6 +3569,8 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                             {purchase.sel.itemsTotal > 5
                               ? t("（共 {n} 款）", { n: purchase.sel.itemsTotal })
                               : ""}
+                            {" · "}
+                            {t("只計已付款收據")}
                           </div>
                         </>
                       )}
@@ -3847,7 +3852,7 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                       <div>
                         <div className="text-base font-semibold text-slate-900">{t("貨品細項（按金額）")}</div>
                         <div className="text-xs text-slate-500">
-                          {t("共 {n} 款品項", { n: purchaseAllItems.length })}
+                          {t("共 {n} 款品項", { n: purchaseAllItems.length })} · {t("只計已付款收據")}
                         </div>
                       </div>
                       <button
@@ -3893,8 +3898,10 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                         </div>
                         <div className="mt-3 flex items-center justify-between border-t-2 border-slate-300 pt-2">
                           <span className="text-sm font-semibold text-slate-900">{t("合計")}</span>
+                          {/* 🔴 2026-10-13：細項合計 = 只計已付款（見 `itemsPaidTotal` 定義），
+                              唔可以用 `total`（含未付收據）。 */}
                           <span className="text-sm font-semibold text-slate-900">
-                            {formatMoney(purchase.sel?.total ?? 0)}
+                            {formatMoney(purchase.sel?.itemsPaidTotal ?? 0)}
                           </span>
                         </div>
                       </>
