@@ -14,7 +14,7 @@ v1 定稿嗰陣**完全冇替 Supabase 做節流保護，全部靠 Ledger 自律
 
 | # | 保護 | v1 | v2 |
 | --- | --- | --- | --- |
-| ① | 服務端快取 | 無（`no-store`） | `Cache-Control: private, max-age=60`（按 shopId＋from＋to） |
+| ① | 服務端快取 | 無（`no-store`） | `Cache-Control: private, max-age=60`（提示 Ledger）＋ **真．服務端快取：Redis 60s**，key=(shopId,from,to,dataVersion)，版本一變即刻 miss |
 | ② | 版本號 / 304 | 無 | 每店 `dataVersion`＋`ETag`；`If-None-Match` 吻合回 304 唔重查 |
 | ③ | 預先聚合 | 每次全区间重算 | `purchase_report_daily` 每日匯總表；KPI／趨勢直接讀 |
 | ④ | 限流 | 600/min per shop，無上限 | **30/min per shop ＋ 全域 300/min ＋ 並發 10** |
@@ -62,6 +62,8 @@ GET https://<expense-recorder 域名>/api/integration/ledger/purchase-report/rec
 | 參數 | 必填 | 說明 |
 | --- | --- | --- |
 | `shopId` | ✅ | **你哋 `merchants.id`**（雙方已確認統一用呢個值） |
+
+⚠️ **`shopId` 格式（待雙方確認）**：本契約 §2.3 嘅 curl／Node 例子用 `SHOP_000123`，但原先參考實作嘅驗證 regex 只收 UUID，兩邊矛盾。真實格式（UUID 定 `SHOP_` 前綴）雙方尚未夾，上線前必須確認，並且**只改參考實作入面 `MERCHANT_ID_RE` 呢個常數**（一處改晒）。過渡期參考實作暫時兩者都收，唔會 400 錯殺。Ledger 端請用雙方確認後嘅格式傳。 |
 | `from` | ✅ | 開始日期 `YYYY-MM-DD`（含當日） |
 | `to` | ✅ | 結束日期 `YYYY-MM-DD`（含當日） |
 | `cursor` | receipts 用 | 上一次回應嘅 `nextCursor`（opaque）；首頁唔帶 |
@@ -149,8 +151,8 @@ curl -i "https://<expense-recorder 域名>${PATH_Q}" \
 
 | 維度 | 上限 | 超額回應 |
 | --- | --- | --- |
-| **每店** | **30 次／分** | `429 too_many_requests` |
-| **全域**（所有店合計） | **300 次／分** | `429 too_many_requests` |
+| **每店** | **30 次／分** | `429 too_many_requests`（帶 `Retry-After`） |
+| **全域**（所有店合計） | **300 次／分** | `429 too_many_requests`（帶 `Retry-After`） |
 | **並發**（同時進行嘅 DB 查詢） | **10** | `429 too_many_requests`（帶 `Retry-After`） |
 
 🔴 **30 次／分 per shop 係防撞牆嘅硬上限，唔係建議你用幾多次。**
@@ -159,7 +161,13 @@ curl -i "https://<expense-recorder 域名>${PATH_Q}" \
 
 🔴 **全域 300／並發 10** 係為咗「門店一多 DB 撐唔住」嘅保護：即使每間店都守 30/min，
 100 間店同時撳都會有 3000 次／分湧入 ⇒ 全域＋並發上限確保 DB 唔會被集體打爆。
-呢兩個係**服務端強制**（in-memory best-effort；多實例環境要用共享儲存／distributed lock 先真正收口）。
+呢三個維度都係**服務端強制（Redis，多實例真正收口）**：per-shop／全域計數同並發信號量全部放 Redis，
+用一段 Lua **原子判定三維、只在放行嗰刻先加數**，所以唔會出現「被擋先加 1 冇退」嘅 bug。
+超額一律回 `429 too_many_requests` 同埋 `Retry-After` 標頭（秒，建議退避後重試）。
+
+🟡 **吵鬧鄰居**：全域 300/min 會令單一高用量店擠到其他店。兩個緩解方向（tuning，唔影響正確性）：
+(i) 全域上限調高（例如 1000~2000），主要靠 **per-shop 30 ＋ 並發 10** 做保護；
+(ii) 按店公平分配全域額度。上線前由雙方按預計門店數夾。
 
 ---
 
@@ -268,7 +276,8 @@ curl -i "https://<expense-recorder 域名>${PATH_Q}" \
 | `byCurrency` | **逐幣別**嘅單據數、總額、單均（改由 `purchase_report_daily` 讀出，O(日數)） |
 | `receiptCount` | 單據總張數（跨幣，可以直接加） |
 | `totalAmount` | ⚠️ **恆為 `null`** —— 見 §5.1 |
-| `itemLineCount` | 品項行數（≠ 件數） |
+| `supplierCount` | 🔴 **區間-level `count(distinct supplier_id)`**（RPC 直接計，唔可以由每日匯總加總 —— 同一供應商跨日會重複計）。**唔可以係 0 假零** |
+| `itemLineCount` | 品項行數（≠ 件數）；🔴 **區間-level**（RPC 直接 `count(receipt_items)` 計，唔可以由 `byCurrency` 加總） |
 | `avgPerReceiptDay` | ⚠️ **恆為 `null`** —— 跨幣無意義 |
 
 **`daily[]`**（趨勢）：改由每日匯總表讀出，查一年都係 O(日數)。一個 `(日期, 幣別)` 一條。
@@ -349,9 +358,9 @@ curl -i "https://<expense-recorder 域名>${PATH_Q}" \
 
 summary endpoint 支援 `If-None-Match: "<dataVersion>"`：
 
-- 若 `dataVersion` 同你上次攞到嘅一樣 ⇒ 回 **`304 Not Modified`**（無 body，只帶 `ETag`＋`Cache-Control`），**唔重查 DB**。
-- `dataVersion` 係**每店**一個整數，任何 `stock_in` 單有寫入就 +1（trigger 維護）。
-  ⚠️ 佢係**商戶級**而唔係**區間級** ⇒ 保守（該店任何單據變動都會令所有 range 嘅 304 失效），但保證唔會畀到舊數。
+- 服務端**先以一條極輕嘅 `select version from purchase_data_version where merchant_id=?`（PK lookup，唔掃單據）**比對：若 `dataVersion` 同你上次攞到嘅一樣 ⇒ 回 **`304 Not Modified`**（無 body，只帶 `ETag`＋`Cache-Control`），**完全唔跑 summary RPC**。咁做先真正慳到 DB（否則 304 只係慳咗 body，DB 照查）。
+- `dataVersion` 係**每店**一個整數，任何 `stock_in` 單**或佢嘅品項**有寫入就 +1（兩個 trigger 維護：`receipts` 單頭變動 ＋ `receipt_items` 品項變動）。
+  ⚠️ 佢係**商戶級**而唔係**區間級** ⇒ 保守（該店任何單據／品項變動都會令所有 range 嘅 304 失效），但保證唔會畀到舊數。
 
 ---
 
@@ -360,7 +369,11 @@ summary endpoint 支援 `If-None-Match: "<dataVersion>"`：
 | 情況 | HTTP | 回應 | 你哋應該顯示 |
 | --- | --- | --- | --- |
 | 查得到，區間內**真係冇單** | **200** | `receipts: []`、零值 KPI、`total: 0` | 「該期間沒有買貨紀錄」—— **正常狀態** |
-| 店舖從未用 Ledger 登入過 | 404 | `shop_not_found` | 「店舖未連接」 |
+| 店舖未綁定（expenseRecorder `merchants` 表冇呢個 id） | 404 | `shop_not_found` | 「店舖未連接」 |
+
+> 🔴 **`found` 嘅判斷依據 = 店舖有冇綁定（merchants 表），唔係「有冇 stock_in 單」**（修 v2 審閱 point 6）。
+> ⇒ 有綁定但區間內**一張單都冇**嘅新店，回 **200 ＋ 空結果**（上面第一行），而**唔係** 404。
+> 只有「完全未綁定」先回 404。兩者語意唔可以搞反。
 | 服務未部署／資料庫故障 | 503 | `rpc_not_deployed` / `upstream_unavailable` | 「暫時無法取得」 |
 | 簽名錯／過期 | 401 | `unauthorized` | 「暫時無法取得」 |
 
@@ -378,8 +391,9 @@ summary endpoint 支援 `If-None-Match: "<dataVersion>"`：
 | `x-purchase-report-path` | `/api/integration/ledger/purchase-report`（summary）或 `…/receipts` |
 | `x-purchase-report-caps` | 能力清單（見 §10） |
 
-> ① `max-age=60` 係服務端快取：60 秒內同一 `(shopId, from, to)` 嘅重複請求唔使重查。
-> 配合 ② `ETag`，Ledger 帶 `If-None-Match` 就連呢 60 秒內都慳到 DB 查詢（直接 304）。
+> ① `max-age=60` 係服務端快取提示（畀 Ledger 伺服器）；**同時服務端真．用 Redis 存咗結果 60 秒**，
+> key = `(shopId, from, to, dataVersion)`，版本一 bump 即刻 miss，唔會畀舊數。
+> 配合 ② `ETag` 輕量版本查詢，Ledger 帶 `If-None-Match` 就連呢 60 秒內都慳到 DB 查詢（直接 304）。
 
 ---
 
@@ -438,9 +452,12 @@ x-purchase-report-caps: kpi,daily,suppliers,paymentBreakdown,items,receiptsCurso
 | 5 | 交換正式 secret | 雙方 | — |
 | 6 | Ledger 開通入口（summary ＋ receipts 兩條路徑都要簽到） | Ledger | — |
 
-🔴 **上線前提（首 4 點，缺一不可）**：① 服務端快取 `private, max-age=60`；② `dataVersion`＋`ETag`/304；
-③ 每日匯總表 `purchase_report_daily` + backfill；④ 限流 30/店＋全域 300＋並發 10。
+🔴 **上線前提（首 4 點，缺一不可）**：① 服務端快取（**Redis** 60s，key 含 dataVersion）＋ `Cache-Control: private, max-age=60`；② `dataVersion`＋`ETag`/304（輕量版本查詢先行）；
+③ 每日匯總表 `purchase_report_daily` + backfill；④ 限流（**Redis** 30/店＋全域 300＋並發 10，Lua 原子）。
 冇呢 4 樣，全歷史查詢會隨門店數線性打爆 DB，唔可以上線。
+
+> ⚠️ ① ④ 依賴 Redis（Upstash）：上線前 expenseRecorder 要配置 `UPSTASH_REDIS_REST_URL` ＋ `UPSTASH_REDIS_REST_TOKEN`，
+> 否則快取／限流都冇得跑（參考實作 §3.1）。呢兩項係「服務端真．保護」，唔係只寫喺 header 嘅提示。
 
 **降級行為**：secret 未配置 ⇒ 500（fail-closed）；SQL 未跑 ⇒ 503（`rpc_not_deployed`）；DB 故障 ⇒ 503。
 兩種情況都應該顯示「暫時無法取得」，**唔好顯示空白卡或 0**。
@@ -450,7 +467,7 @@ x-purchase-report-caps: kpi,daily,suppliers,paymentBreakdown,items,receiptsCurso
 ## 14. 常見問題
 
 **Q：查全歷史會唔會爆？**
-唔會。v2 有每日匯總表（KPI／趨勢讀佢，O(日數)）＋限流（30/店＋全域 300＋並發 10）。
+唔會。v2 有每日匯總表（KPI／趨勢讀佢，O(日數)）＋**服務端真．Redis 快取 60s**＋**Redis 限流**（30/店＋全域 300＋並發 10）。
 全歷史都受保護，最重嘅查詢反而有保護（呢點同 v1 相反，v1 係「無上限又無保護」）。
 
 **Q：點解 summary 同 receipts 分兩條？**
@@ -461,8 +478,8 @@ v1 一次過包晒（KPI＋500 單＋1000 品項），「睇一張卡」都要�
 因為同一區間可能有 HKD 同 MOP，加埋個數字冇意義。用 `kpi.byCurrency` 分幣別睇。
 
 **Q：ETag 係咪區間級？**
-唔係，係**商戶級** `dataVersion`。該店任何 `stock_in` 單有變就 +1，所有 range 嘅 304 都失效 →
-保證唔會畀舊數（代價係偶爾多查一次 DB，但配合 60s 快取影響極微）。
+唔係，係**商戶級** `dataVersion`。該店任何 `stock_in` 單**或品項**有變就 +1（`receipts` ＋ `receipt_items` 兩個 trigger），所有 range 嘅 304 都失效 →
+保證唔會畀舊數。服務端回應前會先以一條極輕嘅 `select version` 比對，吻合就直接 304，**完全唔跑 summary RPC**（代價極微）。
 
 **Q：點解唔可以喺 client 加總？**
 supabase-js 預設靜默截斷喺 1000 行，拉唔晒就假零；而且反覆拉踩 egress 紀律。所有聚合行 SQL RPC。
