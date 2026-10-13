@@ -37,6 +37,7 @@ export const EN_DICT: Record<string, string> = {
   備註: "Notes",
   折扣: "Discounts",
   掃碼點餐: "QR self-order",
+  語言設置: "Language",
 
   // ─── 設置頁 · 語言切換 ───
   介面語言: "Interface language",

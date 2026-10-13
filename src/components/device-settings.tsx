@@ -80,7 +80,7 @@ export function DeviceSettings() {
   const [status, setStatus] = useState(cachedConfig ? "已載入本機設定。" : "尚未同步設定。");
 
   const [activeTab, setActiveTab] = useState<
-    "device" | "menu-print" | "menu" | "tables" | "payments" | "online-orders" | "notes" | "discounts" | "kiosk"
+    "device" | "menu-print" | "menu" | "tables" | "payments" | "online-orders" | "notes" | "discounts" | "kiosk" | "language"
   >("device");
   const [menuDraft, setMenuDraft] = useState(() => normalizeBootstrapPayload(cachedBootstrap));
   const [menuSaving, setMenuSaving] = useState(false);
@@ -1192,6 +1192,7 @@ export function DeviceSettings() {
             ["notes", "備註"],
             ["discounts", "折扣"],
             ["kiosk", "掃碼點餐"],
+            ["language", "語言設置"],
           ].map(([key, label]) => (
             <button
               key={key}
@@ -1221,6 +1222,10 @@ export function DeviceSettings() {
       <ScanModePanel />
     </div>
   ) : null}
+
+  {/* 語言設置：獨立 tab（2026-10-13）—— 原先 LanguageSection 係「打印機」tab 底部一節，
+      太難搵；依家升做頂層 tab，入設置頁一眼見到。 */}
+  {activeTab === "language" ? <LanguageSection /> : null}
 
         {activeTab === "device" ? (
           <>
@@ -1476,8 +1481,6 @@ export function DeviceSettings() {
 
               </div>
             </section>
-
-          <LanguageSection />
 
           <PrintContentTogglesSection
             toggles={localSettings.printContentToggles}
