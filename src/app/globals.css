@@ -90,6 +90,90 @@ label.grid > textarea {
   }
 }
 
+/*
+ * 🔴🔴 2026-10-14「小平板級」專用 Tailwind variant
+ *
+ * ── 點解唔可以直接用 `min-[900px]:` ─────────────────────────────────
+ * Tailwind 嘅 `min-[900px]:` **只有下限冇上限** ⇒ iPad（1080px）、桌面（1440px）
+ * 全部都會觸發。實測（2026-10-14）：菜品卡 `min-[900px]:min-h-24` 令 iPad
+ * 由 144px 縮到 **96px**、底部 bar 由 223 縮到 211 —— 即係**改壞咗 iPad**。
+ *
+ * ⇒ 定義 `compact:` 呢個 variant，**同時**帶下限同上限：
+ *     900px ≤ viewport ≤ 1023px
+ *   即係「窄橫屏平板」專用級：HUAWEI MatePad SE 10.4"（實測 1000×600）喺入面，
+ *   iPad 1080／桌面 1440 喺外面 ⇒ 完全唔受影響。
+ *
+ * ⚠️ 用 `compact:` 唔好再寫返 `min-[900px]:`（冇上限）。同一個檔案嘅 @source 註釋
+ *    亦已提過：唔好喺 CSS 註釋裏面寫出「min-［佔位］」呢類 token（會被掃描器提取）。
+ */
+@custom-variant compact (@media (min-width: 900px) and (max-width: 1023px));
+
+/*
+ * 🔴🔴 2026-10-14 小平板（窄橫屏 900–1023px CSS）**整體縮放 80%** ——
+ * HUAWEI MatePad SE 10.4"（2000×1200 ÷ DPR2 = 1000×600 實測）落地。
+ *
+ * ── 點解要縮 ──────────────────────────────────────────────────────
+ * 呢類機 CSS viewport ≈ 1000×600：闊度啱啱踩入我哋「小平板級」（min-900px 三欄），
+ * 但每個 CSS px **物理上比 iPad 闊 24%**（0.226mm vs 0.183mm）——同樣 14px 字
+ * 喺上面睇落大 24%，40px 控制項變成 9mm。結果：三欄出齊但每欄只得 377px 高，
+ * 內容「大隻而放唔落」，J 實機評語「根本操作唔到」。
+ *
+ * ── 做法：rem 級縮放，唔係 zoom ───────────────────────────────────
+ * 實測（2026-10-14）`body { zoom: .8 }` 喺 flex-1 + grid fr 結構會爆闊：
+ * grid track computed 由 498 → 748px、body scrollWidth 1250 > viewport ⇒ 橫向溢出。
+ * ⇒ 改用正統做法：呢段 viewport 內 `html { font-size: 80% }`（16 → 12.8px）。
+ *    Tailwind 嘅 spacing／font-size／控件高／欄寬（rem 單位）會**一齊縮 80%**，
+ *    而 viewport 單位（dvh）與斷點（px）完全不動 —— 無 dvh 補償、無 fixed 錯位。
+ *
+ * ── 縮放後手感（實測數字）────────────────────────────────────────
+ * · 40px 控制項 → 32px CSS，物理 32×0.226 = 7.2mm ≈ iPad 40px 嘅 7.3mm ✅ 達標
+ * · 字級：text-sm 14 → 11.2px，text-xs 12 → 9.6px
+ * · 欄寬（pos-app 用 rem 寫法）：200 → 160px、230 → 184px、中間 1fr 保持吸住剩餘
+ * · 卡片：min-h-36 144 → 115px，3 欄一屏放得落多 56% 內容
+ * · 點餐區有效高度 ≈ (600−bar) × 1/0.8 ≈ 470px 等效
+ *
+ * ⚠️ px 寫死嘅 utility 唔縮（border-2、text-[11px]、側欄 72px）—— 側欄**刻意**
+ *    唔縮（實體 16mm，啱撳）；細字級 px 類同縮後嘅 text-sm 視覺上差唔多。
+ * ⚠️ `pointer: coarse` 段嘅 input 16px **保持 px**：縮放模式下 <16px 會觸發
+ *    iOS／Android 自動放大視口（會毀咗成個縮放效果），寧願 input 字大 25%。
+ * ⚠️ 呢個媒體查詢判斷 viewport 闊度（px），喺 1024px 以上（iPad／桌面）**完全不生效**，
+ *    所以 iPad 橫向 1080px 嘅佈局同數值零影響（已實測核對）。
+ */
+@media (min-width: 900px) and (max-width: 1023px) {
+  html {
+    font-size: 80%; /* 12.8px */
+  }
+
+  /*
+   * 快餐 bar 兩粒接單掣（`.qp` 錨點喺 `quick-mode-orders-bar.tsx`）——
+   * J 2026-10-14 拍板：**文字要保留**（淨 icon 會令人唔知係咩），
+   * 只係縮細同將「label + 開/關」由上下兩行改成同一行。
+   *
+   * ⚠️ 點解用 descendant selector 而唔改 pill 元件？
+   *    `AutoAcceptPill` / `OnlineOpenPill` / `StoreOpenPill` 有 6 個 call site
+   *    （訂單頁 md、設置頁 sm…），改佢哋嘅 `size` 會連帶影響 iPad。
+   *    而家只有「900–1023px」呢段收窄 ⇒ 其他闊度零影響。
+   */
+  .qp > div {
+    gap: 3px;
+    padding: 2px;
+  }
+  .qp > div > span {
+    font-size: 10.5px;
+    line-height: 1.25;
+  }
+  .qp > div > button {
+    padding: 2px 6px;
+    font-size: 10.5px;
+    line-height: 1.25;
+  }
+  .qp > div > button > span {
+    display: inline;
+    font-size: 10.5px;
+    line-height: 1.25;
+  }
+}
+
 button {
   transition:
     transform 120ms ease,

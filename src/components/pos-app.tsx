@@ -1,5 +1,6 @@
 "use client";
 
+import { CompactOrderTypeTabs } from "@/components/compact-order-type-tabs";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 
@@ -2810,6 +2811,19 @@ export function PosApp() {
   })();
 
   /**
+   * 購物車內每個菜品嘅總件數（**唔理規格**）—— 小平板菜品卡右上角 badge 用。
+   * 2026-10-14：卡片去掉獨立「加入」鈕後，需要一個「已加幾多」嘅視覺回饋。
+   */
+  const cartQtyByMenuItemId = (() => {
+    const map = new Map<string, number>();
+    for (const row of cartItems) {
+      if (row.voided) continue;
+      map.set(row.menuItemId, (map.get(row.menuItemId) ?? 0) + row.quantity);
+    }
+    return map;
+  })();
+
+  /**
    * 結帳目標解析 —— 🔴 2026-09-14 修：**唔可以再「全店掃第一張可結帳單」**。
    *
    * 【實案】A03 嘅掃碼堂食單係 `paid` ＋ 真枱 ＋ `prepaidAmount`，但舊
@@ -5464,7 +5478,15 @@ export function PosApp() {
           settlementOpen={Boolean(payingOrderId)}
         />
         {posMode === "tables" ? (
-          <div className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden lg:grid-cols-[minmax(0,1fr)_280px] xl:grid-cols-[minmax(0,1fr)_330px]">
+          /*
+           * 🔴 2026-10-14 小平板適配（HUAWEI MatePad SE 10.4" 實機）：
+           * 呢類機 CSS viewport ≈ 1000×600（2000×1200 物理 ÷ DPR 2），橫屏寬度
+           * **差 24px 唔夠 lg(1024)** ⇒ 永遠跌入「手機單欄堆疊」版——右欄（結帳）
+           * 同菜單全部叠成一條直行，600px 高嘅屏根本睇唔到幾多嘢。
+           * ⇒ 加 `min-[900px]` 一級：900–1023px 已經夠位出兩欄（右欄收窄 230px），
+           *    ≥1024 維持原有 lg/xl 數值完全不變（iPad / 桌面零影響）。
+           */
+          <div className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden compact:grid-cols-[minmax(0,1fr)_15rem] lg:grid-cols-[minmax(0,1fr)_280px] xl:grid-cols-[minmax(0,1fr)_330px]">
             <main className="flex h-full flex-col overflow-hidden bg-slate-100">
               {/* 桌台總覽標題列 —— 2026-09-15 J 拍板：**全部按鈕同一行，唔准掉第二行**。
                   ── 為何要改 ─────────────────────────────────────────────────────
@@ -6093,7 +6115,15 @@ export function PosApp() {
           </div>
         ) : (
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        <div className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden lg:grid-cols-[260px_minmax(0,1fr)_280px] xl:grid-cols-[300px_minmax(0,1fr)_330px]">
+        {/*
+          * 🔴 2026-10-14 小平板適配（HUAWEI MatePad SE 10.4" 實機，CSS viewport ≈ 1000×600）：
+          * 舊版三欄由 `lg`(1024) 先觸發 —— 呢類機橫屏 1000px **差 24px**，
+          * 永遠跌入單欄堆疊（購物車／菜單／結帳直叠，600px 高得 200px 唔到畀點餐區）。
+          * ⇒ 加 `min-[900px]` 緊湊三欄（13rem / 1fr / 15rem）。欄寬刻意用 **rem** 寫：
+          *    globals.css 嘅「900–1023px → html 80%」會將佢哋一齊縮（13rem→166px 等），
+ *    配合同版 viewport 內所有 rem 單位做 80% 整體縮放；≥1024 由 lg/xl（px）接手，完全不變。
+          */}
+        <div className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden compact:grid-cols-[13rem_minmax(0,1fr)_15rem] lg:grid-cols-[260px_minmax(0,1fr)_280px] xl:grid-cols-[300px_minmax(0,1fr)_330px]">
           <section className="flex h-full flex-col overflow-hidden border-r border-slate-200 bg-white">
             <div className="border-b border-slate-100 px-4 py-4">
               <div className="flex items-center justify-between">
@@ -6127,12 +6157,12 @@ export function PosApp() {
                         ) : null}
                       </span>
                     ) : null}
-                    <div className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
+                    <div className="whitespace-nowrap rounded-full bg-slate-100 px-3 py-1 text-xs compact:px-2 compact:py-0.5 compact:text-[10.5px] font-semibold text-slate-600">
                       {t("快餐模式")}
                     </div>
                   </div>
                 ) : (
-                  <div className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
+                  <div className="whitespace-nowrap rounded-full bg-slate-100 px-3 py-1 text-xs compact:px-2 compact:py-0.5 compact:text-[10.5px] font-semibold text-slate-600">
                     {/* 🔴 唔可以直接 `t(activeTable?.name)` —— 真正嘅桌名嚟自
                         `bootstrap.tables`（DB 值）= **第 2 層，絕對唔可以譯**。
                         只有快餐模式嘅**合成桌**（`id === "counter"`，`name` 硬編 `"快餐"`）
@@ -6225,7 +6255,13 @@ export function PosApp() {
                 <span className="text-xs text-slate-500">{cartItems.length + voidedItems.length} {t("項")}</span>
               </div>
               {isQuickMode ? (
-                <div className="mt-3 grid grid-cols-3 gap-2 rounded-2xl border border-slate-200 bg-white p-2">
+                <>
+                {/* 小平板（900–1023px）專用：3 粒 icon，撳一下展開完整標籤。
+                    iPad／桌面／手機由下面嗰個 3-pill 區塊負責（min-[900px] 互斥，唔會同時出現）。 */}
+                <div className="hidden compact:block lg:hidden">
+                  <CompactOrderTypeTabs onChange={setQuickOrderType} value={quickOrderType} />
+                </div>
+                <div className="mt-3 grid grid-cols-3 gap-2 rounded-2xl border border-slate-200 bg-white p-2 compact:hidden lg:grid">
                   <button
                     className={`min-w-0 rounded-2xl px-2 py-2 text-center text-[11px] font-semibold leading-tight ${
                       quickOrderType === "dine_in" ? "bg-orange-500 text-white" : "bg-slate-100 text-slate-700"
@@ -6254,6 +6290,7 @@ export function PosApp() {
                     {t("自取")}
                   </button>
                 </div>
+                </>
               ) : null}
 
               {/* 打印操作（自動打印 + 兩個手動掣）已搬至「收銀與支付」section 最底部。 */}
@@ -6273,7 +6310,7 @@ export function PosApp() {
                     return (
                     <article
                       key={itemKey}
-                      className={`rounded-2xl border px-3 py-3 ${
+                      className={`min-w-0 rounded-2xl border px-3 py-3 compact:px-2 compact:py-1.5 ${
                         locked
                           ? "border-slate-200 bg-slate-100 opacity-75"
                           : selectedItemId === item.menuItemId
@@ -6281,9 +6318,9 @@ export function PosApp() {
                             : "border-slate-100 bg-slate-50"
                       }`}
                     >
-                      <div className="flex items-start justify-between gap-3">
+                      <div className="flex items-start justify-between gap-3 compact:flex-col compact:items-stretch compact:gap-1.5">
                         <div className="min-w-0">
-                          <div className="truncate text-sm font-semibold text-slate-900">
+                          <div className="min-w-0 truncate text-sm compact:text-[12.5px] font-semibold text-slate-900">
                             {item.name}
                             {locked ? (
                               <span className="ml-2 inline-flex rounded-full bg-slate-200 px-2 py-0.5 text-[11px] font-semibold text-slate-700">
@@ -6291,7 +6328,10 @@ export function PosApp() {
                               </span>
                             ) : null}
                           </div>
-                          <div className="mt-1 text-xs text-slate-500">
+                          <div
+                            className="mt-1 min-w-0 truncate text-xs compact:mt-0.5 compact:text-[10.5px] text-slate-500"
+                            title={specText(item) || item.note || t("未選規格")}
+                          >
                             {specText(item) || item.note || t("未選規格")}
                             {item.discountRate != null ? (
                               <>
@@ -6308,15 +6348,15 @@ export function PosApp() {
                             )}
                           </div>
                         </div>
-                        <div className="flex items-center gap-1">
+                        <div className="flex items-center gap-1 compact:justify-end">
                           {locked ? (
-                            <div className="rounded-full bg-slate-200 px-3 py-1 text-xs font-semibold text-slate-700">
+                            <div className="rounded-full bg-slate-200 px-3 compact:px-2 py-1 text-xs compact:text-[11px] font-semibold text-slate-700">
                               {t("已下單 x")}{item.quantity}
                             </div>
                           ) : (
                             <>
                               <button
-                                className="grid h-10 w-10 shrink-0 place-items-center rounded-full border border-slate-200 bg-white text-base font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+                                className="grid h-10 w-10 compact:h-7 compact:w-7 shrink-0 place-items-center rounded-full border border-slate-200 bg-white text-base compact:text-[13px] font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
                                 disabled={isReadOnlySettled}
                                 onClick={(event) => {
                                   event.stopPropagation();
@@ -6326,9 +6366,9 @@ export function PosApp() {
                               >
                                 -
                               </button>
-                              <div className="w-8 shrink-0 text-center text-base font-semibold text-slate-800">{item.quantity}</div>
+                              <div className="w-8 compact:w-5 shrink-0 text-center text-base compact:text-[13px] font-semibold text-slate-800">{item.quantity}</div>
                               <button
-                                className="grid h-10 w-10 shrink-0 place-items-center rounded-full border border-slate-200 bg-white text-base font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
+                                className="grid h-10 w-10 compact:h-7 compact:w-7 shrink-0 place-items-center rounded-full border border-slate-200 bg-white text-base compact:text-[13px] font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
                                 disabled={isReadOnlySettled}
                                 onClick={(event) => {
                                   event.stopPropagation();
@@ -6343,11 +6383,13 @@ export function PosApp() {
                         </div>
                       </div>
                       {/* 動作列：只放掣 + 短狀態（「已退 N 份」），保持單行，唔會俾長備註擠走位 */}
-                      <div className="mt-2 flex items-center justify-between gap-2">
-                        <div className="flex flex-nowrap items-center gap-2">
+                      <div className="mt-2 compact:mt-1 flex items-center justify-between gap-2 compact:gap-1">
+                        {/* 英文 "Add note" + "Discounts" 兩粒喺 146px 淨闊度會超出 row 右界（實測 +11px）
+                          ⇒ 改成可換行：寧可排成兩行，唔可以將掣裁走。 */}
+                        <div className="flex min-w-0 flex-wrap items-center gap-2 compact:gap-1">
                           {!locked ? (
                               <button
-                                className="whitespace-nowrap rounded-full bg-white px-3 py-1 text-xs font-semibold text-slate-700 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                                className="whitespace-nowrap rounded-full bg-white px-3 compact:px-1.5 py-1 text-xs compact:text-[10px] font-semibold text-slate-700 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
                                 disabled={isReadOnlySettled}
                                 onClick={(event) => {
                                   event.stopPropagation();
@@ -6416,7 +6458,7 @@ export function PosApp() {
                   {voidedItems.map((item, idx) => (
                     <article
                       key={`voided-${idx}-${itemIdentity(item)}`}
-                      className="rounded-2xl border border-red-200 bg-red-50/60 px-3 py-3 opacity-80"
+                      className="min-w-0 rounded-2xl border border-red-200 bg-red-50/60 px-3 py-3 opacity-80"
                     >
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0">
@@ -6426,7 +6468,10 @@ export function PosApp() {
                               {t("已退菜")}
                             </span>
                           </div>
-                          <div className="mt-1 text-xs text-slate-500">
+                          <div
+                            className="mt-1 min-w-0 truncate text-xs compact:mt-0.5 compact:text-[10.5px] text-slate-500"
+                            title={specText(item) || item.note || t("未選規格")}
+                          >
                             {specText(item) || item.note || t("未選規格")} · {formatMoney(item.price, bootstrap.currency)}
                           </div>
                           {item.voidedReason ? (
@@ -6583,18 +6628,33 @@ export function PosApp() {
                   const hasRemainingBadge =
                     typeof remainingQty === "number" && remainingQty > 0 && (soldOutMap[item.id]?.initialQty ?? 0) > 0;
                   return (
+                  /*
+                   * 菜品卡（2026-10-14 小平板適配）：
+                   * · 整張卡已經係 <button onClick={addMenuItem}> —— J 2026-10-14 拍板「唔要 + 鈕」，
+                   *   所以 compact 級隱藏卡內嗰個「加入」小 badge，改用右上角「已加 N」橙 badge 做回饋。
+                   * · 卡片高度 144 → 76.8px（min-h-24）、內距 16 → 10px、菜名 3 行 → 2 行。
+                   * · 全部掛 min-[900px] ⇒ iPad（≥1024）字面數值一字不變。
+                   */
                   <button
                     key={item.id}
-                    className={`flex min-h-36 flex-col justify-between rounded-2xl border border-slate-200 bg-white p-4 text-left shadow-sm transition ${
+                    className={`relative flex min-h-36 compact:min-h-24 flex-col justify-between rounded-2xl border border-slate-200 bg-white p-4 compact:p-2.5 text-left shadow-sm transition ${
                       soldOut ? "opacity-60" : "hover:-translate-y-0.5 hover:border-orange-300"
                     } disabled:cursor-not-allowed disabled:opacity-40`}
                     disabled={isReadOnlySettled}
                     onClick={() => addMenuItem(item)}
                     type="button"
                   >
+                    {cartQtyByMenuItemId.get(item.id) ? (
+                      <span
+                        aria-label={t("已加 {n} 件", { n: cartQtyByMenuItemId.get(item.id) ?? 0 })}
+                        className="absolute right-1.5 top-1.5 rounded-full bg-orange-500 px-1.5 py-px text-[10px] font-bold leading-tight text-white shadow-sm"
+                      >
+                        {t("x{n}", { n: cartQtyByMenuItemId.get(item.id) ?? 0 })}
+                      </span>
+                    ) : null}
                     <div className="min-w-0">
                       <div
-                        className="line-clamp-3 whitespace-normal break-words text-sm font-semibold leading-snug text-slate-900"
+                        className="line-clamp-3 compact:line-clamp-2 whitespace-normal break-words text-sm font-semibold leading-snug text-slate-900"
                         title={item.name}
                       >
                         {item.name}
@@ -6604,12 +6664,12 @@ export function PosApp() {
                           {t("只剩 {n} 份", { n: remainingQty })}</div>
                       ) : null}
                     </div>
-                    <div className="mt-2 flex items-center justify-between">
+                    <div className="mt-2 flex items-center justify-between compact:mt-1">
                       <div className="text-base font-semibold text-slate-900">
                         {item.isMarketPrice ? t("時價菜") : formatMoney(item.price, bootstrap.currency)}
                       </div>
                       <div
-                        className={`rounded-full px-2 py-1 text-xs font-semibold ${
+                        className={`compact:hidden rounded-full px-2 py-1 text-xs font-semibold ${
                           soldOut ? "bg-amber-50 text-amber-700" : "bg-orange-50 text-orange-600"
                         }`}
                       >
@@ -6709,18 +6769,20 @@ export function PosApp() {
                     「打印廚房單」＝ 打印中心「重打整單」；「打印收據」＝ 即時印當前所有已點項目。
                   ・原位於「訂單明細」section 內，已搬到此處方便收銀員喺結帳區域直接操作。 */}
               <div className="mt-3 rounded-2xl border border-slate-200 bg-white p-2">
-                <div className="flex items-center justify-between px-1">
+                <div className="flex items-center justify-between gap-2 compact:flex-col compact:items-start compact:gap-1 px-1">
                   <AutoAcceptPill
                     enabled={autoPrintEnabled}
                     label={t("自動打印")}
                     onChange={setAutoPrint}
                     size="sm"
                   />
-                  <span className="text-[11px] font-medium text-slate-400">
+                  <span className="text-[11px] compact:text-[10px] font-medium text-slate-400">
                     {autoPrintEnabled ? t("落單／結帳自動出單") : t("已關閉 · 唔會自動出單")}
                   </span>
                 </div>
-                <div className="mt-2 grid grid-cols-2 gap-2">
+                {/* 2026-10-14 小平板：右欄淨得 192px，兩個打印掣並排會逼到
+                    「打印廚房單」摺成兩行 ⇒ compact 級改成上下直排（一行一個，文字完整）。 */}
+                <div className="mt-2 grid grid-cols-2 gap-2 compact:grid-cols-1">
                   <button
                     aria-busy={kitchenPrintSubmitting}
                     className="rounded-2xl bg-white px-3 py-2 text-xs font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"

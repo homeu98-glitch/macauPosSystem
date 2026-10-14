@@ -11,7 +11,14 @@ export type InventoryReceiptInput = {
   category?: string;
   payment_method?: string;
   payment_status?: string;
-  /** 幣值（MOP／HKD／RMB…）。每張收據一個幣值；存 `raw_ocr_data.currency`。 */
+  /**
+   * 幣值（MOP／HKD／RMB…）。每張收據一個幣值。
+   *
+   * 🔴 2026-10-14：**要寫兩個位**——`raw_ocr_data.currency`（讀取／顯示用）
+   * **同** `receipts.currency`（頂層欄，SQL 聚合／報表用）。
+   * 舊版只寫 raw，頂層欄恆為 DB default `'HKD'` ⇒ Ledger 買貨報表
+   * 全部報 HKD（見 expenseRecorder `supabase_purchase_report_currency_fix_v1.sql`）。
+   */
   currency?: string;
   date?: string;
   total_amount?: number;
@@ -28,6 +35,24 @@ export type InventoryReceiptInput = {
 };
 
 export type ResolvedUser = { userId: string } | { error: string; status: number };
+
+/**
+ * 幣值正規化（**唯一規則**，寫入端必須共用，唔可以各自寫一份）。
+ *
+ * - 有值 ⇒ trim 後直接用（保留原大小寫分佈，但統一做大寫，避免
+ *   `mop` / `MOP` 在 SQL `group by` 分成兩組）。
+ * - 空／未提供 ⇒ **`"MOP"`**，唔可以落 `null` 亦唔可以留 DB default。
+ *
+ * 🔴 為咩要統一：`receipts.currency` 係 SQL 聚合（Ledger 買貨報表）嘅
+ * group by 鍵。留空 → 落入 `DEFAULT 'HKD'` → 澳門店嘅單全部被報成 HKD。
+ * 降級成 MOP 係本專案既有慣例（讀取端 `currency: getRaw("currency") || "MOP"`、
+ * POS bootstrap `payload.currency ?? "MOP"`），三處必須一致。
+ */
+export function normalizeReceiptCurrency(raw?: string | null): string {
+  const v = typeof raw === "string" ? raw.trim() : "";
+  return v ? v.toUpperCase() : "MOP";
+}
+
 
 /**
  * 判斷錯誤係唔係「表或欄唔存在」＝ schema 未就緒。

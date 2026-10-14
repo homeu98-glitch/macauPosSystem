@@ -129,14 +129,14 @@ function OrderCard({
   return (
     <article
       ref={articleRef}
-      className={`flex h-[180px] w-[240px] shrink-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white p-3 shadow-sm${
+      className={`flex h-[180px] compact:h-[120px] w-[240px] compact:w-[210px] shrink-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white p-3 compact:p-2 shadow-sm${
         focusKey !== null ? " ring-2 ring-orange-500 ring-offset-2 ring-offset-white" : ""
       }`}
     >
       {/* 頂部：訂單號 + 枱號（左）vs 狀態藥丸（右） */}
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0 flex-1">
-          <div className="truncate text-sm font-semibold leading-tight text-slate-900">{order.localOrderNo}</div>
+          <div className="truncate text-sm compact:text-[11.5px] font-semibold leading-tight text-slate-900">{order.localOrderNo}</div>
           {/* 第二行：枱別 + 付款狀態標籤（已結帳／未結帳，見 getPaymentBadge）。
               放左欄而唔放右欄：右欄淨係狀態藥丸 + 時間 + 來源已經佔滿 240px 卡片闊度，
               再加一粒標籤會逼到訂單號被截斷。 */}

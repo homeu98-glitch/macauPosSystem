@@ -149,14 +149,26 @@ export function QuickModeOrdersBar({
 
   return (
     <div className="shrink-0 border-t border-slate-200 bg-white shadow-[0_-4px_20px_rgba(15,23,42,0.06)]">
-      <div className="grid grid-cols-1 divide-y divide-slate-200 lg:grid-cols-2 lg:divide-x lg:divide-y-0">
-        <section className="min-w-0 px-3 py-2.5">
-          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-            <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">{t("線上訂單")}</div>
-            <QuickOnlineOrderControls
-              autoAccept={autoAcceptOnline}
-              onAutoAcceptChange={onAutoAcceptOnlineChange}
-            />
+      {/*
+        * 🔴 2026-10-14 小平板適配：呢條 bar 唔設高度上限，單欄時兩個 section 直叠
+        * 實測 400px 高 —— 喺 1000×600 嘅小平板（lg 觸發唔到）會食埋成個屏 2/3，
+        * 淨返 200px 畀點餐區。⇒ 分欄門檻由 lg(1024) 提早到 900px：
+        * 900–1023 已經夠闊左右並排（每邊 ~450px，同 iPad 504px 相若）；
+        * ≥1024 由原本嘅 lg 數值接手（已包含喺 min-[900px]，行為不變）。
+        */}
+      <div className="grid grid-cols-1 divide-y divide-slate-200 compact:grid-cols-2 compact:divide-x compact:divide-y-0 lg:grid-cols-2 lg:divide-x lg:divide-y-0">
+        <section className="min-w-0 px-3 py-2.5 compact:px-2 compact:py-1.5">
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2 compact:mb-1 compact:gap-1">
+            <div className="text-xs font-semibold uppercase tracking-wide text-slate-500 compact:text-[10.5px] compact:tracking-normal">{t("線上訂單")}</div>
+            {/* qp = 「quick pill」錨點：globals.css 喺 900–1023px 用 descendant selector
+                收窄呢兩粒接單掣 —— 文字**保留**（J 2026-10-14 拍板：唔可以淨係 icon），
+                只係縮細同將「label／開關」由兩行改成同一行。詳見 `qp-compact` 段。 */}
+            <div className="qp flex shrink-0 flex-nowrap items-center gap-1">
+              <QuickOnlineOrderControls
+                autoAccept={autoAcceptOnline}
+                onAutoAcceptChange={onAutoAcceptOnlineChange}
+              />
+            </div>
           </div>
           <QuickOnlineOrdersPanel
             autoAccept={autoAcceptOnline}
@@ -168,10 +180,10 @@ export function QuickModeOrdersBar({
             skipTableAssignment
           />
         </section>
-        <section className="min-w-0 px-3 py-2.5">
-          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-            <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">{t("線下訂單")}</div>
-            <div className="flex shrink-0 flex-nowrap items-center gap-2">
+        <section className="min-w-0 px-3 py-2.5 compact:px-2 compact:py-1.5">
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2 compact:mb-1 compact:gap-1">
+            <div className="text-xs font-semibold uppercase tracking-wide text-slate-500 compact:text-[10.5px] compact:tracking-normal">{t("線下訂單")}</div>
+            <div className="qp flex shrink-0 flex-nowrap items-center gap-2 compact:gap-1">
               {/* 線下接單 = 店內營業總掣（`pos_store_status.is_open`）：
                   擋掃碼點餐 ＋ 自助點餐機。掣面「營業中」／「已暫停（紅）」。
                   同左邊「線上訂單」嗰組完全對稱（接單總掣喺左、自動接單喺右）。 */}

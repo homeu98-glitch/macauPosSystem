@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getExpenseSupabaseClient } from "@/lib/expense-supabase";
 import {
   buildReceiptItems,
+  normalizeReceiptCurrency,
   resolveExpenseUserId,
   resolveMerchantId,
   sanitizePhotoPaths,
@@ -301,6 +302,16 @@ export async function POST(request: Request) {
     merchant_id: merchant.merchantId,
     total_amount: Number(body.total_amount) || 0,
     receipt_date: body.date,
+    /*
+     * 🔴 2026-10-14：`currency` **一定要寫頂層欄**，唔可以只寫 `raw_ocr_data.currency`。
+     *
+     * 舊版只寫 raw ⇒ 頂層 `receipts.currency` 落 DB default `'HKD'`，
+     * 而 Ledger 買貨報表 RPC 讀嘅正正係頂層欄 ⇒ 表嫂美食 97 張單全部被報成
+     * 「只有 HKD」，連真值 MOP/RMB 都被覆蓋。呢個係帳目正確性問題，
+     * 唔止顯示問題（MOP→HKD 差約 3%）。
+     * 兩個位寫同一個值（`normalizeReceiptCurrency`），杜絕再分叉。
+     */
+    currency: normalizeReceiptCurrency(body.currency),
     raw_ocr_data: {
       receipt_number: body.receipt_number || null,
       // 2026-10-07：品類已係必填（上面驗證），所以呢度一定會有值。
@@ -308,7 +319,7 @@ export async function POST(request: Request) {
       payment_method: normalizePaymentMethod(body.payment_method),
       payment_status: normalizePaymentStatus(body.payment_status),
       // 2026-10-11：幣值（每張收據一個）。空／未提供 → 落 "MOP" 降級（唔可以留空令統計分唔到組）。
-      currency: body.currency && String(body.currency).trim() ? String(body.currency).trim() : "MOP",
+      currency: normalizeReceiptCurrency(body.currency),
       input_method: "pos_manual",
       /*
        * 2026-10-07（P3）：收據相片路徑 —— 存 expenseRecorder Storage。

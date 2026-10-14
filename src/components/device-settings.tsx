@@ -7,6 +7,7 @@ import { AppSidebar } from "@/components/app-sidebar";
 import { useLang, useT, useTShort } from "@/components/lang-provider";
 import { LANG_DISPLAY_NAME, UI_LANGS } from "@/lib/i18n";
 import { KioskModePanel } from "@/components/kiosk-mode-panel";
+import { ViewportSelfCheck } from "@/components/viewport-self-check";
 import { ScanModePanel } from "@/components/scan-mode-panel";
 import { ResponsiveModal } from "@/components/responsive-modal";
 import { RelayPairingPanel } from "@/components/relay-pairing-panel";
@@ -1214,6 +1215,14 @@ export function DeviceSettings() {
   {/* 🔎 版本列（2026-09-22）：顯示「呢部機跑緊嘅版本」＋ 對照線上最新部署。
       放喺 status 隔籬（跨 tab 常駐），一入設置頁就見到，唔需要切 tab。 */}
   <BuildVersionRow />
+
+  {/* 🔎 顯示尺寸自檢（2026-10-14）：平板適配嘅縮放係按 viewport 闊度觸發，
+      而家一路靠「2000 物理像素 ÷ DPR2 = 1000px」推算。呢張卡係俾人一眼
+      睇到真實闊×高 / DPR / 字級 / 縮放開關——純顯示，冇任何請求或寫入。
+      跨 tab 常駐（擺喺 BuildVersionRow 下面）。詳見 `viewport-self-check.tsx`。 */}
+  <div className="mt-3">
+    <ViewportSelfCheck />
+  </div>
 
   {activeTab === "kiosk" ? (
     <div className="grid gap-3">

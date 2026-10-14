@@ -3,6 +3,7 @@ import { getExpenseSupabaseClient } from "@/lib/expense-supabase";
 import { normalizePaymentMethod, normalizePaymentStatus } from "@/lib/inventory-stats";
 import {
   buildReceiptItems,
+  normalizeReceiptCurrency,
   resolveExpenseUserId,
   resolveMerchantId,
   sanitizePhotoPaths,
@@ -57,7 +58,25 @@ export async function PATCH(request: Request, context: { params: Promise<{ id: s
   if (body.payment_method) raw.payment_method = normalizePaymentMethod(body.payment_method);
   if (body.payment_status) raw.payment_status = normalizePaymentStatus(body.payment_status);
   // 2026-10-11：幣值（每張收據一個）。`undefined` ＝ 唔改（保留原有）；空字串＝清走。
-  if (body.currency !== undefined) raw.currency = body.currency && body.currency.trim() ? body.currency.trim() : null;
+  /*
+   * 🔴 2026-10-14：`raw_ocr_data.currency` 同頂層 `receipts.currency` 要**同步**。
+   *
+   * Ledger 買貨報表 RPC 讀嘅係頂層欄（唔係 raw），舊版只改 raw ⇒
+   * 商家喺 UI 改幣值，報表完全唔跟。三態必須一致：
+   *   有值     → 兩邊都寫（同一個值）
+   *   空字串   → raw 清走（null，＝ UI「未設定」）；頂層欄**落 'MOP' 降級**
+   *   undefined → 兩邊都唔動
+   *
+   * ⚠️ 點解清走時頂層欄唔跟住落 null：一落 null／空，任何人之後 insert/update
+   *    都會再跌返 schema `DEFAULT 'HKD'`（即返返去原本嘅病）；而且頂層欄若
+   *    有 NOT NULL 約束，寫 null 會直接 500「儲存失敗」。
+   *    頂層欄嘅不變式＝**恆有值，且等於 UI 顯示嘅幣別**。
+   */
+  if (body.currency !== undefined) {
+    const next = normalizeReceiptCurrency(body.currency);
+    raw.currency = body.currency && body.currency.trim() ? next : null;
+    update.currency = next;
+  }
   /*
    * 🔴 2026-10-07（P3）：相片路徑。
    *

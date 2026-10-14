@@ -1085,7 +1085,7 @@ export function QuickOnlineOrdersPanel({
       {loading ? (
         <div
           className={`rounded-2xl border border-dashed border-slate-200 bg-slate-50 text-sm text-slate-500 ${
-            layout === "strip" ? "flex h-[108px] items-center px-4" : "p-4"
+            layout === "strip" ? "flex h-[108px] items-center px-4 compact:h-[60px] compact:px-2.5 compact:text-[10.5px]" : "p-4"
           }`}
         >
           {t("正在載入 Ledger 線上訂單…")}
@@ -1093,7 +1093,7 @@ export function QuickOnlineOrdersPanel({
       ) : visibleOrders.length === 0 ? (
         <div
           className={`rounded-2xl border border-dashed border-slate-200 bg-slate-50 text-sm text-slate-500 ${
-            layout === "strip" ? "flex h-[108px] items-center px-4" : "p-4"
+            layout === "strip" ? "flex h-[108px] items-center px-4 compact:h-[60px] compact:px-2.5 compact:text-[10.5px]" : "p-4"
           }`}
         >
           {t("暫無待處理線上訂單。")}{layout === "stack" ? (

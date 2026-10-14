@@ -77,7 +77,13 @@ type Receipt = {
    *    要經 `/api/inventory/receipt-photos/url` 換 signed URL（見 `ReceiptPhotos`）。
    */
   photo_paths?: string[];
-  /** 幣值（MOP／HKD／RMB…）。每張收據一個幣值。存 `raw_ocr_data.currency`。 */
+  /**
+   * 幣值（MOP／HKD／RMB…）。每張收據一個幣值。
+   *
+   * 🔴 2026-10-14：寫入時**兩個位都要寫**——`raw_ocr_data.currency`（畫面顯示）
+   * ＋ `receipts.currency`（頂層欄，Ledger 買貨報表 group by 用）。
+   * 舊版只寫 raw ⇒ 頂層欄恆為 DB default 'HKD' ⇒ Ledger 見到嘅幣別全部係假嘅。
+   */
   currency?: string | null;
   items: ReceiptItem[];
 };
