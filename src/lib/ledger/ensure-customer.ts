@@ -1,7 +1,7 @@
 "use client";
 
 import { friendlyLedgerMemberError } from "@/lib/ledger/member-errors";
-import { getLedgerAccessToken } from "@/lib/ledger/session";
+import { ensureLedgerSession } from "@/lib/ledger/session";
 
 export type EnsureCustomerResult = {
   ok: true;
@@ -28,7 +28,10 @@ export async function ensureCustomer(params: {
   amountAvos?: number;
   idempotencyKey?: string;
 }): Promise<EnsureCustomerResult> {
-  const token = getLedgerAccessToken();
+  // 🔴 2026-10-16（Ledger PR#40）：唔可以再直讀 storage 舊票（`getLedgerAccessToken`）——
+  //    library 自動刷新／另一分頁刷新過之後，storage 可能仲係舊票 ⇒ 過期 401。
+  //    行 `ensureLedgerSession()`：本地快取命中零成本，必要時先刷新先打。
+  const token = await ensureLedgerSession();
   if (!token) {
     throw new Error("Ledger 登入已過期，請重新登入。");
   }

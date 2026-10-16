@@ -5,15 +5,17 @@ import { loadAuthSession, saveAuthSession, clearAuthSession as clearStoredAuthSe
 import { readClientBuildInfo } from "@/lib/build-info";
 import { reportPosClientPresence } from "@/lib/ledger/client-presence";
 import { getLedgerSupabaseClient } from "@/lib/ledger/supabase-client";
+import { decideLedgerSessionAction } from "@/lib/ledger/ledger-session-decision";
+import { decodeJwtPayload, readExpiryMs } from "@/lib/pos/realtime-auth-claims";
 
 /**
  * 「每個分頁載入最多上報一次商戶端活躍」（2026-09-24，Ledger 契約 §4.6）。
  *
  * ## 為何要有呢個閂
  *
- * `ensureLedgerSession()` 被**十幾處**呼叫（訂單、會員、報表、券、Realtime…），
- * 每次都會 `setSession()`。冇閂嘅話，每次查詢都會多打一支 Ledger RPC
- * ⇒ 一個收銀分頁開一日就多幾千個請求（同 §8「唔可以加請求」嘅紀律衝突）。
+ * `ensureLedgerSession()` 被**十幾處**呼叫（訂單、會員、報表、券、Realtime…）。
+ * 冇閘嘅話，每次查詢都會多打一支 Ledger RPC ⇒ 一個收銀分頁開一日就多幾千個請求
+ * （同 §8「唔可以加請求」嘅紀律衝突）。
  *
  * ## 為何唔用 localStorage
  *
@@ -31,24 +33,107 @@ export function resetPresenceLatchForTest(): void {
   presenceReportedThisPageLoad = false;
 }
 
+/**
+ * single-flight 閘（2026-10-16，Ledger PR#40）。
+ *
+ * ## 為咩要合併併發
+ *
+ * ① 開頁時 **7 個 mount**一齊跑 `restoreLedgerSession()`（auth-guard／device-settings／
+ *    online-orders／quick-online-orders-panel／restaurant-daily-report ×2／shift-page），
+ *    加上兩條 Realtime hook 嘅 subscribe —— 冇閂就會同時打 N 次。
+ * ② 🔴 refresh token **會輪換**：兩個併發呼叫一個行 `refreshSession()`、一個用 storage
+ *    舊票行 `setSession()`，舊 refresh token 已死 ⇒ 失敗彈登入。serialize 之後
+ *    先刷新嗰個會 sync 返 storage，第二个見到嘅已經係新票。
+ */
+let sessionInFlight: Promise<string | null> | null = null;
+
 /** Restore Supabase Auth session from POS auth cache after page load. */
 export async function restoreLedgerSession(): Promise<boolean> {
   return (await ensureLedgerSession()) !== null;
 }
 
-/** Ensure Supabase RPC/Realtime auth is ready; sync refreshed tokens back to storage. */
-export async function ensureLedgerSession(): Promise<string | null> {
-  const session = loadAuthSession();
+/**
+ * Ensure Supabase RPC/Realtime auth is ready; sync refreshed tokens back to storage.
+ *
+ * 🔴 2026-10-16（Ledger PR#40）：**唔可以再每次呼叫都 `setSession()`** ——
+ * supabase-js 2.112 喺 token 未過期時固定打 `GET /auth/v1/user` 驗證
+ * （auth-js `_setSession()` → `_getUser()`，node_modules 實測）。
+ * 十幾處呼叫端 ⇒ 晚市一台 iPad 實測 154 次／時。
+ *
+ * 改為 single-flight + 分流（決策邏輯見 `ledger-session-decision.ts`）：
+ *   ① 記憶體已有未過期 session → `getSession()`（純本地，零網路）
+ *   ② ≤5 分鐘到期 → `refreshSession()`，新票寫返 POS storage
+ *   ③ client 未接管過／換身份 → `setSession()`（每頁最多一次）
+ *
+ * TOKEN_REFRESHED → `realtime.setAuth` 由兩路保證：supabase-js 內置
+ * `_handleTokenChanged`（bundle 實測會自動做）＋ `supabase-client.ts` 顯式 listener。
+ */
+export function ensureLedgerSession(): Promise<string | null> {
+  if (!sessionInFlight) {
+    sessionInFlight = resolveLedgerSession().finally(() => {
+      sessionInFlight = null;
+    });
+  }
+  return sessionInFlight;
+}
+
+async function resolveLedgerSession(): Promise<string | null> {
+  const stored = loadAuthSession();
   const client = getLedgerSupabaseClient();
-  if (!client || !session?.ledgerAccessToken || !session?.ledgerRefreshToken) {
+  if (!client || !stored?.ledgerAccessToken || !stored?.ledgerRefreshToken) {
     return null;
   }
 
-  const { error } = await client.auth.setSession({
-    access_token: session.ledgerAccessToken,
-    refresh_token: session.ledgerRefreshToken,
+  // 本地讀取：persistSession:false ⇒ session 存記憶體，`getSession()` 唔打網路。
+  // （只有到期前 90s 內先會自動 refresh —— 嗰次 refresh 會觸發 TOKEN_REFRESHED，
+  //   realtime 換票由 supabase-js 內置 + 顯式 listener 雙重保證。）
+  const { data, error } = await client.auth.getSession();
+  const clientSession = error ? null : data.session;
+
+  const decision = decideLedgerSessionAction({
+    storedAccessToken: stored.ledgerAccessToken,
+    storedExpiresAtMs: readExpiryMs(decodeJwtPayload(stored.ledgerAccessToken)),
+    clientAccessToken: clientSession?.access_token ?? null,
+    clientExpiresAtMs: clientSession?.expires_at ? clientSession.expires_at * 1000 : null,
+    nowMs: Date.now(),
   });
-  if (error) return null;
+
+  if (decision.action === "unauthorized") return null;
+
+  if (decision.action === "bootstrap") {
+    // 每頁最多一次嘅網路驗證（登入嗰次 `setSession` 由 login-screen 自己做，唔經過呢度）。
+    const { error: setError } = await client.auth.setSession({
+      access_token: stored.ledgerAccessToken,
+      refresh_token: stored.ledgerRefreshToken,
+    });
+    if (setError) return null;
+  } else if (decision.action === "refresh") {
+    // 用 client 而家嘅 session 去 refresh —— **唔可以**攰 storage 舊票：
+    // 舊 refresh token 可能已被輪換（另一分頁／auto-ticker 醒先刷新）。
+    if (!clientSession) return null;
+    const { error: refreshError } = await client.auth.refreshSession(clientSession);
+    if (refreshError) return null;
+  }
+
+  // 任何路径成功後都要 sync 返 POS storage（client persistSession:false，唔會幫我哋寫；
+  // 而 `ensure-customer.ts` 等直接 fetch 嘅路径要用最新票）。
+  let active = clientSession;
+  if (decision.action !== "reuse") {
+    const { data: after } = await client.auth.getSession();
+    active = after.session;
+  }
+  if (!active?.access_token) return stored.ledgerAccessToken;
+
+  if (
+    active.access_token !== stored.ledgerAccessToken ||
+    (active.refresh_token && active.refresh_token !== stored.ledgerRefreshToken)
+  ) {
+    saveAuthSession({
+      ...stored,
+      ledgerAccessToken: active.access_token,
+      ledgerRefreshToken: active.refresh_token ?? stored.ledgerRefreshToken,
+    });
+  }
 
   // 恢復 session 成功（＝店員重開分頁／PWA 重入）⇒ 補上「POS 端活躍」。
   // 🔴 唔 await：呢個係純 telemetry，唔可以阻任何業務（Realtime 連線、訂單讀取…）。
@@ -58,24 +143,9 @@ export async function ensureLedgerSession(): Promise<string | null> {
     presenceReportedThisPageLoad = true;
     void reportPosClientPresence({
       client,
-      merchantId: session.merchantId,
+      merchantId: stored.merchantId,
       appVersion: readClientBuildInfo().id,
       source: "restore",
-    });
-  }
-
-  const { data } = await client.auth.getSession();
-  const active = data.session;
-  if (!active?.access_token) return session.ledgerAccessToken;
-
-  if (
-    active.access_token !== session.ledgerAccessToken ||
-    (active.refresh_token && active.refresh_token !== session.ledgerRefreshToken)
-  ) {
-    saveAuthSession({
-      ...session,
-      ledgerAccessToken: active.access_token,
-      ledgerRefreshToken: active.refresh_token ?? session.ledgerRefreshToken,
     });
   }
 

@@ -1,0 +1,17 @@
+===== pos_orders d564b932（最近兩日）=====
+筆數 = 2
+2026-10-15 21:28:23 | order-5b2e2782 | no=取餐01 | src=pos | settled | tbl=堂食 | total=90 | online=-
+2026-10-15 19:43:36 | kiosk-b63e9a67 | no=自取01 | src=scan | settled | tbl=自取 | total=95 | online=-
+
+===== pos_store_status（全部）=====
+8291f843-9def-4956-9d0b-1cfef2598306 is_open=false @ 2026-10-15 21:25:33 by=null src=pos
+cb9352eb-1f68-4a82-8b4f-9dafce3f0d97 is_open=true @ 2026-10-14 13:19:47 by=null src=pos
+d564b932-0c91-45e9-86fd-0ec8e2711f13 is_open=true @ 2026-10-06 13:28:37 by=null src=pos
+
+===== 全部 store：printer_id × status 統計（近兩日）=====
+8291f843|printer-22a790b1|小票機 · 通用 80mm 熱敏打印機|receipt => printed=25 failed=4 pending=0 other=0
+8291f843|printer-861f2f6e|printer|kitchen => printed=32 failed=4 pending=0 other=0
+cb9352eb|printer-547f59f5|小票機 · 通用 58mm 熱敏打印機|receipt => printed=0 failed=0 pending=6 other=0
+cb9352eb|printer-8fe048f7|廚房機 · 通用 58mm 熱敏打印機|kitchen => printed=0 failed=0 pending=13 other=0
+d564b932|printer-290f99e6|廚房機 · 通用 58mm 熱敏打印機|kitchen => printed=1 failed=1 pending=0 other=0
+d564b932|printer-861f2f6e|printer|kitchen => printed=0 failed=1 pending=0 other=0

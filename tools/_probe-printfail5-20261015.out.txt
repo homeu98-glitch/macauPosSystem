@@ -1,0 +1,18 @@
+===== d564b932 全部 job（今日，含 21:30 後）=====
+筆數 = 8
+2026-10-15 22:19:43 | no=自取03 | 廚房機 · 通用 58mm 熱敏打印機 (printer-290f99e6) | st=printed att=0 | claim=2026-10-15 22:19:44 done=2026-10-15 22:19:44 | err=-
+2026-10-15 22:19:28 | no=自取02 | 廚房機 · 通用 58mm 熱敏打印機 (printer-290f99e6) | st=printed att=0 | claim=2026-10-15 22:19:29 done=2026-10-15 22:19:29 | err=-
+2026-10-15 22:18:27 | no=取餐03 | 廚房機 · 通用 58mm 熱敏打印機 (printer-290f99e6) | st=printed att=0 | claim=2026-10-15 22:18:29 done=2026-10-15 22:18:29 | err=-
+2026-10-15 22:11:44 | no=取餐02 | 廚房機 · 通用 58mm 熱敏打印機 (printer-290f99e6) | st=printed att=0 | claim=2026-10-15 22:11:45 done=2026-10-15 22:11:45 | err=-
+2026-10-15 22:11:11 | no=取餐01 (重打) | 廚房機 · 通用 58mm 熱敏打印機 (printer-290f99e6) | st=printed att=0 | claim=2026-10-15 22:11:13 done=2026-10-15 22:11:13 | err=-
+2026-10-15 21:30:26 | no=取餐01 (重打) | 廚房機 · 通用 58mm 熱敏打印機 (printer-290f99e6) | st=printed att=0 | claim=2026-10-15 21:31:52 done=2026-10-15 21:31:52 | err=-
+2026-10-15 21:28:23 | no=取餐01 | 廚房機 · 通用 58mm 熱敏打印機 (printer-290f99e6) | st=failed att=5 | claim=- done=- | err=AGENT_FAILED: dispatch failed
+2026-10-15 19:43:38 | no=自取01 | printer (printer-861f2f6e) | st=failed att=5 | claim=- done=- | err=AGENT_FAILED: dispatch failed
+
+===== d564b932 今日訂單 =====
+2026-10-15 22:19:42 | kiosk-ed211adb | no=自取03 | src=scan | sent_to_kitchen | tbl=自取 | total=90
+2026-10-15 22:19:21 | kiosk-72fca1a0 | no=自取02 | src=scan | sent_to_kitchen | tbl=自取 | total=85
+2026-10-15 22:18:27 | order-0f546f58 | no=取餐03 | src=pos | paid | tbl=堂食 | total=65
+2026-10-15 22:11:44 | order-e52cdebf | no=取餐02 | src=pos | paid | tbl=堂食 | total=100
+2026-10-15 21:28:23 | order-5b2e2782 | no=取餐01 | src=pos | settled | tbl=堂食 | total=90
+2026-10-15 19:43:36 | kiosk-b63e9a67 | no=自取01 | src=scan | settled | tbl=自取 | total=95

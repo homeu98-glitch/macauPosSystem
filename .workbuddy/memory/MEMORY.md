@@ -20,6 +20,7 @@
 
 ## 鑑權／Realtime／打印
 - `posRouteAuthGuard()` 放 early-return 之後；`POS_REQUIRE_DEVICE_AUTH` 冇設＝開閘；TTL 12h。
+- 🔴 Ledger client（`lib/ledger/supabase-client.ts`，`persistSession:false`⇒session 存記憶體）：`setSession()` 就算 token 未過期都打 `GET /auth/v1/user` ⇒ `ensureLedgerSession()` 改 single-flight＋`getSession()` fast path＋≤5min `refreshSession()`（2026-10-16 計劃，對應 Ledger PR#40；詳情→當日 log）；`TOKEN_REFRESHED→realtime.setAuth` supabase-js 2.112 內置 `_handleTokenChanged` 已自動做（bundle 實測），realtime-js 會 push 新 token 畀已 join 嘅 channel。
 - 🔴 anon 時間窗 RLS（pos_orders 72h／pos_print_jobs 24h）係刻意，唔可收緊（三個 Realtime 消費者靠 anon）⇒ 收緊＝出紙 1–3 秒變 180 秒。
 - 入隊只准 `appendPrintJobsWithSync()`；`pushEvents()` base 一定要 `loadQueue()`；去重靠 `onceKey`。「本地有 job」帳本 per-瀏覽器 ⇒ 後掛載台會為已出紙線上單再造廚房 job。`/api/pos/state` printJobs 冇 template/content ⇒ 預覽≠出紙。
 - Realtime hook 四個同一寫法：subscribe callback 首行 `if (cancelled || channel !== ch) return;`；`await removeChannel` 後必再判 `if (cancelled) return;`；CLOSED 唔可為修迴圈而刪；清 reconnectTimer 前先 `if (subscribeInFlight) return;`；同 topic 一頁只准一條 channel。守衛 `realtime-resubscribe-loop.test.ts`。

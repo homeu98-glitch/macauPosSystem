@@ -4,6 +4,7 @@ import { friendlyLedgerMemberError } from "@/lib/ledger/member-errors";
 import { LedgerMemberGrantRecord, LedgerRewardGrant } from "@/lib/ledger/member-types";
 import { ensureLedgerSession } from "@/lib/ledger/session";
 import { getLedgerSupabaseClient } from "@/lib/ledger/supabase-client";
+import { decodeJwtPayload } from "@/lib/pos/realtime-auth-claims";
 
 function parseGrant(row: Record<string, unknown>): LedgerRewardGrant {
   const prizeType = String(row.prize_type ?? "");
@@ -26,6 +27,20 @@ function parseMemberGrantRecord(row: Record<string, unknown>): LedgerMemberGrant
     redeemedAt: row.redeemed_at ? String(row.redeemed_at) : null,
     status: String(row.status ?? "issued"),
   };
+}
+
+/**
+ * 由 JWT 讀 operator id（`sub` claim）。
+ *
+ * 🔴 2026-10-16（Ledger PR#40）：取代原先嘅 `client.auth.getUser()` ——
+ * 每次核銷券都打一次 `GET /auth/v1/user`，而且 `user.id` 本來就等同 JWT 嘅 `sub`
+ * （同一張簽名票，server 端 RLS 照樣執行）。本地解碼，零網路。
+ *
+ * 讀唔到 ⇒ 當「登入已過期」交返上層拋錯（fail-safe，唔好靜默傳空 id）。
+ */
+function readOperatorIdFromToken(token: string | null | undefined): string | null {
+  const sub = decodeJwtPayload(token)?.["sub"];
+  return typeof sub === "string" && sub.trim() ? sub.trim() : null;
 }
 
 async function requireRpcClient() {
@@ -96,13 +111,14 @@ export async function redeemRewardGrants(grantIds: string[]): Promise<RedeemGran
   }
   try {
     const client = await requireRpcClient();
-    const { data: userData, error: userError } = await client.auth.getUser();
-    if (userError || !userData.user?.id) {
+    const { data: sessionData } = await client.auth.getSession();
+    const operatorId = readOperatorIdFromToken(sessionData.session?.access_token);
+    if (!operatorId) {
       throw new Error("Ledger 登入已過期，請重新登入。");
     }
     const { data, error } = await client.rpc("redeem_reward_grants", {
       p_grant_ids: grantIds,
-      p_operator_id: userData.user.id,
+      p_operator_id: operatorId,
     });
     if (error) throw new Error(error.message);
     const row = (data ?? {}) as Record<string, unknown>;
