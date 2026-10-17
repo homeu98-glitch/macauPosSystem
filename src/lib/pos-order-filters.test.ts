@@ -17,6 +17,7 @@ import {
   isPaidOrderStatus,
   isQuickCounterOrder,
   isQuickOrderReady,
+  isReopenable,
   localOrderStatusLabel,
   matchesLocalOrderPanelTab,
   mergeOrderLists,
@@ -75,9 +76,60 @@ describe("getPaymentBadge（快餐付款維度）", () => {
     assert.equal(getPaymentBadge(order({ id: "p2", status: "settled" })).label, "已結帳");
   });
 
+  // 🔴 2026-10-17：返結單停留喺快餐 strip（quick-local-orders-strip reopened 卡）。
+  // reopened 唔喺 `isPaidOrderStatus` 嘅 paid set（佢係「付款之後嘅另一種結局」），
+  // 但錢一早收過 → badge 一定要特判「已結帳」，唔可以跌去「未結帳」
+  // （收銀會以為張單未收錢，重複收款）。
+  it("reopened 係「已結帳」（錢收過，返結只係退回可編輯）", () => {
+    assert.equal(getPaymentBadge(order({ id: "p5", status: "reopened" })).label, "已結帳");
+  });
+
   it("draft / sent_to_kitchen 係「未結帳」", () => {
     assert.equal(getPaymentBadge(order({ id: "p3", status: "sent_to_kitchen" })).label, "未結帳");
     assert.equal(getPaymentBadge(order({ id: "p4", status: "draft" })).label, "未結帳");
+  });
+});
+
+/**
+ * 返結閘（2026-10-17 J 拍板逆轉：本地快餐 counter 單由「排除」改為「可以返結」）。
+ *
+ * 實案背景：快餐模式以前完全冇反結功能（用戶定金句「除咗快餐」）。而家要參考堂食補返，
+ * 但**純線上單維持排除**（錢同狀態喺 Ledger，要衝上游，另議）。
+ * 判斷錯會直接反映成 UI：錯 appear = 撳咗彈「返結失敗」；錯 exclude = 撳咗冇反應。
+ */
+describe("isReopenable（返結閘）", () => {
+  it("本地快餐 counter 單：settled / paid 可以返結（2026-10-17 逆轉）", () => {
+    assert.equal(isReopenable(order({ id: "r1", tableId: "counter", status: "settled" })), true);
+    assert.equal(isReopenable(order({ id: "r2", tableId: "counter", status: "paid" })), true);
+  });
+
+  it("本地真枱堂食單：settled / paid 可以返結（原有行為）", () => {
+    assert.equal(isReopenable(order({ id: "r3", tableId: "table-a01", status: "settled" })), true);
+    assert.equal(isReopenable(order({ id: "r4", tableId: "table-a01", status: "paid" })), true);
+  });
+
+  it("純線上快餐單（onlineOrderId + counter）任何狀態都唔可以返結", () => {
+    assert.equal(
+      isReopenable(order({ id: "r5", tableId: "counter", onlineOrderId: "led-1", status: "settled" })),
+      false,
+    );
+    assert.equal(
+      isReopenable(order({ id: "r6", tableId: "counter", onlineOrderId: "led-2", status: "paid" })),
+      false,
+    );
+  });
+
+  it("線上堂食單轉咗真枱 → 當本地單，可以返結（原有行為）", () => {
+    assert.equal(
+      isReopenable(order({ id: "r7", tableId: "table-a01", onlineOrderId: "led-3", status: "settled" })),
+      true,
+    );
+  });
+
+  it("未結帳狀態（draft / sent_to_kitchen / reopened / cancelled）一律唔可以返結", () => {
+    for (const status of ["draft", "sent_to_kitchen", "reopened", "cancelled"] as const) {
+      assert.equal(isReopenable(order({ id: `r8-${status}`, status })), false, `${status} 唔可以返結`);
+    }
   });
 });
 

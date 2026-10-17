@@ -1,0 +1,22 @@
+{
+  "顯示尺寸（診斷）": "Display size (diagnostics)",
+  "複製診斷": "Copy diagnostics",
+  "畫面闊 × 高": "Width × height",
+  "像素密度 DPR": "Pixel density (DPR)",
+  "網頁字級": "Root font size",
+  "小平板縮放": "Tablet zoom",
+  "已啟用": "Enabled",
+  "未啟用": "Not enabled",
+  "未啟用（闊度唔喺 900–1023px）": "Not enabled (width not in 900–1023px)",
+  "裝置類型": "Device type",
+  "畫面闊 × 高：{w} × {h}": "Width × height: {w} × {h}",
+  "像素密度 DPR：{dpr}": "Pixel density (DPR): {dpr}",
+  "網頁字級：{size}": "Root font size: {size}",
+  "小平板縮放：{state}": "Tablet zoom: {state}",
+  "裝置類型：{device}": "Device type: {device}",
+  "縮放冇生效：如果呢部機實際唔係 900–1023px 闊，請將上面數字 send 返俾我哋改觸發條件。": "Zoom not active: if this device is not actually 900–1023px wide, send the numbers above back to us to adjust the trigger.",
+  "展開 ▾": "Expand ▾",
+  "訂單類型": "Order type",
+  "已加 {n} 件": "Added {n} items",
+  "語言設置": "語言設置"
+}

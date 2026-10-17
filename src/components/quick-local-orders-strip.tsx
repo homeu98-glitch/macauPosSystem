@@ -18,9 +18,18 @@ type QuickLocalOrdersStripProps = {
   currency: string;
   preparingOrders: PosOrder[];
   waitingOrders: PosOrder[];
+  /**
+   * 返結單（2026-10-17 J 要求）：**本地**快餐 counter 單返結後要停留喺線下訂單列
+   * （以前 `isActionableQuickOrder()` 唔收 `reopened`，張單會喺 strip 消失，
+   * 收銀完全睇唔返，亦冇入口改價／加餐後重結）。
+   * 純線上單（錢同狀態喺 Ledger）維持排除，所以父層只傳本地 counter reopened 單。
+   */
+  reopenedOrders: PosOrder[];
   completionLabel: (order: PosOrder) => string;
   completeLabel: (order: PosOrder) => string;
   onViewOrder: (orderId: string) => void;
+  /** 返結卡嘅「編輯」：將張單載入點餐工作台（改價／加餐後重結）。 */
+  onEditOrder?: (orderId: string) => void;
   onMarkReady: (orderId: string) => void;
   onMarkCompleted: (orderId: string, label: string) => void;
   /** 自助單獨立結帳入口（kiosk / scan），開啟付款 modal。 */
@@ -56,6 +65,7 @@ function OrderCard({
   completionLabel,
   completeLabel,
   onViewOrder,
+  onEditOrder,
   onMarkReady,
   onMarkCompleted,
   onCheckout,
@@ -71,11 +81,13 @@ function OrderCard({
    * 父層 `quickPreparingOrders` / `quickWaitingOrders` 一律按 `isQuickOrderReady()` 分組，
    * 唔再夾雜 `status === "paid"` 條件（否則未收款先出餐嘅單會卡死喺「製作中」）。
    * 藥丸配色／文字用 `mode`，按鈕則一律直接讀單自己嘅 `isQuickOrderReady()`。
+   * `"reopened"`（2026-10-17）：返結單專用卡片 —— 藥丸出「已返結」、按鈕只剩查看／編輯。
    */
-  mode: "preparing" | "waiting";
+  mode: "preparing" | "waiting" | "reopened";
   completionLabel: (order: PosOrder) => string;
   completeLabel: (order: PosOrder) => string;
   onViewOrder: (orderId: string) => void;
+  onEditOrder?: (orderId: string) => void;
   onMarkReady: (orderId: string) => void;
   onMarkCompleted: (orderId: string, label: string) => void;
   onCheckout?: (orderId: string) => void;
@@ -115,8 +127,9 @@ function OrderCard({
   //
   // 「消失後唔再出現」係由兩個單向閘保證：
   // 1. `status` paid 之後唔會回到 sent_to_kitchen（confirmPayment 只寫 paid/settled，
-  //    settleOnly 唔 reset；返結 reopen 會去到 reopened 而非 sent_to_kitchen，reopened
-  //    嘅訂單唔再落 quick strip）。
+  //    settleOnly 唔 reset；返結 reopen 會去到 reopened 而非 sent_to_kitchen，所以 reopened
+  //    單行唔到呢條 split-action 閘 —— 2026-10-17 起佢改以「已返結」卡停留喺線下訂單列，
+  //    見下面 `mode === "reopened"` 分支）。
   // 2. `fulfillmentStatus` 一旦寫成 ready 唔會被 reset（`updateQuickFulfillmentInStore`
   //    只寫 ready，markQuickOrderCompletedInStore 寫 ready + settled，唔 reset 落
   //    preparing；餐飲 join 操作唔 reset fulfillmentStatus）。
@@ -125,6 +138,8 @@ function OrderCard({
   const isPaid = order.status === "paid";
   const isReady = isQuickOrderReady(order);
   const isBothDone = isPaid && isReady;
+  /** 返結卡（2026-10-17）：按鈕只剩「查看 ＋ 編輯」，其餘出餐／結帳掣一律唔出。 */
+  const isReopenedCard = mode === "reopened";
 
   return (
     <article
@@ -150,22 +165,31 @@ function OrderCard({
           </div>
         </div>
         <div className="flex shrink-0 flex-col items-end gap-1.5">
-          <span
-            className={`inline-flex max-w-[130px] items-center justify-center gap-1.5 rounded-full px-3 py-1 text-center text-sm font-semibold leading-tight ${
-              isDraftSelfOrder
-                ? "bg-slate-100 text-slate-600"
-                : mode === "waiting"
-                  ? "bg-sky-50 text-sky-700"
-                  : "bg-amber-50 text-amber-700"
-            }`}
-          >
+          {/* 返結單（2026-10-17）：靛藍「已返結」藥丸 —— 同行其餘卡個案唔同色，
+              收銀一眼認得出「呢張單退返可編輯」。 */}
+          {mode === "reopened" ? (
+            <span className="inline-flex max-w-[130px] items-center justify-center gap-1.5 rounded-full bg-indigo-50 px-3 py-1 text-center text-sm font-semibold leading-tight text-indigo-700">
+              <span className="h-4 w-4 rounded-full bg-indigo-500" />
+              {t("已返結")}
+            </span>
+          ) : (
             <span
-              className={`h-4 w-4 rounded-full ${
-                isDraftSelfOrder ? "bg-slate-400" : mode === "waiting" ? "bg-sky-500" : "bg-amber-500"
+              className={`inline-flex max-w-[130px] items-center justify-center gap-1.5 rounded-full px-3 py-1 text-center text-sm font-semibold leading-tight ${
+                isDraftSelfOrder
+                  ? "bg-slate-100 text-slate-600"
+                  : mode === "waiting"
+                    ? "bg-sky-50 text-sky-700"
+                    : "bg-amber-50 text-amber-700"
               }`}
-            />
-            {isDraftSelfOrder ? t("點單中") : mode === "waiting" ? t(completionLabel(order)) : t("製作中")}
-          </span>
+            >
+              <span
+                className={`h-4 w-4 rounded-full ${
+                  isDraftSelfOrder ? "bg-slate-400" : mode === "waiting" ? "bg-sky-500" : "bg-amber-500"
+                }`}
+              />
+              {isDraftSelfOrder ? t("點單中") : mode === "waiting" ? t(completionLabel(order)) : t("製作中")}
+            </span>
+          )}
           {/* 時間（HH:MM，下單時間）+ 來源 chip 並排，貼右下（齊平 OrderSourceBadge 高度）。 */}
           <div className="flex items-center gap-1.5">
             <span
@@ -251,12 +275,23 @@ function OrderCard({
         >
           {t("查看")}
         </button>
+        {/* 返結卡（2026-10-17 J 要求）：「編輯」＝ 將張單載入點餐工作台，改價／加餐後重結。
+            琥珀色同「已返結」靛藍藥丸區分，但又同去結帳深色掣唔同，避免撳錯。 */}
+        {isReopenedCard ? (
+          <button
+            className="shrink-0 whitespace-nowrap rounded-xl bg-amber-500 px-2.5 py-1.5 text-[11px] font-semibold text-white hover:bg-amber-600"
+            onClick={() => onEditOrder?.(order.id)}
+            type="button"
+          >
+            {t("編輯")}
+          </button>
+        ) : null}
         {/* 🔴 外賣平台單「取消（覆寫）」（2026-09-24 使用者要求）：
             **刻意唔跟狀態流程** —— 平台單嘅錢係平台收，平台取消咗（可能喺任何階段，
             甚至已完結之後）我哋就要跟住唔計入報表。所以 `paid` / `settled` 都要出呢粒掣。
             只有已作廢／已退款先隱藏（後者會令報表淨額出錯，要用退款流程）。
             規則本體：`@/lib/pos/platform-order`（有單測）。 */}
-        {canVoidPlatformOrder(order) && onVoidPlatformOrder ? (
+        {!isReopenedCard && canVoidPlatformOrder(order) && onVoidPlatformOrder ? (
           <button
             aria-label={t("取消（覆寫）平台單 {no}", { no: order.localOrderNo })}
             className="shrink-0 whitespace-nowrap rounded-xl bg-rose-50 px-2.5 py-1.5 text-[11px] font-semibold text-rose-700 ring-1 ring-rose-200"
@@ -269,14 +304,14 @@ function OrderCard({
         ) : null}
         {/* draft 自助單 → 人手「接受 / 拒絕」（2026-09-11 新增）。
             呢個 case 之下三粒掣（查看／接受／拒絕）等闊平分整行；非 draft 單維持「查看」貼左。 */}
-        {showSelfOrderActions && onConfirmSelfOrder && onRejectSelfOrder ? (
+        {!isReopenedCard && showSelfOrderActions && onConfirmSelfOrder && onRejectSelfOrder ? (
           <SelfOrderActionButtons
             orderLabel={order.localOrderNo}
             onConfirm={() => onConfirmSelfOrder(order)}
             onReject={() => onRejectSelfOrder(order)}
           />
         ) : null}
-        {showSplitActions ? (
+        {isReopenedCard ? null : showSplitActions ? (
           <>
             {/* 去結帳：未 paid 先 active；已 paid → 唔再 render（用戶要求「消失」而唔係灰掉）。
                 單向閘：`status` 由 paid → settled / cancelled / refunded 都唔會回退 paid，
@@ -353,9 +388,11 @@ export function QuickLocalOrdersStrip({
   currency,
   preparingOrders,
   waitingOrders,
+  reopenedOrders,
   completionLabel,
   completeLabel,
   onViewOrder,
+  onEditOrder,
   onMarkReady,
   onMarkCompleted,
   onCheckout,
@@ -370,9 +407,12 @@ export function QuickLocalOrdersStrip({
   // 分段的話，張單一撳「可取餐」就由左面彈去右面一段（即係「按狀態排」——
   // 狀態一改、位置就變，正是用家 2026-09-01 反映嘅問題）。
   // 每張卡嘅 mode（藥丸配色 + 掣）改由單自己嘅狀態決定，同分段時一致。
+  // 2026-10-17：返結單（reopened）都入同一列、同一排序 —— 張單要留喺視線範圍內，
+  // 收銀先會記得「有張單退咗返嚟要改」。
   const cards = [
     ...preparingOrders.map((order) => ({ order, mode: "preparing" as const })),
     ...waitingOrders.map((order) => ({ order, mode: "waiting" as const })),
+    ...reopenedOrders.map((order) => ({ order, mode: "reopened" as const })),
   ].sort((a, b) => compareOrderByLocalNo(a.order, b.order));
 
   const hasOrders = cards.length > 0;
@@ -397,6 +437,7 @@ export function QuickLocalOrdersStrip({
           mode={mode}
           onCheckout={onCheckout}
           onConfirmSelfOrder={onConfirmSelfOrder}
+          onEditOrder={onEditOrder}
           onMarkCompleted={onMarkCompleted}
           onMarkReady={onMarkReady}
           onRejectSelfOrder={onRejectSelfOrder}

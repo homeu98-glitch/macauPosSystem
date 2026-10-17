@@ -538,7 +538,15 @@ export function PosApp() {
     const order = orders.find((o) => o.id === orderId) ?? null;
     if (!order) return;
     deepLinkConsumedRef.current = true;
-    if (operatingMode === "quick") {
+    // 2026-10-17：counter 單（本地快餐單，例如返結後跳返點餐介面）要**確保留喺 quick mode**。
+    // 以前一律切 dinein —— 但 quick mode 下 activeTable 鎖死 counter，真枱載唔到；
+    // counter 單轉去 dinein 反而落唔到工（見 isReopenable 2026-10-17 逆轉：本地 counter 單可返結）。
+    if (order.tableId === "counter") {
+      if (operatingMode !== "quick") {
+        setOperatingModeState("quick");
+        saveOperatingMode("quick");
+      }
+    } else if (operatingMode === "quick") {
       setOperatingModeState("dinein");
       saveOperatingMode("dinein");
     }
@@ -2559,6 +2567,22 @@ export function PosApp() {
   const quickWaitingOrders = useMemo(
     () => actionBarLocalOrders.filter((order) => isQuickOrderReady(order)),
     [actionBarLocalOrders],
+  );
+  /**
+   * 2026-10-17（J 要求）：返結後嘅本地快餐單要**停留喺線下訂單列**。
+   *
+   * 以前 `isActionableQuickOrder()` 只收 `draft/sent_to_kitchen/paid`，reopened 單
+   * 一返結就會喺 strip 消失 —— 收銀完全睇唔返，亦冇入口改價／加餐後重結。
+   * 只取**本地** counter 單：純線上單（`onlineOrderId` + counter）錢同狀態喺 Ledger，
+   * `isReopenable()` 已經排除，唔會返結，所以呢度唔需要（亦唔應該）出現。
+   * 排序同 strip 一致（單號由小到大）。
+   */
+  const quickReopenedOrders = useMemo(
+    () =>
+      orders
+        .filter((order) => order.tableId === "counter" && order.status === "reopened")
+        .sort(compareOrderByLocalNo),
+    [orders],
   );
 
   const viewingOrder = useMemo(() => {
@@ -6135,8 +6159,8 @@ export function PosApp() {
                 </div>
                 {isQuickMode ? (
                   <div className="flex items-center gap-2">
-                    {/* 快餐模式頁首冇「手動更新」，所以「開工」掣要自己擺一個位（2026-09-14）。
-                        同堂食一樣：未開工才出，收起彈窗後就係唯一開工入口。 */}
+                    {/* 快餐模式頁首嘅「開工」掣自己擺一個位（2026-09-14；2026-10-17 起右邊
+                        仲多咗粒維修工具 icon）。同堂食一樣：未開工才出，收起彈窗後就係唯一開工入口。 */}
                     {!shift.openedAt ? (
                       <span className="relative inline-flex">
                         <button
@@ -6157,9 +6181,23 @@ export function PosApp() {
                         ) : null}
                       </span>
                     ) : null}
-                    <div className="whitespace-nowrap rounded-full bg-slate-100 px-3 py-1 text-xs compact:px-2 compact:py-0.5 compact:text-[10.5px] font-semibold text-slate-600">
-                      {t("快餐模式")}
-                    </div>
+                    {/* 2026-10-17：快餐模式都要有「手動更新 ＋ 同步健康」（同桌台總覽同一粒）。
+                        `popupWidth={240}` —— 左欄最窄 208px（compact），330px 會被外層
+                        `overflow-hidden` 裁走；240px 連快捷操作欄都睇得完整。 */}
+                    <PosToolsMenu
+                      busy={manualSyncing || isBootstrapping}
+                      onManualUpdate={() => void handleManualUpdate()}
+                      onSyncHealth={() => setShowSyncHealth(true)}
+                      popupWidth={240}
+                    />
+                    {/* 「快餐模式」徽章：未開工時**暫隱**（2026-10-17 J 拍板）——
+                        未開工已經有醒目橙色「開工」掣表明處境，徽章屬重複資訊；
+                        開工後徽章返嚟。 */}
+                    {shift.openedAt ? (
+                      <div className="whitespace-nowrap rounded-full bg-slate-100 px-3 py-1 text-xs compact:px-2 compact:py-0.5 compact:text-[10.5px] font-semibold text-slate-600">
+                        {t("快餐模式")}
+                      </div>
+                    ) : null}
                   </div>
                 ) : (
                   <div className="whitespace-nowrap rounded-full bg-slate-100 px-3 py-1 text-xs compact:px-2 compact:py-0.5 compact:text-[10.5px] font-semibold text-slate-600">
@@ -6863,6 +6901,17 @@ export function PosApp() {
             }}
             onViewOrder={(orderId) => setViewingOrderId(orderId)}
             /**
+             * 返結卡嘅「編輯」（2026-10-17）：將張單載入點餐工作台（quick mode 下
+             * posMode 一開始就係 "order"），頂部會自動出「返結帳」琥珀橫額，
+             * 收銀可以改價／加餐後重新結帳。local-orders-panel 嗰邊係靠 deep-link
+             * 跳轉；呢度本來就喺 /pos，直接載入就得。
+             */
+            onEditOrder={(orderId) => {
+              const order = orders.find((row) => row.id === orderId);
+              if (!order) return;
+              loadOrderIntoWorkspace(order, "counter");
+            }}
+            /**
              * 外賣平台單「取消（覆寫）」：卡上按鈕 → 開同一個原因彈窗（`void_platform_order`）。
              * 唔直接寫入 —— 一定要店主／員工填原因（審計 + 影響報表）。
              */
@@ -6872,6 +6921,7 @@ export function PosApp() {
             }}
             noticeFocus={noticeFocus}
             preparingOrders={quickPreparingOrders}
+            reopenedOrders={quickReopenedOrders}
             waitingOrders={quickWaitingOrders}
           />
         ) : null}

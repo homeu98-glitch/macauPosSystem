@@ -32,11 +32,18 @@
 2. **權限門控（2026-08-20 晚取消）**：用戶決定**唔加 PIN 同權限門控**，理由係步驟太多會浪費工人時間。改為：**任何員工都可以直接返結**，只需強制揀「返結原因」（從設置清單揀，不可空白）。餐飲 `UserPermissions.reopenOrder` 權位保留喺 types 但**唔做門控**；美容唔另起權限。
 3. **強制原因（保留）**：返結必須填原因；「設置」內「返結原因 / 備註」**可配置清單**（似銀豹「反結賬&退貨原因設置」），餐飲 `settings.tsx` 與美容 `salon/settings.tsx` 各加，存各自 bootstrap。經理 PIN 授權 **取消**。
 4. **線上訂單範圍（2026-08-20 收尾追加，後經用戶澄清收窄）**：用戶澄清「線上訂單唔可以返結」只係指**純線上快餐 / 自取 / 外賣**（counter / 未轉枱）；**「線上堂食單轉到枱」已變成喺店單，要可以返結**，美容同理（到店服務單）。判定邏輯：`isReopenable` 對有 `onlineOrderId` 嘅單改為「只有 `tableId != "counter"`（已轉枱堂食）先放行；counter / 無枱線上單照擋」。同時**本地快餐（`!onlineOrderId && tableId === "counter"`）亦排除返結**（用戶定金句「除咗快餐」），`isReopenable` 提前 `return false`，令快餐「已完成」單只可唯讀、唔出「返結帳」掣。本地面板列表過濾由 `isLocalPosOrder`（= `!onlineOrderId`）放寬為 `isLocalOrTransferredDineIn`（本地單 + 已轉枱線上堂食單），令呢類單出得返面板、按到「返結」；純線上快餐/自取/外賣仍只喺 online-orders 面板、唔入本地面板、唔可返結。保留 `onlineOrderId` 唔清走（唔影響 Ledger 對賬）。美容無 `onlineOrderId` 字段，一向當本地單，唔受影響。
+   > ### ⚠️ 2026-10-17 逆轉（J 拍板）——「除咗快餐」取消
+   > **本地快餐單（`!onlineOrderId && tableId === "counter"`）而家可以返結。** 觸發點：J 反映快餐模式冇反結功能，參考堂食要補。
+   > - `isReopenable()` 刪除本地 counter 單嘅提前 `return false`；**純線上單（`onlineOrderId` + counter/無枱）維持排除**（要衝 Ledger 餘額同支付狀態）—— 即「線上唔可以返結」嘅口徑**維持不變**，逆轉只涉及本地單。
+   > - `reopenPosOrder()` 本地 counter 單**跳過 temp 枱**（留返 `counter`）：快餐機可能冇 floors；且快餐結帳流程 `quickPaidFlow` 要求 `tableId === "counter"` 先行到。
+   > - 跳轉改為 `tableId=counter`；deep-link handler 相應改為 counter 單**留住 quick mode**（以前一律強制切返 dine-in）。
+   > - 返結後張單**停留**喺快餐「線下訂單」列（已返結狀態＋查看／編輯掣），唔會消失；重結路徑不變（`reopened → paid → 標記完成 → settled`，審計欄保留）。
+   > - 實作同確認稿：`docs/mockups/quick-mode-manual-update-and-reopen-2026-10-17.html`（9 頁）。
 5. **已結單唯讀（跳 POS 灰掣）+ 面板「返結帳」掣（2026-08-20 晚追加，用戶隨後更正）**：用戶最終確認要求——**「已完成（settled）」嘅線下單，「查看」照樣跳去點餐介面睇之前下單內容，但入面所有掣（下單 / 結帳 / 備註 / 點餐）變灰、不可按；只有「返結帳」掣先可以解鎖操作**。規則改為：
    - **settled 非 counter 單**：「查看」直接 `router.push("/?tableId=&orderId=")` 跳去 POS 點餐介面，但係**唯讀灰掣模式**——`loadOrderIntoWorkspace` 載入歷史 `cartItems` 顯示，而 `isReadOnlySettled`（workspace order.status === "settled"）令下單 / 結帳 / 備註 / 點餐 / 加減 / 退菜全部 `disabled` 灰咗；頭部出「已結帳 · 唯讀預覽 · 所有操作已鎖定」banner + 唯一可撳嘅「**返結帳**」掣。
    - **面板「查看」隔籬加「返結帳」掣**：`order.status === "settled" && isReopenable(order)` 時顯示，按掣開原因 modal → `reopenPosOrder` → 成功後 `router.push("/?tableId=&orderId=")` 跳去 POS 枱位視圖**可編輯**（status 已變 `reopened`，`activeOrder` 搵得返）。即「已完成」單唔可以直接喺面板跳可編輯，必須經「返結帳」掣確認。
    - **未結（sent_to_kitchen / paid）非 counter 單**：維持「查看」直接 deep-link 跳枱面編輯（上輪行為不變）。
-   - **counter / 無枱單**：維持小窗（快餐 settled 因決策 4 排除返結，故只可唯讀、無返結掣）。
+   - **counter / 無枱單**：本地 counter 單 2026-10-17 起**可以**返結（見決策 4 逆轉標註）：撳「返結帳」→ 揀原因 → 跳 `/pos?tableId=counter&orderId=…` **留住快餐模式**載入工作台；純線上 counter 單（有 `onlineOrderId`）維持細窗、維持排除返結。
    - **桌台總覽「返結帳 桌號」台掣**：重結後（status === "reopened"）桌台總覽會自動多出一張枱按鈕，名改為「**返結帳 {桌號}**」、label「待重結」、琥珀色；按佢 = 同「訂單內按返結帳後再按查看」一樣——可操作可改（`tableOrderMap` 已含 `reopened` 單，枱位自然入可編輯）。
    - POS 點餐視圖對 `activeOrder.status === "reopened"` 單加「**返結帳**」格（琥珀色標記 + 返結原因 + 原結帳時間），重結後狀態變返 `settled` 該格自動消失，符合「結帳完成後變回正常已結帳單」。
    - 實作重點：`activeOrder` 排除 `settled`，故 settled deep-link 入 POS 時 `activeOrder` 為 null；用 `workspaceOrder = orders.find(o => o.id === activeOrderId)` 派生 `isReadOnlySettled` 鎖定。本頁「返結帳」掣 call `reopenPosOrder` 後靠 `pos-orders-changed` listener 刷新 `orders` → `activeOrder` 變 `reopened` → 解鎖；面板「返結帳」掣跳轉靠 PosApp 重新掛載讀 fresh orders。

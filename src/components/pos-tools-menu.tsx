@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 
+import { useT } from "@/components/lang-provider";
 import { useSyncHealth } from "@/lib/pos/sync-acks";
 
 /**
@@ -62,9 +63,17 @@ type PosToolsMenuProps = {
   busy: boolean;
   onManualUpdate: () => void;
   onSyncHealth: () => void;
+  /**
+   * 彈出層闊度（px）。預設 330。
+   *
+   * 快餐模式（2026-10-17）：頁首空間窄，而且外層容器有 `overflow-hidden`，
+   * 330px 會被裁走 → 傳 240。
+   */
+  popupWidth?: number;
 };
 
-export function PosToolsMenu({ busy, onManualUpdate, onSyncHealth }: PosToolsMenuProps) {
+export function PosToolsMenu({ busy, onManualUpdate, onSyncHealth, popupWidth = 330 }: PosToolsMenuProps) {
+  const t = useT();
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const syncHealth = useSyncHealth();
@@ -107,10 +116,10 @@ export function PosToolsMenu({ busy, onManualUpdate, onSyncHealth }: PosToolsMen
       <button
         aria-expanded={open}
         aria-haspopup="menu"
-        aria-label="維修工具：手動更新 / 同步健康"
+        aria-label={t("維修工具：手動更新 / 同步健康")}
         className="relative flex h-[42px] w-[42px] items-center justify-center rounded-2xl bg-white text-slate-700 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
         onClick={() => setOpen((value) => !value)}
-        title="維修工具：手動更新 / 同步健康"
+        title={t("維修工具：手動更新 / 同步健康")}
         type="button"
       >
         {/* 滑桿圖示（＝維修／工具）；刻意唔用齒輪，同側欄「設置」分開 */}
@@ -142,32 +151,33 @@ export function PosToolsMenu({ busy, onManualUpdate, onSyncHealth }: PosToolsMen
 
       {open ? (
         <div
-          className="absolute right-0 top-[calc(100%+6px)] z-30 w-[330px] rounded-2xl border border-slate-200 bg-white p-1.5 shadow-xl"
+          className="absolute right-0 top-[calc(100%+6px)] z-30 rounded-2xl border border-slate-200 bg-white p-1.5 shadow-xl"
           role="menu"
+          style={{ width: popupWidth }}
         >
           <div className="px-3 pb-1 pt-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
-            維修工具
+            {t("維修工具")}
           </div>
           <ToolsMenuItem
             description={
               busy
-                ? "正在從伺服器拉取最新菜單及所有設定…"
-                : "從伺服器強制拉取最新菜單及所有設定，套用後重新載入頁面"
+                ? t("正在從伺服器拉取最新菜單及所有設定…")
+                : t("從伺服器強制拉取最新菜單及所有設定，套用後重新載入頁面")
             }
             disabled={busy}
             onPick={() => pick(onManualUpdate)}
-            title={busy ? "更新中…" : "手動更新"}
+            title={busy ? t("更新中…") : t("手動更新")}
           />
           <ToolsMenuItem
-            description="檢查有冇「已結帳但未上到雲」嘅訂單，失敗事件重試或補錄上雲"
+            description={t("檢查有冇「已結帳但未上到雲」嘅訂單，失敗事件重試或補錄上雲")}
             onPick={() => pick(onSyncHealth)}
-            title="同步健康"
+            title={t("同步健康")}
           />
           {showBadge ? (
             <div className="mx-3 mb-1.5 mt-1 rounded-xl bg-amber-50 px-2.5 py-1.5 text-[11px] font-semibold text-amber-700">
               {blocked
-                ? `有 ${syncHealth.blocked} 張訂單連續補推都對唔上雲端，建議即刻處理。`
-                : `仲有 ${pendingCount} 張／條待上傳或未確認。`}
+                ? t("有 {n} 張訂單連續補推都對唔上雲端，建議即刻處理。", { n: syncHealth.blocked })
+                : t("仲有 {n} 張／條待上傳或未確認。", { n: pendingCount })}
             </div>
           ) : null}
         </div>

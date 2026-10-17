@@ -19,6 +19,33 @@ export function isLocalOrTransferredDineIn(order: PosOrder): boolean {
 }
 
 /**
+ * 可返結：只可對「已結帳」（settled / paid）嘅單返結。
+ *
+ * 線上單分兩種：
+ * - 純線上快餐 / 自取 / 外賣（onlineOrderId 存在，且未轉枱 = tableId 係 counter 或無枱）：
+ *   由上游 Ledger 對賬，POS 端唔支援返結。
+ * - 「線上堂食單轉到枱」（onlineOrderId 存在 + tableId 唔係 counter）：
+ *   已變成喺店堂食單，當本地單處理，可以返結。
+ * 美容同其他本地單無 onlineOrderId，一律當本地單。
+ *
+ * 🔴 2026-10-17 逆轉（J 拍板，見 docs/38 決策 4 標註）：**本地快餐單
+ * （`!onlineOrderId && tableId === "counter"`）由「排除」改為「可以返結」** ——
+ * 以前用戶定金句「除咗快餐」，而家要參考堂食補返。純線上單（counter/無枱）仍然排除。
+ *
+ * ⚠️ 2026-10-17 由 `@/lib/pos-orders` 搬嚟呢個純模組 —— 返結閘係沉默 bug 高風險區
+ * （撳咗冇反應／出現咗唔應該出現嘅掣），一定要喺 `node --test` 覆蓋到。
+ */
+export function isReopenable(order: PosOrder): boolean {
+  // 純線上快餐 / 自取 / 外賣（onlineOrderId + counter/無枱）：錢同狀態喺 Ledger，唔支援返結。
+  if (order.onlineOrderId) {
+    const isInStoreDineIn = !!order.tableId && order.tableId !== "counter";
+    if (!isInStoreDineIn) return false;
+  }
+  // 本地單（含 2026-10-17 起嘅本地快餐 counter 單）＋ 已轉枱線上堂食單：只看狀態。
+  return order.status === "settled" || order.status === "paid";
+}
+
+/**
  * 已被「排位」轉成本地堂食單嘅 Ledger 單 id 集合（2026-09-12 商家要求）。
  *
  * 病症：線上單排位之後**兩邊都同時出現**（線上訂單列表 + 店內線下訂單），
@@ -87,7 +114,12 @@ export function isQuickOrderReady(order: PosOrder): boolean {
  * 兩者可以任意組合（例如「未結帳 + 待取餐」＝先出餐後付款；「已結帳 + 製作中」＝正常快餐流程）。
  */
 export function getPaymentBadge(order: PosOrder): OrderStatusBadge {
+  // 🔴 2026-10-17：`reopened` **一定要算「已結帳」** —— 返結只係將單退回可編輯
+  // （改價／加餐後重結），錢一早收過，唔退款。以前 reopened 唔喺下面嘅 paid set，
+  // 卡片會錯顯示「未結帳」（收銀會以為張單未收錢，重複收款）。
+  // 見 quick-local-orders-strip：返結單停留喺快餐 strip 都用呢個 badge。
   const paid =
+    order.status === "reopened" ||
     order.status === "paid" ||
     order.status === "settled" ||
     order.status === "refunded" ||

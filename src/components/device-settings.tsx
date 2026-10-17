@@ -1219,7 +1219,9 @@ export function DeviceSettings() {
   {/* 🔎 顯示尺寸自檢（2026-10-14）：平板適配嘅縮放係按 viewport 闊度觸發，
       而家一路靠「2000 物理像素 ÷ DPR2 = 1000px」推算。呢張卡係俾人一眼
       睇到真實闊×高 / DPR / 字級 / 縮放開關——純顯示，冇任何請求或寫入。
-      跨 tab 常駐（擺喺 BuildVersionRow 下面）。詳見 `viewport-self-check.tsx`。 */}
+      跨 tab 常駐（擺喺 BuildVersionRow 下面）。詳見 `viewport-self-check.tsx`。
+      2026-10-17（J 要求）：預設收合——撳標題行先展開；「複製診斷」掣收合
+      狀態都保持可見（send 數字返嚟唔使展開）。 */}
   <div className="mt-3">
     <ViewportSelfCheck />
   </div>

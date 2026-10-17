@@ -34,26 +34,11 @@ import {
 } from "@/lib/storage";
 import { FloorConfig, PosOrder, QueueEvent, StoreTable } from "@/lib/types";
 
-/**
- * 可返結：只可對「已結帳」（settled / paid）嘅單返結。
- *
- * 線上單分兩種：
- * - 純線上快餐 / 自取 / 外賣（onlineOrderId 存在，且未轉枱 = tableId 係 counter 或無枱）：
- *   由上游 Ledger 對賬，POS 端唔支援返結。
- * - 「線上堂食單轉到枱」（onlineOrderId 存在 + tableId 唔係 counter）：
- *   已變成喺店堂食單，當本地單處理，可以返結。
- * 美容同其他本地單無 onlineOrderId，一律當本地單。
- */
-export function isReopenable(order: PosOrder): boolean {
-  // 快餐（本地 counter 單）唔支援返結
-  const isQuickCounter = !order.onlineOrderId && order.tableId === "counter";
-  if (isQuickCounter) return false;
-  if (order.onlineOrderId) {
-    const isInStoreDineIn = !!order.tableId && order.tableId !== "counter";
-    if (!isInStoreDineIn) return false; // 純線上快餐 / 自取 / 外賣
-  }
-  return order.status === "settled" || order.status === "paid";
-}
+// 🔴 `isReopenable()` 已搬去 `@/lib/pos-order-filters`（純判斷模組，`node --test` 載得到，
+//    見該檔註解）。呢度 import 返（`reopenPosOrder` 內部要用）＋ re-export
+//    保持舊 import 位（local-orders-panel / pos-app）不變。
+import { isReopenable } from "./pos-order-filters";
+export { isReopenable };
 
 export type ReopenResult = {
   ok: boolean;
@@ -193,7 +178,12 @@ export async function reopenPosOrder(params: {
   let memberReverseError: string | undefined;
 
   // ①.5 建立 temp 枱，將返結單由「原枱」搬到 temp 枱（原枱唔會被取代）
-  const tempTable = createReopenTempTable(order);
+  // 🔴 2026-10-17（J 拍板，docs/38 決策 4 逆轉）：本地快餐 counter 單**跳過 temp 枱** ——
+  //    快餐機可能根本冇 floors（createReopenTempTable 會降級新建「返結枱」floor，污染枱面）；
+  //    且快餐結帳流程 `quickPaidFlow` 要求 `tableId === "counter"` 先行到。
+  //    留返 counter 直接可編輯，tempTable = null 下面所有 `tempTable ? … : 原值` 分支自然沿用原枱。
+  const isQuickCounter = !order.onlineOrderId && order.tableId === "counter";
+  const tempTable = isQuickCounter ? null : createReopenTempTable(order);
 
   // ② 切狀態 + 寫審計
   const now = new Date().toISOString();

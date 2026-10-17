@@ -25,9 +25,17 @@ type QuickModeOrdersBarProps = {
   onOnlineToast: (payload: ToastPayload) => void;
   preparingOrders: PosOrder[];
   waitingOrders: PosOrder[];
+  /**
+   * 返結單（2026-10-17 J 要求）：本地快餐 counter 單返結後要停留喺線下訂單列
+   * （以前 strip 完全唔收 `reopened`，張單會消失，冇入口改價／重結）。
+   * 純線上單維持排除（錢同狀態喺 Ledger）—— 父層負責過濾。
+   */
+  reopenedOrders: PosOrder[];
   completionLabel: (order: PosOrder) => string;
   completeLabel: (order: PosOrder) => string;
   onViewOrder: (orderId: string) => void;
+  /** 返結卡嘅「編輯」：將張單載入點餐工作台（改價／加餐後重結）。 */
+  onEditOrder?: (orderId: string) => void;
   onMarkReady: (orderId: string) => void;
   onMarkCompleted: (orderId: string, label: string) => void;
   /** 自助單獨立結帳入口（kiosk / scan）：開啟付款 modal。 */
@@ -134,9 +142,11 @@ export function QuickModeOrdersBar({
   onOnlineToast,
   preparingOrders,
   waitingOrders,
+  reopenedOrders,
   completionLabel,
   completeLabel,
   onViewOrder,
+  onEditOrder,
   onMarkReady,
   onMarkCompleted,
   onCheckout,
@@ -198,12 +208,14 @@ export function QuickModeOrdersBar({
             noticeFocus={noticeFocus}
             onCheckout={onCheckout}
             onConfirmSelfOrder={onConfirmSelfOrder}
+            onEditOrder={onEditOrder}
             onMarkCompleted={onMarkCompleted}
             onMarkReady={onMarkReady}
             onRejectSelfOrder={onRejectSelfOrder}
             onViewOrder={onViewOrder}
             onVoidPlatformOrder={onVoidPlatformOrder}
             preparingOrders={preparingOrders}
+            reopenedOrders={reopenedOrders}
             waitingOrders={waitingOrders}
           />
         </section>

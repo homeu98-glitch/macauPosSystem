@@ -566,7 +566,11 @@ export function LocalOrdersPanel({
       // 跳去點餐枱面：進入 temp 枱可編輯「返結帳」狀態，可加餐 / 改價 / 重結（原枱唔會被取代）
       // 🔴 2026-09-22：同「查看」一樣，一定要用 `/pos`（`/` 自 2026-09-17 起係選擇工作台頁）。
       //    以前返結完會掉去「請選擇要進入嘅工作台」⇒ 收銀做唔到重結。
-      const tableId = result.tempTable?.id ?? (order.tableId && order.tableId !== "counter" ? order.tableId : "");
+      // 🔴 2026-10-17：本地快餐 counter 單都係咁跳 —— `reopenPosOrder` 對 counter 單**刻意唔建**
+      //    temp 枱（快餐機可能冇 floors，而且 quickPaidFlow 要求 tableId==="counter"），所以
+      //    一定要帶返 `order.tableId`（="counter"）唔可以丟空：以前丟空 ⇒ deep-link
+      //    `if (!tableId || !orderId) return` 直接 return，撳咗等如冇反應。
+      const tableId = result.tempTable?.id ?? order.tableId ?? "";
       router.push(`/pos?tableId=${encodeURIComponent(tableId)}&orderId=${encodeURIComponent(order.id)}`);
     } finally {
       setReopenSubmitting(false);
@@ -1247,6 +1251,20 @@ export function LocalOrdersPanel({
                 🔴 只喺平台單出現 —— 店內單冇 externalOrderId 亦冇結算欄位。 */}
             {isPlatformOrder(receiptPreviewOrder) ? (
               <PlatformSettlementBreakdown order={receiptPreviewOrder} currency={currency} />
+            ) : null}
+            {/* 2026-10-17（J 要求）：收據預覽都要有「返結帳」入口 —— 同詳情彈窗一致，
+                用得 `isReopenable()` 守門（純線上單自動排除）。撳咗先閂預覽再開原因彈窗。 */}
+            {isReopenable(receiptPreviewOrder) ? (
+              <button
+                type="button"
+                className="w-full rounded-xl bg-amber-600 px-3 py-2.5 text-sm font-semibold text-white hover:bg-amber-700"
+                onClick={() => {
+                  setReceiptPreviewOrderId(null);
+                  setReopenTargetOrderId(receiptPreviewOrder.id);
+                }}
+              >
+                {t("返結帳")}
+              </button>
             ) : null}
             {hasReceivableReceipt(receiptPreviewOrder) ? (
               <button

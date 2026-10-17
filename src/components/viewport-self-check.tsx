@@ -25,6 +25,13 @@ import { useT } from "@/components/lang-provider";
  *
  * ⚠️ 只喺 `ClientOnly` 之後 render（成個 app 已經係），所以唔會有 hydration 唔一致：
  *    首屏 `null` → `useEffect` 之後先顯示真值。
+ *
+ * ## 收合（2026-10-17，J 要求「把整塊 card 收起來」）
+ *
+ * 預設**收起**——淨睇得標題行，撳標題行先展開 5 行診斷數據。
+ * 收合狀態只係記憶體 `useState`，**刻意唔寫 localStorage**：維持上面
+ * 「零副作用」不變量（每次都係預設收起，要診斷先撳開）。
+ * 「複製診斷」掣收合狀態照樣可見——send 數字返俾我哋嘅流程唔使展開。
  */
 
 type Snapshot = {
@@ -58,6 +65,11 @@ function detect(): Snapshot {
 export function ViewportSelfCheck() {
   const t = useT();
   const [snap, setSnap] = useState<Snapshot | null>(null);
+  /**
+   * 收合狀態（2026-10-17）：預設收起。
+   * 🔴 純記憶體，刻意唔寫 localStorage —— 維持本檔「零副作用」不變量。
+   */
+  const [expanded, setExpanded] = useState(false);
 
   useEffect(() => {
     const read = () => setSnap(detect());
@@ -85,9 +97,18 @@ export function ViewportSelfCheck() {
   return (
     <section className="rounded-2xl border border-amber-200 bg-amber-50/60 p-3 text-xs text-slate-700">
       <div className="flex items-center justify-between gap-2">
-        <div className="font-semibold text-slate-900">{t("顯示尺寸（診斷）")}</div>
+        {/* 標題行＝切換掣（2026-10-17）：成行都撳得，min-h-10 滿足觸控 ≥40px */}
         <button
-          className="shrink-0 rounded-lg bg-white px-2 py-1 text-[11px] font-semibold text-slate-600 ring-1 ring-slate-300"
+          aria-expanded={expanded}
+          className="flex min-h-10 flex-1 items-center gap-1.5 rounded-lg text-left"
+          onClick={() => setExpanded((v) => !v)}
+          type="button"
+        >
+          <span className="font-semibold text-slate-900">{t("顯示尺寸（診斷）")}</span>
+          <span className="text-slate-500">{expanded ? t("收起 ▴") : t("展開 ▾")}</span>
+        </button>
+        <button
+          className="flex min-h-10 shrink-0 items-center rounded-lg bg-white px-2.5 text-[11px] font-semibold text-slate-600 ring-1 ring-slate-300"
           onClick={() => {
             void navigator.clipboard?.writeText(summary);
           }}
@@ -96,34 +117,38 @@ export function ViewportSelfCheck() {
           {t("複製診斷")}
         </button>
       </div>
-      <dl className="mt-2 grid grid-cols-1 gap-y-1">
-        <div className="flex justify-between gap-2">
-          <dt>{t("畫面闊 × 高")}</dt>
-          <dd className="font-mono font-semibold">{snap.width} × {snap.height}</dd>
-        </div>
-        <div className="flex justify-between gap-2">
-          <dt>{t("像素密度 DPR")}</dt>
-          <dd className="font-mono font-semibold">{snap.dpr}</dd>
-        </div>
-        <div className="flex justify-between gap-2">
-          <dt>{t("網頁字級")}</dt>
-          <dd className="font-mono font-semibold">{snap.fontSize}</dd>
-        </div>
-        <div className="flex justify-between gap-2">
-          <dt>{t("小平板縮放")}</dt>
-          <dd className={snap.scaleActive ? "font-semibold text-emerald-700" : "font-semibold text-amber-700"}>
-            {snap.scaleActive ? t("已啟用") : t("未啟用")}
-          </dd>
-        </div>
-        <div className="flex justify-between gap-2">
-          <dt>{t("裝置類型")}</dt>
-          <dd className="font-semibold">{snap.device}</dd>
-        </div>
-      </dl>
-      {!snap.scaleActive ? (
-        <p className="mt-2 leading-relaxed text-amber-800">
-          {t("縮放冇生效：如果呢部機實際唔係 900–1023px 闊，請將上面數字 send 返俾我哋改觸發條件。")}
-        </p>
+      {expanded ? (
+        <>
+          <dl className="mt-2 grid grid-cols-1 gap-y-1">
+            <div className="flex justify-between gap-2">
+              <dt>{t("畫面闊 × 高")}</dt>
+              <dd className="font-mono font-semibold">{snap.width} × {snap.height}</dd>
+            </div>
+            <div className="flex justify-between gap-2">
+              <dt>{t("像素密度 DPR")}</dt>
+              <dd className="font-mono font-semibold">{snap.dpr}</dd>
+            </div>
+            <div className="flex justify-between gap-2">
+              <dt>{t("網頁字級")}</dt>
+              <dd className="font-mono font-semibold">{snap.fontSize}</dd>
+            </div>
+            <div className="flex justify-between gap-2">
+              <dt>{t("小平板縮放")}</dt>
+              <dd className={snap.scaleActive ? "font-semibold text-emerald-700" : "font-semibold text-amber-700"}>
+                {snap.scaleActive ? t("已啟用") : t("未啟用")}
+              </dd>
+            </div>
+            <div className="flex justify-between gap-2">
+              <dt>{t("裝置類型")}</dt>
+              <dd className="font-semibold">{snap.device}</dd>
+            </div>
+          </dl>
+          {!snap.scaleActive ? (
+            <p className="mt-2 leading-relaxed text-amber-800">
+              {t("縮放冇生效：如果呢部機實際唔係 900–1023px 闊，請將上面數字 send 返俾我哋改觸發條件。")}
+            </p>
+          ) : null}
+        </>
       ) : null}
     </section>
   );

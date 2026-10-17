@@ -17,6 +17,7 @@
 ## 返結
 - 四鐵律：同機正常≠上雲（查 reopen_count）；維持 reopened+keepPaidStatus；reopen_count/at/reason 單調遞增；加 `pos_orders` 欄位要改**四條**讀取路徑（pos-order-mapper／pos-order-row／/api/pos/orders 內聯 mapper／sync baseRecord）。
 - temp-reopen 枱只寫本機（`stripReopenTempTables()`）⇒ 跨機返結失聯（J 拍板：桌台總覽另開「返結帳(N)」區塊、整卡條件 render）；`reopenOriginalTableId/Name` 未上雲（未修）。reopened 唔計營業額＝正確口徑。
+- 🔴 2026-10-17 逆轉（J 拍板）：**本地快餐 counter 單可以返結**（`isReopenable()` 已搬咗去 `pos-order-filters.ts` 做單測；純線上 counter 單維持排除）。`reopenPosOrder()` counter 單**跳過 temp 枱**（快餐機可能冇 floors 且 `quickPaidFlow` 要求 tableId==="counter"）。快餐返結單**停留喺線下訂單列**（`quickReopenedOrders` memo → strip `mode:"reopened"` 卡：靛藍「已返結」＋已結帳 badge＋查看／編輯）；`getPaymentBadge()` reopened 特判「已結帳」（錢收過）。`handleReopen()` 跳轉必帶 `order.tableId`（counter 單丟空 ⇒ deep-link 直接 return，撳咗冇反應）。快餐頁首已有 PosToolsMenu（popupWidth=240）。
 
 ## 鑑權／Realtime／打印
 - `posRouteAuthGuard()` 放 early-return 之後；`POS_REQUIRE_DEVICE_AUTH` 冇設＝開閘；TTL 12h。

@@ -1,0 +1,1335 @@
+<!doctype html>
+<html lang="zh-HK">
+<head>
+<meta charset="utf-8">
+<title>快餐模式：手動更新 ＋ 反結 — 實機確認稿 2026-10-17</title>
+<style>
+:root{
+  --slate-900:#0f172a;--slate-800:#1e293b;--slate-700:#334155;--slate-600:#475569;
+  --slate-500:#64748b;--slate-400:#94a3b8;--slate-300:#cbd5e1;--slate-200:#e2e8f0;
+  --slate-100:#f1f5f9;--slate-50:#f8fafc;
+  --orange-50:#fff7ed;--orange-100:#ffedd5;--orange-200:#fed7aa;--orange-500:#f97316;
+  --orange-600:#ea580c;--orange-700:#c2410c;
+  --amber-50:#fffbeb;--amber-100:#fef3c7;--amber-200:#fde68a;--amber-300:#fcd34d;
+  --amber-500:#f59e0b;--amber-600:#d97706;--amber-700:#b45309;--amber-800:#92400e;--amber-900:#78350f;
+  --emerald-50:#ecfdf5;--emerald-100:#d1fae5;--emerald-500:#10b981;--emerald-600:#059669;--emerald-700:#047857;
+  --rose-50:#fff1f2;--rose-200:#fecdd3;--rose-600:#e11d48;--rose-700:#be123c;
+  --indigo-50:#eef2ff;--indigo-100:#e0e7ff;--indigo-200:#c7d2fe;--indigo-500:#6366f1;--indigo-700:#4338ca;
+  --sky-50:#f0f9ff;--sky-700:#0369a1;
+  --red-600:#dc2626;
+  --ink:#0f172a;--muted:#64748b;--line:#e2e8f0;
+}
+*{box-sizing:border-box}
+body{margin:0;background:#eef2f6;color:var(--ink);
+  font-family:system-ui,-apple-system,"Segoe UI","Noto Sans TC","PingFang HK",sans-serif}
+
+.review{background:#0f172a;color:#e2e8f0;padding:13px 20px}
+.review h1{margin:0;font-size:15px;font-weight:600}
+.review p{margin:3px 0 0;font-size:12px;color:#94a3b8;line-height:1.6}
+.review .note{color:#fbbf24}
+.tabs{display:inline-flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.tabs button{border:1px solid #334155;background:#1e293b;color:#cbd5e1;border-radius:999px;
+  padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer}
+.tabs button.on{background:#f97316;border-color:#f97316;color:#fff}
+
+.stage{max-width:1180px;margin:18px auto 40px;position:relative;overflow:hidden;
+  border-radius:22px;background:#fff;box-shadow:0 1px 3px rgba(15,23,42,.12)}
+.canvas{width:1180px;height:820px;position:absolute;top:0;left:0;transform-origin:top left;
+  display:flex;flex-direction:column;overflow:hidden}
+.screenwrap{flex:1;min-height:0;display:none;flex-direction:column;gap:9px;padding:13px 20px 15px}
+.screenwrap.on{display:flex}
+
+.scrhead{flex:none}
+.h1{font-size:15px;font-weight:600}
+.sub{font-size:12px;color:var(--muted);margin-top:3px;line-height:1.6}
+.sub b{color:#0f172a}
+.legend{display:flex;flex-wrap:wrap;gap:6px;margin-top:7px}
+.lg{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:600;
+  background:#fff7ed;color:#9a3412;border:1px solid #fed7aa;border-radius:999px;padding:3px 10px;line-height:1.5}
+.lg .n{width:16px;height:16px;border-radius:999px;background:#dc2626;color:#fff;
+  display:grid;place-items:center;font-size:10px;font-weight:700;flex:none}
+.lg.new{background:#fef2f2;border-color:#fecaca;color:#991b1b}
+.lg.ask{background:#fffbeb;border-color:#fde68a;color:#92400e}
+
+.frame{position:relative;flex:1;min-height:0;border:1px solid var(--slate-300);
+  border-radius:16px;overflow:hidden;background:var(--slate-100)}
+
+/* ── 側欄 ───────────────────────────────────────────── */
+.app{position:relative;display:grid;grid-template-columns:72px minmax(0,1fr);height:100%;min-height:0}
+.sb{background:var(--slate-900);color:#fff;display:grid;grid-template-rows:1fr auto;
+  gap:8px;padding:12px 8px;min-height:0}
+.sbnav{display:grid;gap:8px;align-content:start}
+.sbitem{background:var(--slate-800);color:#cbd5e1;border-radius:16px;padding:9px 4px;
+  display:flex;flex-direction:column;align-items:center;gap:5px;
+  font-size:11px;font-weight:600;line-height:1.25;text-align:center}
+.sbitem.on{background:var(--orange-500);color:#fff}
+.sbic{width:26px;height:26px;border-radius:999px;background:rgba(255,255,255,.12);
+  display:grid;place-items:center;font-size:12px}
+.sbfoot{display:grid;gap:7px}
+.sbstore{background:var(--slate-800);border-radius:16px;padding:7px 4px;text-align:center}
+.sbn{font-size:8px;line-height:1.3}
+.sbr{margin-top:3px;font-size:6px;color:var(--slate-400)}
+.sbbadge{background:var(--emerald-600);border-radius:16px;padding:7px 2px;text-align:center;
+  font-size:11px;font-weight:600}
+
+/* ── 快餐三欄 ───────────────────────────────────────── */
+.qbody{display:flex;flex-direction:column;min-height:0;min-width:0;background:var(--slate-100)}
+.qcols{display:grid;grid-template-columns:260px minmax(0,1fr) 280px;flex:1;min-height:0}
+.qleft{background:#fff;border-right:1px solid var(--line);display:flex;flex-direction:column;
+  min-height:0;min-width:0;overflow:hidden;position:relative}
+.qmid{background:var(--slate-100);display:flex;flex-direction:column;min-height:0;min-width:0}
+.qright{background:#fff;border-left:1px solid var(--line);display:flex;flex-direction:column;min-height:0;min-width:0}
+
+.qstore{padding:14px 16px 12px;border-bottom:1px solid var(--slate-100);position:relative;
+  display:flex;justify-content:space-between;align-items:center}
+.qsname{font-size:16px;font-weight:600;line-height:1.3}
+.qssub{font-size:12px;color:var(--slate-500);margin-top:4px;line-height:1.4}
+.qacts{display:flex;align-items:center;gap:8px;justify-content:flex-end}
+.qbadge{white-space:nowrap;border-radius:999px;background:var(--slate-100);
+  padding:5px 11px;font-size:12px;font-weight:600;color:var(--slate-600)}
+.btn{font-size:14px;font-weight:600;border-radius:16px;padding:9px 15px;background:#fff;
+  color:var(--ink);box-shadow:inset 0 0 0 1px var(--slate-200);white-space:nowrap;border:0}
+.btn.primary{background:var(--orange-500);color:#fff;box-shadow:none;padding:10px 16px}
+.btn.amber{background:var(--amber-600);color:#fff;box-shadow:none;padding:9px 15px}
+.btn.sm{font-size:12px;padding:8px 12px;border-radius:12px}
+.toolbtn{position:relative;flex:none;width:42px;height:42px;border-radius:16px;background:#fff;
+  box-shadow:inset 0 0 0 1px var(--slate-200);display:grid;place-items:center;cursor:pointer}
+.toolbtn:hover{background:var(--slate-50)}
+.tbadge{position:absolute;top:-5px;right:-5px;min-width:17px;height:17px;border-radius:999px;
+  background:var(--amber-500);color:#fff;font-size:10px;font-weight:700;display:grid;place-items:center;
+  padding:0 4px;box-shadow:0 0 0 2px #fff}
+
+.toolpop{position:absolute;top:calc(100% + 6px);right:16px;z-index:40;width:240px;
+  background:#fff;border:1px solid var(--slate-200);border-radius:16px;
+  box-shadow:0 20px 25px -5px rgba(15,23,42,.25);padding:6px}
+.tphead{padding:7px 10px 4px;font-size:11px;font-weight:600;letter-spacing:.08em;color:var(--slate-400)}
+.tpitem{display:block;width:100%;text-align:left;border:0;background:transparent;cursor:pointer;
+  border-radius:12px;padding:9px 10px}
+.tpitem:hover{background:var(--slate-50)}
+.tpt{font-size:13px;font-weight:600;color:var(--slate-900)}
+.tpd{font-size:11px;color:var(--slate-500);margin-top:3px;line-height:1.55}
+.tpnote{margin:5px 10px 3px;background:var(--amber-50);border-radius:10px;padding:7px 9px;
+  font-size:11px;font-weight:600;color:var(--amber-700);line-height:1.5}
+
+.qsec{padding:12px 16px 0}
+.qsect{font-size:14px;font-weight:600}
+.qsecc{font-size:12px;color:var(--slate-500);margin-top:2px}
+.typetabs{margin:10px 16px 0;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;
+  background:#fff;border:1px solid var(--slate-200);border-radius:16px;padding:6px}
+.ttab{border:0;border-radius:12px;background:var(--slate-100);color:var(--slate-700);
+  font-size:12px;font-weight:600;padding:9px 2px;cursor:pointer;line-height:1.3}
+.ttab.on{background:var(--orange-500);color:#fff}
+.qcart{flex:1;min-height:0;overflow:hidden;padding:10px 12px;display:grid;gap:8px;align-content:start}
+.qempty{border:1px dashed var(--slate-200);border-radius:16px;background:var(--slate-50);
+  padding:22px 14px;text-align:center;font-size:12px;color:var(--slate-500);line-height:1.6}
+.cartcard{border:1px solid var(--slate-100);background:var(--slate-50);border-radius:16px;padding:10px 12px}
+.cartcard .cn{font-size:13px;font-weight:600;line-height:1.4}
+.cartcard .cm{font-size:11px;color:var(--slate-500);margin-top:4px;line-height:1.5}
+.cartcard .cp{font-size:14px;font-weight:700;margin-top:6px;text-align:right}
+.lockchip{display:inline-block;margin-left:6px;border-radius:999px;background:var(--slate-200);
+  color:var(--slate-700);font-size:10px;font-weight:600;padding:2px 8px;vertical-align:1px}
+
+.midhead{padding:12px 16px 10px;display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.mchip{border:0;cursor:pointer;background:#fff;color:var(--slate-700);border-radius:999px;
+  box-shadow:inset 0 0 0 1px var(--slate-200);font-size:12px;font-weight:600;padding:8px 13px;white-space:nowrap}
+.mchip.on{background:var(--orange-500);color:#fff;box-shadow:none}
+.mspacer{flex:1}
+.msearch{border:0;background:#fff;box-shadow:inset 0 0 0 1px var(--slate-200);border-radius:999px;
+  font-size:12px;color:var(--slate-500);padding:9px 14px;white-space:nowrap}
+.midgrid{flex:1;min-height:0;overflow:hidden;padding:0 16px 14px;display:grid;
+  grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;align-content:start}
+.itemcard{background:#fff;border:1px solid var(--slate-200);border-radius:16px;padding:12px;min-width:0}
+.itemcard .in{font-size:13px;font-weight:600;line-height:1.4}
+.itemcard .ip{font-size:13px;font-weight:700;color:var(--orange-600);margin-top:6px}
+
+.rhead{padding:14px 16px 12px;border-bottom:1px solid var(--slate-100)}
+.rht{font-size:15px;font-weight:600}
+.rhc{font-size:11px;color:var(--slate-500);margin-top:4px;line-height:1.55}
+.rbody{flex:1;min-height:0;padding:12px 16px;display:flex;flex-direction:column;gap:8px}
+.payrow{display:flex;justify-content:space-between;font-size:13px;color:var(--slate-600);padding:4px 0}
+.payrow b{color:var(--ink);font-weight:600}
+.payrow.disc b{color:var(--amber-700)}
+.paydue{margin-top:10px;border-top:1px solid var(--slate-200);padding-top:10px}
+.paydue .pl{font-size:12px;font-weight:600;color:var(--slate-500)}
+.paydue .pv{font-size:30px;font-weight:600;letter-spacing:-0.02em;color:var(--orange-600);line-height:1.15;margin-top:2px}
+.paybig{margin-top:14px;border:0;border-radius:16px;background:var(--slate-900);color:#fff;
+  font-size:15px;font-weight:600;padding:13px 16px;width:100%;cursor:pointer;text-align:center}
+.paybig:hover{background:var(--slate-800)}
+.paybig.dis{background:var(--slate-200);color:var(--slate-400);cursor:default}
+/* 暫隱 badge 嘅 ghost 提示（s3） */
+.ghostbadge{border:1.5px dashed var(--slate-300);border-radius:999px;color:var(--slate-400);
+  font-size:10px;font-weight:600;padding:3px 8px;white-space:nowrap;background:var(--slate-50)}
+.printops{border-top:1px solid var(--slate-100);padding:10px 16px 12px;display:grid;gap:7px}
+.poauto{display:flex;align-items:center;justify-content:space-between;font-size:11px;
+  font-weight:600;color:var(--slate-600)}
+.sw{width:34px;height:20px;border-radius:999px;background:var(--emerald-500);position:relative;flex:none}
+.sw i{position:absolute;top:2px;right:2px;width:16px;height:16px;border-radius:999px;background:#fff}
+.pobtns{display:grid;grid-template-columns:1fr 1fr;gap:7px}
+.pob{ border:0;border-radius:12px;background:#fff;box-shadow:inset 0 0 0 1px var(--slate-200);
+  font-size:11px;font-weight:600;color:var(--slate-700);padding:9px 4px;cursor:pointer}
+
+/* ── 底部訂單列 ─────────────────────────────────────── */
+.ordersbar{flex:none;border-top:1px solid var(--slate-200);background:#fff;
+  display:grid;grid-template-columns:1fr 1fr}
+.obsec{min-width:0;padding:9px 12px 11px;display:flex;flex-direction:column;gap:7px}
+.obsec + .obsec{border-left:1px solid var(--slate-200)}
+.obhead{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:6px}
+.obt{font-size:12px;font-weight:600;letter-spacing:.04em;color:var(--slate-500);white-space:nowrap}
+.obpills{display:flex;align-items:center;gap:6px}
+.opill{border:0;cursor:pointer;border-radius:999px;font-size:11px;font-weight:600;
+  padding:7px 11px;white-space:nowrap;line-height:1.3}
+.opill.green{background:var(--emerald-100);color:var(--emerald-700)}
+.opill.gray{background:var(--slate-100);color:var(--slate-600)}
+.strip{display:flex;gap:8px;overflow:hidden}
+.ocard{flex:none;width:200px;height:118px;border:1px solid var(--slate-200);border-radius:14px;
+  background:#fff;padding:9px 10px;display:flex;flex-direction:column;gap:5px;min-width:0}
+.ocard .on{display:flex;align-items:center;justify-content:space-between;gap:6px}
+.ocard .ono{font-size:12px;font-weight:600;white-space:nowrap}
+.opill2{border:0;border-radius:999px;font-size:10px;font-weight:600;padding:3px 8px;white-space:nowrap}
+.opill2.amber{background:var(--amber-100);color:var(--amber-700)}
+.opill2.sky{background:#e0f2fe;color:#0369a1}
+.opill2.em{background:var(--emerald-100);color:var(--emerald-700)}
+.ocard .om{font-size:10px;color:var(--slate-500);line-height:1.45;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.ocard .ob{display:flex;gap:6px;margin-top:auto}
+.obtn{border:0;border-radius:10px;font-size:10px;font-weight:600;padding:6px 9px;cursor:pointer;white-space:nowrap}
+.obtn.dark{background:var(--slate-900);color:#fff}
+.obtn.or{background:var(--orange-500);color:#fff}
+.obtn.em{background:var(--emerald-600);color:#fff}
+.obempty{border:1px dashed var(--slate-200);border-radius:14px;background:var(--slate-50);
+  height:64px;display:grid;place-items:center;font-size:11px;color:var(--slate-500)}
+/* 返結單卡（s6）：沿用 .ocard，加 ro 變體 */
+.ocard.ro{border-color:#c7d2fe;background:#eef2ff}
+.ocard .orow2{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.opay{border:0;border-radius:999px;font-size:10px;font-weight:600;padding:3px 8px;white-space:nowrap;
+  background:var(--emerald-100);color:var(--emerald-700)}
+.opill2.indigo{background:var(--indigo-100);color:var(--indigo-700)}
+.obtn.amber{background:var(--amber-600);color:#fff}
+.obtn.amber:hover{background:#d97706}
+/* 原生 select 外觀（s5 彈窗） */
+.selfield{margin-top:7px;border:1px solid var(--amber-300);border-radius:12px;background:#fff;
+  display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 12px;
+  font-size:12px;color:var(--slate-400)}
+.selfield .chev{flex:none;width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;
+  border-top:6px solid var(--slate-400)}
+.seldrop{margin-top:5px;border:1px solid var(--slate-200);border-radius:12px;overflow:hidden;
+  box-shadow:0 12px 20px -8px rgba(15,23,42,.25)}
+/* 收據紙（s5b） */
+.rcpt{background:#fff;border:1px solid var(--slate-200);border-radius:12px;padding:14px 16px;
+  font-size:11px;color:var(--slate-700);line-height:1.8}
+.rcpt .rct{font-size:13px;font-weight:700;color:var(--ink);letter-spacing:.04em}
+.rcpt .rline{border-top:1px dashed var(--slate-200);margin:7px 0}
+.rcpt .rrow{display:flex;justify-content:space-between;gap:10px}
+.rcpt .rtot{font-size:13px;font-weight:700;color:var(--ink)}
+.rcpt .rmut{color:var(--slate-400);font-size:10px}
+
+/* ── 返結 banner ────────────────────────────────────── */
+.roBanner{margin:10px 16px 0;border:1px solid var(--amber-300);background:var(--amber-50);
+  border-radius:16px;padding:11px 13px}
+.roBanner .rt{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.ropill{display:inline-flex;align-items:center;gap:6px;white-space:nowrap;border-radius:999px;
+  background:var(--amber-500);color:#fff;font-size:12px;font-weight:700;padding:4px 11px}
+.ropill i{width:9px;height:9px;border-radius:999px;background:#fff;display:inline-block}
+.roBanner .rd{font-size:11px;font-weight:600;color:var(--amber-800);line-height:1.55;margin-top:6px}
+.roBanner .rr{font-size:11px;color:var(--amber-700);margin-top:2px;line-height:1.5}
+
+/* ── /orders 頁 ─────────────────────────────────────── */
+.opage{position:relative;display:grid;grid-template-columns:72px minmax(0,1fr);height:100%;min-height:0}
+.omain{display:flex;flex-direction:column;min-height:0;min-width:0;background:#fff}
+.ohead{flex:none;border-bottom:1px solid var(--slate-200);padding:11px 16px;
+  display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center}
+.oht{font-size:16px;font-weight:600}
+.ohc{font-size:11px;color:var(--slate-500);margin-top:3px}
+.oacts{display:flex;flex-wrap:wrap;align-items:center;gap:7px;justify-content:flex-end}
+.dchip{border:0;cursor:pointer;background:var(--slate-100);color:var(--slate-700);border-radius:999px;
+  font-size:11px;font-weight:600;padding:7px 11px;white-space:nowrap}
+.dchip.on{background:var(--orange-500);color:#fff}
+.expbtn{border:0;cursor:pointer;border-radius:999px;font-size:11px;font-weight:600;padding:8px 12px;white-space:nowrap}
+.expbtn.dark{background:var(--slate-900);color:#fff}
+.expbtn.gray{background:var(--slate-200);color:var(--slate-700)}
+.obody{flex:1;min-height:0;display:grid;grid-template-rows:minmax(0,5fr) minmax(0,7fr)}
+.osec{min-height:0;display:flex;flex-direction:column;overflow:hidden}
+.osec.top{background:var(--slate-50);border-bottom:1px solid var(--slate-200)}
+.osec.bottom{background:#fff}
+.osechead{flex:none;padding:9px 16px;display:flex;flex-wrap:wrap;align-items:center;gap:8px;
+  border-bottom:1px solid var(--slate-100)}
+.osechead .ot{font-size:13px;font-weight:600;white-space:nowrap}
+.osechead .os{font-size:11px;color:var(--slate-500);white-space:nowrap}
+.fchip{border:0;cursor:pointer;background:#fff;color:var(--slate-600);border-radius:999px;
+  box-shadow:inset 0 0 0 1px var(--slate-200);font-size:11px;font-weight:600;padding:6px 10px;white-space:nowrap}
+.fchip.on{background:var(--orange-500);color:#fff;box-shadow:none}
+.tblwrap{flex:1;min-height:0;overflow:hidden;padding:0 16px 10px}
+table.ot{width:100%;border-collapse:collapse;table-layout:fixed}
+table.ot th{font-size:11px;font-weight:600;color:var(--slate-500);text-align:left;
+  padding:7px 8px;border-bottom:1px solid var(--slate-200);white-space:nowrap}
+table.ot td{font-size:12px;color:var(--slate-700);padding:9px 8px;border-bottom:1px solid var(--slate-100);
+  vertical-align:middle;white-space:nowrap;overflow:hidden}
+table.ot tr.hl td{background:var(--amber-50)}
+.ono2{font-size:12px;font-weight:600;color:var(--ink);white-space:nowrap}
+.otag{display:inline-block;border-radius:999px;font-size:10px;font-weight:600;padding:2px 8px;white-space:nowrap}
+.otag.em{background:var(--emerald-100);color:var(--emerald-700)}
+.otag.sl{background:var(--slate-100);color:var(--slate-600)}
+.otag.am{background:var(--amber-100);color:var(--amber-700)}
+.srcpill{display:inline-flex;align-items:center;gap:5px;border-radius:999px;background:var(--slate-100);
+  color:var(--slate-600);font-size:10px;font-weight:600;padding:4px 9px;white-space:nowrap}
+.rowbtns{display:flex;gap:6px;justify-content:flex-end}
+.rbtn{border:0;cursor:pointer;border-radius:10px;font-size:11px;font-weight:600;padding:8px 11px;white-space:nowrap}
+.rbtn.dark{background:var(--slate-900);color:#fff}
+.rbtn.amber{background:var(--amber-600);color:#fff}
+
+/* ── 彈窗 ───────────────────────────────────────────── */
+.ovl{position:absolute;inset:0;z-index:52;background:rgba(15,23,42,.45);
+  display:grid;place-items:center;padding:10px}
+.panel{position:relative;width:448px;max-width:100%;margin-left:72px;background:#fff;
+  border-radius:24px;box-shadow:0 25px 50px -12px rgba(15,23,42,.4);padding:28px}
+.mk-ttl{font-size:19px;font-weight:600;color:var(--slate-900);line-height:1.4}
+.mk-desc{font-size:12px;color:var(--slate-500);margin-top:8px;line-height:1.65}
+.sellabel{font-size:12px;font-weight:600;color:var(--slate-700);margin-top:18px}
+.selbox{margin-top:7px;border:1px solid var(--slate-300);border-radius:12px;overflow:hidden}
+.selopt{padding:10px 12px;font-size:12px;color:var(--slate-700);display:flex;align-items:center;gap:8px}
+.selopt + .selopt{border-top:1px solid var(--slate-100)}
+.selopt.on{background:var(--orange-50);color:var(--orange-700);font-weight:600}
+.selopt .dot{width:14px;height:14px;border-radius:999px;box-shadow:inset 0 0 0 1.5px var(--slate-300);flex:none}
+.selopt.on .dot{background:var(--orange-500);box-shadow:inset 0 0 0 1.5px var(--orange-500)}
+.mkbtns{display:flex;gap:9px;margin-top:22px}
+.mkbtns .btn{flex:1;text-align:center;padding:12px}
+.mkbtns .btn.amber{background:var(--amber-600)}
+.mkhint{font-size:11px;color:var(--slate-400);margin-top:11px;line-height:1.6}
+
+/* ── 規格頁 ─────────────────────────────────────────── */
+#s7 .frame{overflow-y:auto;background:var(--slate-50)}
+.spec{padding:12px 14px;display:grid;gap:9px}
+.card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:11px 13px}
+.ct{font-size:12.5px;font-weight:600;margin-bottom:6px}
+.cb{font-size:11.5px;color:var(--slate-600);line-height:1.7}
+.cb code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:10.5px;background:var(--slate-100);
+  padding:1px 5px;border-radius:4px}
+table.mx{width:100%;border-collapse:collapse;font-size:10.5px}
+table.mx th,table.mx td{border:1px solid var(--line);padding:5px 7px;text-align:left;vertical-align:top;line-height:1.5}
+table.mx th{background:var(--slate-100);font-weight:600;color:var(--slate-700);white-space:nowrap}
+table.mx td.k{font-family:ui-monospace,Menlo,monospace;font-size:10px;color:var(--slate-600);white-space:nowrap}
+td.rk-lo{color:#047857;font-weight:600;white-space:nowrap}
+td.rk-mid{color:#b45309;font-weight:600;white-space:nowrap}
+.askbox{background:var(--amber-50);border:1px solid var(--amber-300);border-radius:14px;padding:10px 13px}
+.askbox .at{font-size:12px;font-weight:600;color:#92400e;margin-bottom:4px}
+.askbox ul{margin:0;padding-left:18px;font-size:11.5px;color:var(--amber-900);line-height:1.75}
+/* 已拍板（綠）／新問題解答（藍） */
+.okbox{background:var(--emerald-50);border:1px solid var(--emerald-500);border-radius:14px;padding:10px 13px}
+.okbox .at{font-size:12px;font-weight:600;color:#047857;margin-bottom:4px}
+.okbox ul{margin:0;padding-left:18px;font-size:11.5px;color:#065f46;line-height:1.75}
+.qbox{background:var(--sky-50);border:1px solid #7dd3fc;border-radius:14px;padding:10px 13px}
+.qbox .at{font-size:12px;font-weight:600;color:#075985;margin-bottom:4px}
+.qbox ul{margin:0;padding-left:18px;font-size:11.5px;color:#0c4a6e;line-height:1.75}
+.lg.done{border-color:var(--emerald-500);color:#065f46;background:var(--emerald-50)}
+.lg .n.done{background:#047857}
+.flowsteps{display:grid;gap:5px;font-size:11.5px;color:var(--slate-600);line-height:1.6}
+.fstep{display:flex;gap:8px;align-items:flex-start}
+.fstep .fn{flex:none;width:17px;height:17px;border-radius:999px;background:var(--orange-500);color:#fff;
+  font-size:10px;font-weight:700;display:grid;place-items:center;margin-top:1px}
+
+.rel{position:relative;display:inline-flex}
+.pin{position:absolute;width:22px;height:22px;border-radius:999px;background:var(--red-600);
+  color:#fff;font-size:12px;font-weight:700;display:grid;place-items:center;
+  box-shadow:0 0 0 2px #fff;z-index:60}
+</style>
+</head>
+<body>
+
+<div class="review">
+  <h1>快餐模式：「手動更新／下載雲端訂單」＋「反結」— 實機確認稿</h1>
+  <p>2026-10-17 · 產品畫面用真實色（Tailwind 真值）＋ 真實版面尺寸；深色框係評審工具列，<span class="note">唔屬於產品介面</span>。全部紅色數字圈 ＝ 要你睇嘅改動點。</p>
+  <div class="tabs" id="rtabs">
+    <button class="on" data-tab="s1">① 現狀 · 快餐頁首</button>
+    <button data-tab="s2">② 改後 · 維修工具選單</button>
+    <button data-tab="s3">③ 改後 · 未開工 badge 暫隱</button>
+    <button data-tab="s4">④ 改後 · 訂單列表加「返結帳」</button>
+    <button data-tab="s5">⑤ 返結原因彈窗</button>
+    <button data-tab="s5b">⑤b 改後 · 收據預覽加「返結帳」</button>
+    <button data-tab="s6">⑥ 返結後 · 回到點餐介面</button>
+    <button data-tab="s7">⑦ 改動清單 ＋ 已拍板事項</button>
+  </div>
+</div>
+
+<div class="stage" id="stage">
+<div class="canvas" id="canvas">
+
+<!-- ═══════════ ① 現狀 ═══════════ -->
+<div class="screenwrap on" id="s1">
+  <div class="scrhead">
+    <div class="h1">① 現狀 — 快餐模式頁首得「開工」＋「快餐模式」，冇手動更新入口</div>
+    <div class="sub">左欄（260px）係商店資訊＋訂單明細；中間係商品區；右欄係收銀與支付；底部係線上／線下訂單列。<b>斷線漏單／另一部機改咗菜單，而家只能 reload 個 page 補</b>（mount 先會再拉一次）。</div>
+    <div class="legend">
+      <span class="lg new"><span class="n">1</span>缺口：呢度冇「手動更新／下載雲端訂單」掣（堂食桌台總覽有）</span>
+    </div>
+  </div>
+  <div class="frame">
+    <div class="app">
+      <aside class="sb">
+        <div class="sbnav">
+          <div class="sbitem on"><span class="sbic">點</span>點餐</div>
+          <div class="sbitem"><span class="sbic">單</span>訂單</div>
+        </div>
+        <div class="sbfoot">
+          <div class="sbstore"><div class="sbn">TN CAFE</div><div class="sbr">66123073</div></div>
+          <div class="sbbadge">營業中</div>
+        </div>
+      </aside>
+      <div class="qbody">
+        <div class="qcols">
+          <section class="qleft">
+            <div class="qstore">
+              <div>
+                <div class="qsname">TN CAFE</div>
+                <div class="qssub">66123073</div>
+              </div>
+              <div class="qacts">
+                <span class="rel"><span class="pin" style="top:-12px;left:-24px">1</span><span class="qbadge">快餐模式</span></span>
+              </div>
+            </div>
+            <div class="qsec">
+              <div class="qsect">訂單明細</div>
+              <div class="qsecc">0 項</div>
+            </div>
+            <div class="typetabs">
+              <button class="ttab on" type="button">堂食</button>
+              <button class="ttab" type="button">外賣</button>
+              <button class="ttab" type="button">自取</button>
+            </div>
+            <div class="qcart">
+              <div class="qempty">請從右側商品區加入菜品</div>
+            </div>
+          </section>
+          <section class="qmid">
+            <div class="midhead">
+              <button class="mchip on" type="button">全部</button>
+              <button class="mchip" type="button">Promo Product</button>
+              <button class="mchip" type="button">Cookies</button>
+              <button class="mchip" type="button">Tn promo</button>
+              <button class="mchip" type="button">TN Set Meal</button>
+              <span class="mspacer"></span>
+              <span class="msearch">搜尋商品</span>
+            </div>
+            <div class="midgrid">
+              <div class="itemcard"><div class="in">Americano Hot (Walk-in)</div><div class="ip">MOP 30.00</div></div>
+              <div class="itemcard"><div class="in">人氣半筋半肉麵</div><div class="ip">MOP 85.00</div></div>
+              <div class="itemcard"><div class="in">港式奶茶</div><div class="ip">MOP 22.00</div></div>
+            </div>
+          </section>
+          <section class="qright">
+            <div class="rhead">
+              <div class="rht">收銀與支付</div>
+              <div class="rhc">點餐結帳在此；線上 / 線下訂單見螢幕下方</div>
+            </div>
+            <div class="rbody">
+              <div class="payrow"><span>小計</span><b>MOP 0.00</b></div>
+              <div class="payrow disc"><span>折扣</span><b>-MOP 0.00</b></div>
+              <div class="paydue">
+                <div class="pl">應收</div>
+                <div class="pv">MOP 0.00</div>
+              </div>
+              <button class="paybig dis" type="button">去結帳</button>
+            </div>
+            <div class="printops">
+              <div class="poauto"><span>自動打印</span><span class="sw"><i></i></span></div>
+              <div class="pobtns">
+                <button class="pob" type="button">打印廚房單</button>
+                <button class="pob" type="button">打印收據</button>
+              </div>
+            </div>
+          </section>
+        </div>
+        <div class="ordersbar">
+          <div class="obsec">
+            <div class="obhead">
+              <span class="obt">線上訂單</span>
+              <span class="obpills">
+                <span class="opill green">接單中</span>
+                <span class="opill gray">自動接單</span>
+              </span>
+            </div>
+            <div class="strip">
+              <div class="ocard">
+                <div class="on"><span class="ono">取餐 012</span><span class="opill2 amber">製作中</span></div>
+                <div class="om">奶茶（大）×1 · 菠蘿包×1</div>
+                <div class="ob"><span class="obtn dark">查看</span><span class="obtn or">可取餐</span></div>
+              </div>
+            </div>
+          </div>
+          <div class="obsec">
+            <div class="obhead">
+              <span class="obt">線下訂單</span>
+              <span class="obpills">
+                <span class="opill green">營業中</span>
+                <span class="opill gray">自動接自助單</span>
+              </span>
+            </div>
+            <div class="obempty">暫無線下訂單</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ ② 改後 · 工具選單 ═══════════ -->
+<div class="screenwrap" id="s2">
+  <div class="scrhead">
+    <div class="h1">② 改動 A — 左欄頁首加一粒「維修工具」icon（42×42，同堂食同一粒）</div>
+    <div class="sub">撳一下彈選單：<b>手動更新</b>＝強制全量拉取（菜單／設定／<b>雲端訂單</b>／打印 Jobs）＋ 自動 reload；<b>同步健康</b>＝檢查未上雲單、重試補錄。icon 右上角琥珀角標 ＝ 待上傳數量（同側欄「在線」同一份真源）。</div>
+    <div class="legend">
+      <span class="lg"><span class="n">2</span>新增 42px 工具 icon（貼住「快餐模式」左邊）</span>
+      <span class="lg"><span class="n">3</span>「手動更新」＝ 你講嘅下載雲端訂單（強制全量雲端拉取後 reload）</span>
+      <span class="lg done"><span class="n done">✓</span>已拍板：選單收窄 240px 適應左欄（否則 330px 會被 overflow-hidden 裁走）</span>
+      <span class="lg ask"><span class="n">?</span>同步健康而家喺快餐模式經「同步受阻」橫額都入到，加落選單係一致性考慮</span>
+    </div>
+  </div>
+  <div class="frame">
+    <div class="app">
+      <aside class="sb">
+        <div class="sbnav">
+          <div class="sbitem on"><span class="sbic">點</span>點餐</div>
+          <div class="sbitem"><span class="sbic">單</span>訂單</div>
+        </div>
+        <div class="sbfoot">
+          <div class="sbstore"><div class="sbn">TN CAFE</div><div class="sbr">66123073</div></div>
+          <div class="sbbadge">營業中</div>
+        </div>
+      </aside>
+      <div class="qbody">
+        <div class="qcols">
+          <section class="qleft">
+            <div class="qstore">
+              <div>
+                <div class="qsname">TN CAFE</div>
+                <div class="qssub">66123073</div>
+              </div>
+              <div class="qacts">
+                <span class="rel"><span class="pin" style="top:-12px;left:-22px">2</span>
+                  <span class="toolbtn">
+                    <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="#334155" stroke-width="2" stroke-linecap="round">
+                      <line x1="4" x2="20" y1="7" y2="7"></line><circle cx="9" cy="7" r="2.4" fill="#fff"></circle>
+                      <line x1="4" x2="20" y1="17" y2="17"></line><circle cx="15" cy="17" r="2.4" fill="#fff"></circle>
+                    </svg>
+                    <span class="tbadge">2</span>
+                  </span>
+                </span>
+                <span class="qbadge">快餐模式</span>
+              </div>
+              <div class="toolpop">
+                <div class="tphead">維修工具</div>
+                <button class="tpitem" type="button">
+                  <div class="tpt"><span class="rel"><span class="pin" style="top:-11px;left:-26px">3</span>手動更新</span></div>
+                  <div class="tpd">從伺服器強制拉取最新菜單及所有設定，套用後重新載入頁面</div>
+                </button>
+                <button class="tpitem" type="button">
+                  <div class="tpt">同步健康</div>
+                  <div class="tpd">檢查有冇「已結帳但未上到雲」嘅訂單，失敗事件重試或補錄上雲</div>
+                </button>
+                <div class="tpnote">仲有 2 張／條待上傳或未確認。</div>
+              </div>
+            </div>
+            <div class="qsec">
+              <div class="qsect">訂單明細</div>
+              <div class="qsecc">0 項</div>
+            </div>
+            <div class="typetabs">
+              <button class="ttab on" type="button">堂食</button>
+              <button class="ttab" type="button">外賣</button>
+              <button class="ttab" type="button">自取</button>
+            </div>
+            <div class="qcart">
+              <div class="qempty">請從右側商品區加入菜品</div>
+            </div>
+          </section>
+          <section class="qmid">
+            <div class="midhead">
+              <button class="mchip on" type="button">全部</button>
+              <button class="mchip" type="button">Promo Product</button>
+              <button class="mchip" type="button">Cookies</button>
+              <button class="mchip" type="button">Tn promo</button>
+              <button class="mchip" type="button">TN Set Meal</button>
+              <span class="mspacer"></span>
+              <span class="msearch">搜尋商品</span>
+            </div>
+            <div class="midgrid">
+              <div class="itemcard"><div class="in">Americano Hot (Walk-in)</div><div class="ip">MOP 30.00</div></div>
+              <div class="itemcard"><div class="in">人氣半筋半肉麵</div><div class="ip">MOP 85.00</div></div>
+              <div class="itemcard"><div class="in">港式奶茶</div><div class="ip">MOP 22.00</div></div>
+            </div>
+          </section>
+          <section class="qright">
+            <div class="rhead">
+              <div class="rht">收銀與支付</div>
+              <div class="rhc">點餐結帳在此；線上 / 線下訂單見螢幕下方</div>
+            </div>
+            <div class="rbody">
+              <div class="payrow"><span>小計</span><b>MOP 0.00</b></div>
+              <div class="payrow disc"><span>折扣</span><b>-MOP 0.00</b></div>
+              <div class="paydue">
+                <div class="pl">應收</div>
+                <div class="pv">MOP 0.00</div>
+              </div>
+              <button class="paybig dis" type="button">去結帳</button>
+            </div>
+            <div class="printops">
+              <div class="poauto"><span>自動打印</span><span class="sw"><i></i></span></div>
+              <div class="pobtns">
+                <button class="pob" type="button">打印廚房單</button>
+                <button class="pob" type="button">打印收據</button>
+              </div>
+            </div>
+          </section>
+        </div>
+        <div class="ordersbar">
+          <div class="obsec">
+            <div class="obhead">
+              <span class="obt">線上訂單</span>
+              <span class="obpills">
+                <span class="opill green">接單中</span>
+                <span class="opill gray">自動接單</span>
+              </span>
+            </div>
+            <div class="strip">
+              <div class="ocard">
+                <div class="on"><span class="ono">取餐 012</span><span class="opill2 amber">製作中</span></div>
+                <div class="om">奶茶（大）×1 · 菠蘿包×1</div>
+                <div class="ob"><span class="obtn dark">查看</span><span class="obtn or">可取餐</span></div>
+              </div>
+            </div>
+          </div>
+          <div class="obsec">
+            <div class="obhead">
+              <span class="obt">線下訂單</span>
+              <span class="obpills">
+                <span class="opill green">營業中</span>
+                <span class="opill gray">自動接自助單</span>
+              </span>
+            </div>
+            <div class="obempty">暫無線下訂單</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ ③ 未開工空間 ═══════════ -->
+<div class="screenwrap" id="s3">
+  <div class="scrhead">
+    <div class="h1">③ 未開工空間 — <span style="color:#34d399">已拍板</span>：未開工時「快餐模式」badge 暫隱，開工後返嚟</div>
+    <div class="sub">舊問題（都係實測）：開工約 60px ＋ icon 42px ＋ badge 約 72px ＋ 兩個 gap 16px ＝ <b>約 190px</b>，加店名「TN CAFE」約 66px ⇒ 合共約 256px &gt; 欄寬 228px ⇒ 店名被 flex 壓逼換行、compact 208px 下 badge 右緣仲會被裁。<b>方案 A（你已拍板）</b>：未開工 → 只顯示「開工」＋工具 icon（badge 暫隱，因為開工掣本身已表明處境）；開工後 → icon＋badge（② 嗰個）。下圖灰色虛線框 ＝ 暫隱咗嘅 badge。</div>
+    <div class="legend">
+      <span class="lg done"><span class="n done">✓</span>已拍板：未開工 badge 暫隱（方案 A）</span>
+      <span class="lg"><span class="n">4</span>開工掣 ＋ 維修工具 icon 兩個並排，店名保持單行</span>
+      <span class="lg ask"><span class="n">?</span>開工後 badge 返嚟（②）；compact 窄屏另要看實機</span>
+    </div>
+  </div>
+  <div class="frame">
+    <div class="app">
+      <aside class="sb">
+        <div class="sbnav">
+          <div class="sbitem on"><span class="sbic">點</span>點餐</div>
+          <div class="sbitem"><span class="sbic">單</span>訂單</div>
+        </div>
+        <div class="sbfoot">
+          <div class="sbstore"><div class="sbn">TN CAFE</div><div class="sbr">66123073</div></div>
+          <div class="sbbadge">營業中</div>
+        </div>
+      </aside>
+      <div class="qbody">
+        <div class="qcols">
+          <section class="qleft">
+            <div class="qstore" style="border-bottom-color:#fecaca">
+              <div>
+                <div class="qsname">TN CAFE</div>
+                <div class="qssub">66123073</div>
+              </div>
+              <div class="qacts">
+                <span class="rel"><span class="pin" style="top:-12px;left:-22px">4</span><button class="btn primary" type="button">開工</button></span>
+                <span class="toolbtn">
+                  <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="#334155" stroke-width="2" stroke-linecap="round">
+                    <line x1="4" x2="20" y1="7" y2="7"></line><circle cx="9" cy="7" r="2.4" fill="#fff"></circle>
+                    <line x1="4" x2="20" y1="17" y2="17"></line><circle cx="15" cy="17" r="2.4" fill="#fff"></circle>
+                  </svg>
+                </span>
+                <span class="ghostbadge">暫隱</span>
+              </div>
+            </div>
+            <div class="qsec">
+              <div class="qsect">訂單明細</div>
+              <div class="qsecc">0 項</div>
+            </div>
+            <div class="typetabs">
+              <button class="ttab on" type="button">堂食</button>
+              <button class="ttab" type="button">外賣</button>
+              <button class="ttab" type="button">自取</button>
+            </div>
+            <div class="qcart">
+              <div class="qempty">請從右側商品區加入菜品</div>
+            </div>
+          </section>
+          <section class="qmid">
+            <div class="midhead">
+              <button class="mchip on" type="button">全部</button>
+              <button class="mchip" type="button">Promo Product</button>
+              <button class="mchip" type="button">Cookies</button>
+              <button class="mchip" type="button">Tn promo</button>
+              <button class="mchip" type="button">TN Set Meal</button>
+              <span class="mspacer"></span>
+              <span class="msearch">搜尋商品</span>
+            </div>
+            <div class="midgrid">
+              <div class="itemcard"><div class="in">Americano Hot (Walk-in)</div><div class="ip">MOP 30.00</div></div>
+              <div class="itemcard"><div class="in">人氣半筋半肉麵</div><div class="ip">MOP 85.00</div></div>
+              <div class="itemcard"><div class="in">港式奶茶</div><div class="ip">MOP 22.00</div></div>
+            </div>
+          </section>
+          <section class="qright">
+            <div class="rhead">
+              <div class="rht">收銀與支付</div>
+              <div class="rhc">點餐結帳在此；線上 / 線下訂單見螢幕下方</div>
+            </div>
+            <div class="rbody">
+              <div class="payrow"><span>小計</span><b>MOP 0.00</b></div>
+              <div class="payrow disc"><span>折扣</span><b>-MOP 0.00</b></div>
+              <div class="paydue">
+                <div class="pl">應收</div>
+                <div class="pv">MOP 0.00</div>
+              </div>
+              <button class="paybig dis" type="button">去結帳</button>
+            </div>
+            <div class="printops">
+              <div class="poauto"><span>自動打印</span><span class="sw"><i></i></span></div>
+              <div class="pobtns">
+                <button class="pob" type="button">打印廚房單</button>
+                <button class="pob" type="button">打印收據</button>
+              </div>
+            </div>
+          </section>
+        </div>
+        <div class="ordersbar">
+          <div class="obsec">
+            <div class="obhead">
+              <span class="obt">線上訂單</span>
+              <span class="obpills">
+                <span class="opill green">接單中</span>
+                <span class="opill gray">自動接單</span>
+              </span>
+            </div>
+            <div class="strip">
+              <div class="ocard">
+                <div class="on"><span class="ono">取餐 012</span><span class="opill2 amber">製作中</span></div>
+                <div class="om">奶茶（大）×1 · 菠蘿包×1</div>
+                <div class="ob"><span class="obtn dark">查看</span><span class="obtn or">可取餐</span></div>
+              </div>
+            </div>
+          </div>
+          <div class="obsec">
+            <div class="obhead">
+              <span class="obt">線下訂單</span>
+              <span class="obpills">
+                <span class="opill green">營業中</span>
+                <span class="opill gray">自動接自助單</span>
+              </span>
+            </div>
+            <div class="obempty">暫無線下訂單</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ ④ 訂單列表 ═══════════ -->
+<div class="screenwrap" id="s4">
+  <div class="scrhead">
+    <div class="h1">④ 改動 B — 訂單頁「店內線下訂單」：已完成嘅快餐單隔籬多粒「返結帳」</div>
+    <div class="sub">同一頁、同一條守門：<code>isReopenable()</code> 放寬本地 counter 單之後，<b>列表自動出掣</b>（零改動）。圖中「取餐01」就係你截圖嗰張（堂食類型、已完成／已結帳、商家下單）。</div>
+    <div class="legend">
+      <span class="lg new"><span class="n">5</span>新增「返結帳」（琥珀，同 查看 並排）</span>
+      <span class="lg"><span class="n">6</span>維持：查看 → 收據預覽（補打帳單）</span>
+    </div>
+  </div>
+  <div class="frame">
+    <div class="opage">
+      <aside class="sb">
+        <div class="sbnav">
+          <div class="sbitem"><span class="sbic">點</span>點餐</div>
+          <div class="sbitem on"><span class="sbic">單</span>訂單</div>
+        </div>
+        <div class="sbfoot">
+          <div class="sbstore"><div class="sbn">TN CAFE</div><div class="sbr">66123073</div></div>
+          <div class="sbbadge">營業中</div>
+        </div>
+      </aside>
+      <div class="omain">
+        <div class="ohead">
+          <div>
+            <div class="oht">訂單</div>
+            <div class="ohc">上：會員通線上訂單 · 下：店內線下訂單</div>
+          </div>
+          <div class="oacts">
+            <span class="dchip on">今天</span>
+            <span class="dchip">昨天</span>
+            <span class="dchip">近 7 天</span>
+            <button class="expbtn dark" type="button">匯出線上單（1）</button>
+            <button class="expbtn gray" type="button">匯出線下單（1）</button>
+          </div>
+        </div>
+        <div class="obody">
+          <section class="osec top">
+            <div class="osechead">
+              <span class="ot">會員通線上訂單</span>
+              <span class="os">今天 · 全部 · 共 1 張</span>
+              <span class="mspacer" style="flex:1"></span>
+              <span class="fchip on">全部</span>
+              <span class="fchip">待接單</span>
+              <span class="fchip">製作中</span>
+              <span class="opill green">接單中</span>
+              <span class="opill gray">自動接單</span>
+              <button class="expbtn gray" type="button">手動刷新</button>
+            </div>
+            <div class="tblwrap">
+              <table class="ot">
+                <colgroup><col style="width:12%"><col style="width:17%"><col style="width:13%"><col style="width:22%"><col style="width:10%"><col style="width:10%"><col style="width:16%"></colgroup>
+                <thead><tr><th>訂單號</th><th>類型 · 客戶</th><th>時間</th><th>菜品</th><th>金額</th><th>狀態</th><th>操作</th></tr></thead>
+                <tbody>
+                  <tr>
+                    <td><span class="ono2">取餐 011</span></td>
+                    <td>外賣自取 · 陳小姐</td>
+                    <td>11:32</td>
+                    <td>絲襪奶茶×2</td>
+                    <td>MOP 44.00</td>
+                    <td><span class="otag em">已完成</span></td>
+                    <td><div class="rowbtns"><button class="rbtn dark" type="button">查看</button></div></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+          <section class="osec bottom">
+            <div class="osechead">
+              <span class="ot">店內線下訂單</span>
+              <span class="os">今天 · 全部 · 共 1 張 · 新單 0 張</span>
+              <span class="mspacer" style="flex:1"></span>
+              <span class="fchip on">全部</span>
+              <span class="fchip">製作中</span>
+              <span class="fchip">待取餐</span>
+              <span class="fchip">已完成</span>
+              <span class="fchip">已返結</span>
+              <span class="fchip">已取消</span>
+              <span class="opill green">線下接單 · 營業中</span>
+              <span class="opill gray">自動接自助單</span>
+            </div>
+            <div class="tblwrap">
+              <table class="ot">
+                <colgroup><col style="width:11%"><col style="width:7%"><col style="width:13%"><col style="width:17%"><col style="width:10%"><col style="width:11%"><col style="width:11%"><col style="width:20%"></colgroup>
+                <thead><tr><th>訂單號</th><th>餐台</th><th>時間</th><th>菜品</th><th>金額</th><th>狀態</th><th>來源</th><th style="text-align:right">操作</th></tr></thead>
+                <tbody>
+                  <tr class="hl">
+                    <td><span class="ono2">取餐01</span></td>
+                    <td>堂食</td>
+                    <td>17/10/2026 11:44</td>
+                    <td>人氣半筋半肉麵×1</td>
+                    <td>MOP 90.00</td>
+                    <td><span class="otag em">已完成</span><br><span class="otag sl">已結帳</span></td>
+                    <td><span class="srcpill">商家下單</span></td>
+                    <td>
+                      <div class="rowbtns">
+                        <span class="rel"><span class="pin" style="top:-13px;left:-20px">6</span><button class="rbtn dark" type="button">查看</button></span>
+                        <span class="rel"><span class="pin" style="top:-13px;right:-8px">5</span><button class="rbtn amber" type="button">返結帳</button></span>
+                      </div>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ ⑤ 原因彈窗 ═══════════ -->
+<div class="screenwrap" id="s5">
+  <div class="scrhead">
+    <div class="h1">⑤ 改動 B — 撘「返結帳」彈原因窗（沿用堂食同一顆 ResponsiveModal ＋ 同一組返結原因清單）</div>
+    <div class="sub">原因<b>必須揀</b>（設置 → 返結原因可配置）；確認後 <code>reopenPosOrder()</code>：狀態 → <code>reopened</code>、寫審計欄、<b>推上雲</b>、印返結單。<b>本地快餐單會跳過 temp 枱</b>（留返 counter），所以重結仍然行快餐結帳流程。</div>
+    <div class="legend">
+      <span class="lg"><span class="n">7</span>原因清單嚿設置（跟堂食同一個真源）</span>
+      <span class="lg new"><span class="n">8</span>確認後跳去 /pos 並<b>留住快餐模式</b>（而家會強制切返堂食 — 要改）</span>
+    </div>
+  </div>
+  <div class="frame">
+    <div class="opage">
+      <aside class="sb">
+        <div class="sbnav">
+          <div class="sbitem"><span class="sbic">點</span>點餐</div>
+          <div class="sbitem on"><span class="sbic">單</span>訂單</div>
+        </div>
+        <div class="sbfoot">
+          <div class="sbstore"><div class="sbn">TN CAFE</div><div class="sbr">66123073</div></div>
+          <div class="sbbadge">營業中</div>
+        </div>
+      </aside>
+      <div class="omain">
+        <div class="ohead">
+          <div>
+            <div class="oht">訂單</div>
+            <div class="ohc">上：會員通線上訂單 · 下：店內線下訂單</div>
+          </div>
+          <div class="oacts">
+            <span class="dchip on">今天</span>
+            <button class="expbtn dark" type="button">匯出線上單（1）</button>
+            <button class="expbtn gray" type="button">匯出線下單（1）</button>
+          </div>
+        </div>
+        <div class="obody">
+          <section class="osec top">
+            <div class="osechead">
+              <span class="ot">會員通線上訂單</span>
+              <span class="os">今天 · 全部 · 共 1 張</span>
+              <span class="mspacer" style="flex:1"></span>
+              <span class="opill green">接單中</span>
+            </div>
+            <div class="tblwrap">
+              <table class="ot">
+                <colgroup><col style="width:12%"><col style="width:17%"><col style="width:13%"><col style="width:22%"><col style="width:10%"><col style="width:10%"><col style="width:16%"></colgroup>
+                <thead><tr><th>訂單號</th><th>類型 · 客戶</th><th>時間</th><th>菜品</th><th>金額</th><th>狀態</th><th>操作</th></tr></thead>
+                <tbody>
+                  <tr>
+                    <td><span class="ono2">取餐 011</span></td>
+                    <td>外賣自取 · 陳小姐</td>
+                    <td>11:32</td>
+                    <td>絲襪奶茶×2</td>
+                    <td>MOP 44.00</td>
+                    <td><span class="otag em">已完成</span></td>
+                    <td><div class="rowbtns"><button class="rbtn dark" type="button">查看</button></div></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+          <section class="osec bottom">
+            <div class="osechead">
+              <span class="ot">店內線下訂單</span>
+              <span class="os">今天 · 全部 · 共 1 張 · 新單 0 張</span>
+              <span class="mspacer" style="flex:1"></span>
+              <span class="fchip on">全部</span>
+              <span class="fchip">製作中</span>
+              <span class="fchip">已完成</span>
+              <span class="fchip">已返結</span>
+            </div>
+            <div class="tblwrap">
+              <table class="ot">
+                <colgroup><col style="width:11%"><col style="width:7%"><col style="width:13%"><col style="width:17%"><col style="width:10%"><col style="width:11%"><col style="width:11%"><col style="width:20%"></colgroup>
+                <thead><tr><th>訂單號</th><th>餐台</th><th>時間</th><th>菜品</th><th>金額</th><th>狀態</th><th>來源</th><th style="text-align:right">操作</th></tr></thead>
+                <tbody>
+                  <tr>
+                    <td><span class="ono2">取餐01</span></td>
+                    <td>堂食</td>
+                    <td>17/10/2026 11:44</td>
+                    <td>人氣半筋半肉麵×1</td>
+                    <td>MOP 90.00</td>
+                    <td><span class="otag em">已完成</span><br><span class="otag sl">已結帳</span></td>
+                    <td><span class="srcpill">商家下單</span></td>
+                    <td><div class="rowbtns"><button class="rbtn dark" type="button">查看</button><button class="rbtn amber" type="button">返結帳</button></div></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+      </div>
+      <div class="ovl">
+        <div class="panel">
+          <div class="mk-ttl">返結帳（反結賬）</div>
+          <div class="mk-desc">把此單退回可編輯，改正後重新結帳</div>
+          <p style="margin:10px 0 0;font-size:11px;font-weight:600;color:var(--amber-700);line-height:1.6">必須揀返結原因，確認後跳去點餐介面操作（可改價／加餐／重結）。</p>
+          <div class="sellabel"><span class="rel"><span class="pin" style="top:-10px;left:-20px">7</span>返結原因</span></div>
+          <div class="selfield"><span>揀返結原因…</span><span class="chev"></span></div>
+          <div class="seldrop">
+            <div class="selopt on"><span class="dot"></span>落錯品項／漏落</div>
+            <div class="selopt"><span class="dot"></span>改錯價／折扣錯</div>
+            <div class="selopt"><span class="dot"></span>客人退回／取消取餐</div>
+            <div class="selopt"><span class="dot"></span>重印單據</div>
+          </div>
+          <div class="mkbtns">
+            <button class="btn" type="button">取消</button>
+            <span class="rel" style="flex:1"><span class="pin" style="top:-12px;right:-8px">8</span><button class="btn amber" type="button">返結帳</button></span>
+          </div>
+          <div class="mkhint">確認後：狀態 → reopened（帶審計欄）→ 推 ORDER_UPDATED 上雲 → 印返結單 → 跳 /pos 留住快餐模式</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ ⑤b 收據預覽加返結帳 ═══════════ -->
+<div class="screenwrap" id="s5b">
+  <div class="scrhead">
+    <div class="h1">⑤b 收據預覽彈窗加「返結帳」 — <span style="color:#34d399">已拍板：需要</span></div>
+    <div class="sub">你截圖 3 嗰個彈窗（已結帳單喺列表撳「查看」開嘅）。加粒琥珀「返結帳」：<b>只喺 <code>isReopenable()</code> 成立時出現</b>（已結帳／已付款）；已返結／已取消／已退款單唔出（唔會重複返結）。原因彈窗同 ⑤ 同一顆。原有「補打帳單（收據）」完全唔變。</div>
+    <div class="legend">
+      <span class="lg new"><span class="n">9</span>新增「返結帳」（琥珀，只喺可返結時出現）</span>
+      <span class="lg"><span class="n">10</span>原有「補打帳單（收據）」保持不變</span>
+      <span class="lg ask"><span class="n">?</span>純線上單（Ledger）嘅收據預覽同樣唔出「返結帳」</span>
+    </div>
+  </div>
+  <div class="frame">
+    <div class="opage">
+      <aside class="sb">
+        <div class="sbnav">
+          <div class="sbitem"><span class="sbic">點</span>點餐</div>
+          <div class="sbitem on"><span class="sbic">單</span>訂單</div>
+        </div>
+        <div class="sbfoot">
+          <div class="sbstore"><div class="sbn">TN CAFE</div><div class="sbr">66123073</div></div>
+          <div class="sbbadge">營業中</div>
+        </div>
+      </aside>
+      <div class="omain">
+        <div class="ohead">
+          <div>
+            <div class="oht">訂單</div>
+            <div class="ohs">店員通道線上訂單 · 今天 · 全部 · 共 1 張</div>
+          </div>
+        </div>
+        <div class="osec">
+          <div class="osechead">
+            <span class="ot">店內線下訂單</span>
+            <span class="os">今天 · 全部 · 共 1 張 · 新單 0 張</span>
+            <span class="mspacer" style="flex:1"></span>
+            <span class="fchip on">全部</span>
+            <span class="fchip">已完成</span>
+          </div>
+          <div class="tblwrap">
+            <table class="ot">
+              <colgroup><col style="width:11%"><col style="width:7%"><col style="width:13%"><col style="width:17%"><col style="width:10%"><col style="width:11%"><col style="width:11%"><col style="width:20%"></colgroup>
+              <thead><tr><th>訂單號</th><th>餐台</th><th>時間</th><th>菜品</th><th>金額</th><th>狀態</th><th>來源</th><th style="text-align:right">操作</th></tr></thead>
+              <tbody>
+                <tr class="hl">
+                  <td><span class="ono2">取餐01</span></td>
+                  <td>堂食</td>
+                  <td>17/10/2026 11:44</td>
+                  <td>人氣半筋半肉麵×1</td>
+                  <td>MOP 90.00</td>
+                  <td><span class="otag em">已完成</span><br><span class="otag sl">已結帳</span></td>
+                  <td><span class="srcpill">商家下單</span></td>
+                  <td><div class="rowbtns"><button class="rbtn dark" type="button">查看</button><button class="rbtn amber" type="button">返結帳</button></div></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+      <div class="ovl">
+        <div class="panel" style="width:520px">
+          <div class="mk-ttl">收據預覽 · 取餐01</div>
+          <div class="mk-desc">按現有收據打印模板樣式生成嘅預覽</div>
+          <div class="rcpt" style="margin-top:14px">
+            <div class="rct">TN CAFE</div>
+            <div class="rmut">66123073 · 澳門</div>
+            <div class="rline"></div>
+            <div class="rrow"><span>單號</span><span>取餐01</span></div>
+            <div class="rrow"><span>時間</span><span>17/10/2026 11:44</span></div>
+            <div class="rrow"><span>類型</span><span>堂食</span></div>
+            <div class="rline"></div>
+            <div class="rrow"><span>人氣半筋半肉麵 ×1</span><span>MOP 90.00</span></div>
+            <div class="rline"></div>
+            <div class="rrow"><span>小計</span><span>MOP 90.00</span></div>
+            <div class="rrow"><span>折扣</span><span>-MOP 0.00</span></div>
+            <div class="rrow rtot"><span>合計</span><span>MOP 90.00</span></div>
+            <div class="rline"></div>
+            <div class="rmut">多謝惠顧 · 歡迎再次光臨</div>
+          </div>
+          <div style="display:grid;gap:8px;margin-top:14px">
+            <span class="rel"><span class="pin" style="top:-12px;left:-16px">9</span><button class="btn amber" type="button" style="width:100%;text-align:center;padding:12px">返結帳</button></span>
+            <span class="rel"><span class="pin" style="top:-12px;left:-16px">10</span><button class="btn" type="button" style="width:100%;text-align:center;padding:12px;background:var(--slate-900);color:#fff">補打帳單（收據）</button></span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ ⑥ 返結後工作台 ═══════════ -->
+<div class="screenwrap" id="s6">
+  <div class="scrhead">
+    <div class="h1">⑥ 改動 B 效果 — 撳完返結，自動跳返 /pos 並留住快餐模式，張單載入工作台</div>
+    <div class="sub">頂部出琥珀<b>「返結帳」banner</b>（原因＋原結帳時間），購物車載入原明細、<b>解除唯讀</b>：可加減菜、改價 → 撳原有深色「<b>去結帳</b>」掣重結（reopened → paid → 標記完成 → settled，審計欄全部保留）。張單<b>會停留</b>喺底部「線下訂單」列（已返結狀態），唔會離開 —— 撳「編輯」隨時返返工作台。</div>
+    <div class="legend">
+      <span class="lg"><span class="n">11</span>返結帳 banner ＋ 原因 ＋ 原結帳時間</span>
+      <span class="lg"><span class="n">12</span>原明細載入、可改（加減／退菜／改價）</span>
+      <span class="lg"><span class="n">13</span>「去結帳」＝ 原有深色掣（reopened 非唯讀所以撳得）＝ 重結入口</span>
+      <span class="lg"><span class="n">14</span>返結單停留喺「線下訂單」列：已返結狀態 ＋ 已結帳標籤</span>
+      <span class="lg"><span class="n">15</span>撳「編輯」隨時載返工作台（reload ／ 睇過第二張單之後用）</span>
+      <span class="lg ask"><span class="n">?</span>純線上單（會員通落嘅快餐單）維持<b>唔可以</b>返結（已拍板）— 堂食真枱嘅線上單則可以（現有行為，見 ⑦）</span>
+    </div>
+  </div>
+  <div class="frame">
+    <div class="app">
+      <aside class="sb">
+        <div class="sbnav">
+          <div class="sbitem on"><span class="sbic">點</span>點餐</div>
+          <div class="sbitem"><span class="sbic">單</span>訂單</div>
+        </div>
+        <div class="sbfoot">
+          <div class="sbstore"><div class="sbn">TN CAFE</div><div class="sbr">66123073</div></div>
+          <div class="sbbadge">營業中</div>
+        </div>
+      </aside>
+      <div class="qbody">
+        <div class="qcols">
+          <section class="qleft">
+            <div class="qstore">
+              <div>
+                <div class="qsname">TN CAFE</div>
+                <div class="qssub">66123073</div>
+              </div>
+              <div class="qacts">
+                <span class="toolbtn">
+                  <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="#334155" stroke-width="2" stroke-linecap="round">
+                    <line x1="4" x2="20" y1="7" y2="7"></line><circle cx="9" cy="7" r="2.4" fill="#fff"></circle>
+                    <line x1="4" x2="20" y1="17" y2="17"></line><circle cx="15" cy="17" r="2.4" fill="#fff"></circle>
+                  </svg>
+                </span>
+                <span class="qbadge">快餐模式</span>
+              </div>
+            </div>
+            <div class="roBanner">
+              <div class="rt">
+                <span class="rel"><span class="pin" style="top:-14px;left:-20px">11</span><span class="ropill"><i></i>返結帳</span></span>
+                <span style="font-size:11px;font-weight:600;color:#92400e">此單為返結單，可改價／加餐後重新結帳</span>
+              </div>
+              <div class="rd">返結原因：落錯品項／漏落</div>
+              <div class="rr">原結帳時間：17/10/2026 11:44</div>
+            </div>
+            <div class="qsec">
+              <div class="qsect">訂單明細</div>
+              <div class="qsecc">1 項</div>
+            </div>
+            <div class="typetabs">
+              <button class="ttab on" type="button">堂食</button>
+              <button class="ttab" type="button">外賣</button>
+              <button class="ttab" type="button">自取</button>
+            </div>
+            <div class="qcart">
+              <div class="cartcard">
+                <div class="cn"><span class="rel"><span class="pin" style="top:-11px;left:-20px">12</span>人氣半筋半肉麵</span><span class="lockchip">已返結 ×1</span></div>
+                <div class="cm">麵體：寬版拉麵 · 加購：糖心蛋</div>
+                <div class="cp">MOP 90.00</div>
+              </div>
+            </div>
+          </section>
+          <section class="qmid">
+            <div class="midhead">
+              <button class="mchip on" type="button">全部</button>
+              <button class="mchip" type="button">Promo Product</button>
+              <button class="mchip" type="button">Cookies</button>
+              <span class="mspacer"></span>
+              <span class="msearch">搜尋商品</span>
+            </div>
+            <div class="midgrid">
+              <div class="itemcard"><div class="in">Americano Hot (Walk-in)</div><div class="ip">MOP 30.00</div></div>
+              <div class="itemcard"><div class="in">人氣半筋半肉麵</div><div class="ip">MOP 85.00</div></div>
+              <div class="itemcard"><div class="in">港式奶茶</div><div class="ip">MOP 22.00</div></div>
+            </div>
+          </section>
+          <section class="qright">
+            <div class="rhead">
+              <div class="rht">收銀與支付</div>
+              <div class="rhc">點餐結帳在此；線上 / 線下訂單見螢幕下方</div>
+            </div>
+            <div class="rbody">
+              <div class="payrow"><span>小計</span><b>MOP 90.00</b></div>
+              <div class="payrow disc"><span>折扣</span><b>-MOP 0.00</b></div>
+              <div class="paydue">
+                <div class="pl">應收</div>
+                <div class="pv">MOP 90.00</div>
+              </div>
+              <span class="rel" style="margin-top:auto"><span class="pin" style="top:-12px;right:-6px">13</span><button class="paybig" type="button">去結帳</button></span>
+            </div>
+            <div class="printops">
+              <div class="poauto"><span>自動打印</span><span class="sw"><i></i></span></div>
+              <div class="pobtns">
+                <button class="pob" type="button">打印廚房單</button>
+                <button class="pob" type="button">打印收據</button>
+              </div>
+            </div>
+          </section>
+        </div>
+        <div class="ordersbar">
+          <div class="obsec">
+            <div class="obhead">
+              <span class="obt">線上訂單</span>
+              <span class="obpills">
+                <span class="opill green">接單中</span>
+                <span class="opill gray">自動接單</span>
+              </span>
+            </div>
+            <div class="strip">
+              <div class="ocard">
+                <div class="on"><span class="ono">取餐 012</span><span class="opill2 amber">製作中</span></div>
+                <div class="om">奶茶（大）×1 · 菠蘿包×1</div>
+                <div class="ob"><span class="obtn dark">查看</span><span class="obtn or">可取餐</span></div>
+              </div>
+            </div>
+          </div>
+          <div class="obsec">
+            <div class="obhead">
+              <span class="obt">線下訂單</span>
+              <span class="obpills">
+                <span class="opill green">營業中</span>
+                <span class="opill gray">自動接自助單</span>
+              </span>
+            </div>
+            <div class="strip">
+              <div class="ocard ro">
+                <div class="on"><span class="ono">取餐01</span><span class="rel"><span class="pin" style="top:-11px;right:-7px">14</span><span class="opill2 indigo">已返結</span></span></div>
+                <div class="orow2" style="margin-top:3px">
+                  <span style="font-size:10px;color:var(--slate-500)">堂食</span>
+                  <span class="opay">已結帳</span>
+                </div>
+                <div class="om">人氣半筋半肉麵×1</div>
+                <div class="ob"><span class="obtn dark">查看</span><span class="rel"><span class="pin" style="top:-11px;right:-7px">15</span><span class="obtn amber">編輯</span></span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════ ⑦ 規格 ═══════════ -->
+<div class="screenwrap" id="s7">
+  <div class="scrhead">
+    <div class="h1">⑦ 改動清單 ＋ 流程 ＋ 已拍板事項 ＋ 你問嘅 3 條</div>
+    <div class="sub">改動 A（手動更新）係純渲染複用；改動 B（反結）觸及狀態機，全部跟返結四鐵律做（審計欄單調遞增、reopened 合法反轉、上雲、報表淨額只數 settled）。<b>全部新 UI 字符串都有英文版</b>（i18n 表見最底）。</div>
+  </div>
+  <div class="frame">
+    <div class="spec">
+      <div class="card">
+        <div class="ct">改動清單（10 處）</div>
+        <table class="mx">
+          <thead><tr><th style="width:21%">檔案</th><th style="width:11%">改咩</th><th>內容</th><th style="width:8%">風險</th></tr></thead>
+          <tbody>
+            <tr><td class="k">pos-app.tsx（頁首）</td><td>加渲染</td><td>快餐左欄頁首加 <code>&lt;PosToolsMenu&gt;</code>；未開工時「快餐模式」badge 暫隱（<b>已拍板 1</b>）</td><td class="rk-lo">低</td></tr>
+            <tr><td class="k">pos-tools-menu.tsx</td><td>加 prop ＋ i18n</td><td>可選 <code>popupWidth</code>（預設 330px；快餐傳 240px —— <b>已拍板 2</b>）；內部 10 句硬編中文全部改 <code>t()</code> ＋ 英文字典</td><td class="rk-lo">低</td></tr>
+            <tr><td class="k">pos-orders.ts <code>isReopenable()</code></td><td>放寬</td><td>刪本地 counter 單 early return；<b>純線上單（onlineOrderId+counter）維持排除</b>（已拍板 3）</td><td class="rk-mid">中</td></tr>
+            <tr><td class="k">pos-orders.ts <code>reopenPosOrder()</code></td><td>加分支</td><td>本地 counter 單<b>跳過 temp 枱</b>（留返 counter）——快餐機可能冇 floors；且 <code>quickPaidFlow</code> 要求 <code>tableId==="counter"</code></td><td class="rk-mid">中</td></tr>
+            <tr><td class="k">local-orders-panel.tsx <code>handleReopen()</code></td><td>改跳轉</td><td>counter 單而家 push <b>空 tableId</b> → deep-link 直接 return（撳咗等如冇反應）；改為 push <code>tableId=counter</code></td><td class="rk-mid">中</td></tr>
+            <tr><td class="k">pos-app.tsx（deep-link）</td><td>改分流</td><td>本地 counter 單 → 留住 quick mode 再載入工作台（而家一律強制切返 dine-in）</td><td class="rk-mid">中</td></tr>
+            <tr><td class="k">local-orders-panel.tsx（收據預覽）</td><td>加掣</td><td>收據預覽彈窗加「返結帳」（<b>已拍板 4</b>），只喺 <code>isReopenable()</code> 成立時出現（⑤b）</td><td class="rk-lo">低</td></tr>
+            <tr><td class="k">pos-app.tsx ＋ quick-mode-orders-bar.tsx ＋ quick-local-orders-strip.tsx ＋ pos-order-filters.ts</td><td>加數據源＋卡</td><td>返結單<b>停留</b>喺「線下訂單」列：新增 <code>quickReopenedOrders</code>（counter + reopened）；卡出「已返結」indigo 藥丸＋「已結帳」標籤＋查看／編輯；<code>getPaymentBadge</code> 對 reopened 特判（而家會錯顯示「未結帳」）</td><td class="rk-mid">中</td></tr>
+            <tr><td class="k">i18n 字典（zh ＋ en）</td><td>加 key</td><td>全部新字符串過 <code>t()</code>（見最底 i18n 表）</td><td class="rk-lo">低</td></tr>
+            <tr><td class="k">docs/38</td><td>標註</td><td>決策 4「除咗快餐」標註 2026-10-17 逆轉（本地單；純線上單仍排除）</td><td class="rk-lo">低</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <div class="ct">返結 → 重結流程（本地快餐單）</div>
+        <div class="flowsteps">
+          <div class="fstep"><span class="fn">1</span><span>訂單頁「店內線下訂單」→ 已完成單撳「<b>返結帳</b>」（琥珀）；收據預覽彈窗都有同一粒掣</span></div>
+          <div class="fstep"><span class="fn">2</span><span>揀返結原因（設置清單，強制）→ <code>reopenPosOrder()</code>：reopened ＋ 審計欄 ＋ <b>推上雲</b> ＋ 印返結單</span></div>
+          <div class="fstep"><span class="fn">3</span><span>跳 <code>/pos?tableId=counter&amp;orderId=…</code> → <b>留住快餐模式</b> → 工作台載入張單</span></div>
+          <div class="fstep"><span class="fn">4</span><span>琥珀「返結帳」banner ＋ 原明細（可加減／退菜／改價）</span></div>
+          <div class="fstep"><span class="fn">5</span><span>撳原有「<b>去結帳</b>」（深色）→ paid（fulfillmentStatus 保留）→ 標記完成 → settled</span></div>
+          <div class="fstep"><span class="fn">6</span><span>全程張單停留喺「線下訂單」列（已返結 → 已結帳／可取餐），審計欄（返結次數／原因／時間）保留；報表：reopened 唔計營業額、重結後只數一次 settled</span></div>
+        </div>
+      </div>
+
+      <div class="okbox">
+        <div class="at">已拍板（4 項，2026-10-17）</div>
+        <ul>
+          <li><b>① 未開工 badge 暫隱</b>：未開工只顯示「開工」＋工具 icon；開工後 badge 返嚟（③）</li>
+          <li><b>② 選單闊度 240px</b>：快餐版收起 240px 適應左欄（330px 會被 overflow-hidden 裁走）</li>
+          <li><b>③ 純線上單維持排除</b>：會員通落嘅快餐單（onlineOrderId + counter）唔可以返結（要衝 Ledger）</li>
+          <li><b>④ 收據預覽加「返結帳」</b>：已加（⑤b），只喺可返結時出現</li>
+        </ul>
+      </div>
+
+      <div class="qbox">
+        <div class="at">你問嘅 3 條 —— 解答</div>
+        <ul>
+          <li><b>① 結帳掣</b>：嗰張圖畫錯咗，對唔住。真實快餐模式<strong>只有一粒深色「去結帳」</strong>（同堂食同一粒，bg-slate-900），橙色大字「結帳」從來唔存在 —— ⑥ 已改返。</li>
+          <li><b>② 返結單要睇到</b>：已改。張單會停留喺「線下訂單」列（已返結藥丸＋已結帳標籤＋查看／編輯），唔會再消失（⑥）。</li>
+          <li><b>③ 線上單係咪都唔可以反結？</b>要分兩種：<b>純線上單</b>（快餐／自取／外賣，tableId=counter 或無枱）—— <b>任何模式都唔可以</b>（錢同狀態喺 Ledger）；<b>線上堂食單轉到真枱</b>（onlineOrderId ＋ 真枱號）—— <b>而家已經可以返結</b>（<code>isReopenable()</code> 當本地單處理；docs/38 決策 4 從來只排除咗快餐 counter）。你記得「堂食都冇」應該係指純線上單。</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <div class="ct">i18n —— 全部新字符串都有英文版（舉例）</div>
+        <table class="mx">
+          <thead><tr><th style="width:36%">中文 key</th><th>English</th></tr></thead>
+          <tbody>
+            <tr><td class="k" style="white-space:normal">手動更新</td><td>Manual update</td></tr>
+            <tr><td class="k" style="white-space:normal">從伺服器強制拉取最新菜單及所有設定，套用後重新載入頁面</td><td>Force-fetch the latest menu and all settings from the server, then reload the page</td></tr>
+            <tr><td class="k" style="white-space:normal">同步健康</td><td>Sync health</td></tr>
+            <tr><td class="k" style="white-space:normal">檢查有冇「已結帳但未上到雲」嘅訂單，失敗事件重試或補錄上雲</td><td>Check for settled orders that never reached the cloud; retry failed events or backfill</td></tr>
+            <tr><td class="k" style="white-space:normal">維修工具</td><td>Maintenance</td></tr>
+            <tr><td class="k" style="white-space:normal">編輯（線下訂單列新掣）</td><td>Edit</td></tr>
+            <tr><td class="k" style="white-space:normal">返結帳／已返結／揀返結原因…（已有 key）</td><td>Reopen / Reopened / Choose a reopen reason…</td></tr>
+          </tbody>
+        </table>
+        <div class="cb" style="margin-top:6px">規則同現有 i18n 三層：UI 顯示文案譯；持久化值（返結原因選項、桌名）唔譯；守衛 <code>i18n-layer-guard.test.ts</code> 會一齊跑。</div>
+      </div>
+
+      <div class="card">
+        <div class="ct">驗證方式</div>
+        <div class="cb">
+          <code>node --test</code> 全套（含返結守門／審計欄投影測試）＋ 新增 <code>isReopenable</code> 本地 counter 單實測 →
+          <code>npx eslint</code> 指定檔 → <code>tsc --noEmit</code> → 真機流程：列表返結 → 跳快餐工作台 → 改價 → 重結 → 報表對數；
+          手動更新：撳一下 → toast → reload → 斷線期間漏嘅單返到。
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+</div>
+
+<script>
+var MIN_SCALE = 0.55;
+var DESIGN_W = 1180, DESIGN_H = 820;
+
+function fit(){
+  var stage = document.getElementById("stage");
+  var canvas = document.getElementById("canvas");
+  var w = stage.clientWidth || DESIGN_W;
+  var s = Math.min(1, Math.max(w / DESIGN_W, MIN_SCALE));
+  canvas.style.transform = "scale(" + s + ")";
+  stage.style.height = Math.round(DESIGN_H * s) + "px";
+  stage.style.overflowX = (DESIGN_W * s > w) ? "auto" : "hidden";
+}
+
+function showTab(id){
+  var wraps = document.querySelectorAll(".screenwrap");
+  for (var i = 0; i < wraps.length; i++){
+    wraps[i].classList.toggle("on", wraps[i].id === id);
+  }
+  var btns = document.querySelectorAll("#rtabs button");
+  for (var j = 0; j < btns.length; j++){
+    btns[j].classList.toggle("on", btns[j].getAttribute("data-tab") === id);
+  }
+  fit();
+}
+
+window.onresize = fit;
+
+(function bindTabs(){
+  var btns = document.querySelectorAll("#rtabs button");
+  for (var i = 0; i < btns.length; i++){
+    (function(b){
+      b.onclick = function(){ showTab(b.getAttribute("data-tab")); };
+    })(btns[i]);
+  }
+})();
+
+window.onload = function(){ fit(); };
+</script>
+</body>
+</html>
