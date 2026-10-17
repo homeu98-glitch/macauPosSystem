@@ -1828,6 +1828,18 @@ export const EN_DICT: Record<string, string> = {
   "維修工具：手動更新 / 同步健康": "Maintenance: manual update / sync health",
   "有 {n} 張訂單連續補推都對唔上雲端，建議即刻處理。": "{n} orders failed repeated cloud retries — please handle now.",
   "仲有 {n} 張／條待上傳或未確認。": "{n} item(s) still pending upload or unconfirmed.",
+  "另有": "Also",
+  "成本只計 MOP 貨款；HKD／RMB 唔換算（不設匯率）": "Cost counts MOP purchases only; HKD/RMB are not converted (no exchange rate)",
+  "合計（按幣值）": "Total (by currency)",
+  "以「品項＋幣值」聚合 · 同名跨幣值分兩行 · 顯示前 {n} 項": "Aggregated by item + currency · same item in different currencies shown as separate rows · showing top {n}",
+  "金額（按幣值）": "Amount (by currency)",
+  "柱內按幣值分色堆疊，唔同幣值仍然分開計": "Bars are stacked by currency; different currencies stay separate",
+  "幣值跟隨收據": "Currency follows the receipt",
+  "不同幣值分開計算，不會合併成一個數": "Different currencies are counted separately, never merged into one number",
+  "只有一種幣值時，同而家一樣單行顯示": "With a single currency it shows as one line, same as before",
+  "同名品項跨幣值分開顯示（各自平均價先有意義）": "The same item in different currencies is shown separately (each average price is only meaningful on its own)",
+  "MOP＝澳門元 · HKD＝港幣 · RMB＝人民幣": "MOP = Macanese pataca · HKD = Hong Kong dollar · RMB = Chinese yuan",
+  "唔同幣值分開顯示，唔會匯總成一個數。": "Different currencies are shown separately, never summed into one number.",
 };
 
 /**

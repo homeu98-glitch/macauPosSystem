@@ -113,6 +113,17 @@ const money = (n: number) =>
 const fmtMoney = (currency: string, n: number) =>
   `${currency || "MOP"} ${Number(n || 0).toLocaleString("zh-MO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
+/**
+ * 統計圖表主幣值（2026-10-17 多幣值）：圖表只畫單一系列，而唔同幣值唔可以加埋
+ * （MOP＋HKD＋RMB 加做一個數無意義）⇒ MOP 優先；冇 MOP 就取第一個有金額嘅幣值
+ * （字母序，穩定可重現）；全空回 0。
+ */
+function chartPrimary(byCurrency: Record<string, number>): number {
+  if (byCurrency.MOP) return byCurrency.MOP;
+  for (const k of Object.keys(byCurrency).sort()) if (byCurrency[k]) return byCurrency[k];
+  return 0;
+}
+
 const todayStr = () => new Date().toLocaleDateString("en-CA");
 /**
  * 昨日（`YYYY-MM-DD`）。
@@ -2603,28 +2614,30 @@ export function InventoryView() {
           <InventoryTable key={productsVersion} merchantId={merchantId} account={account} />
         )}
 
-        {/* 統計（多圖表） */}
+        {/* 統計（多圖表）
+            🔴 2026-10-17 多幣值：圖表只可以畫單一系列數值，而唔同幣值唔可以加埋
+                （MOP＋HKD 無意義）⇒ 一律以 MOP 為主幣值作圖，其餘幣值見腳註。 */}
         {summary && summary.count > 0 && (
           <section className="grid grid-cols-1 gap-4 lg:grid-cols-2 xl:grid-cols-3">
             <div className="rounded-2xl border border-slate-200 bg-white p-4">
-              <div className="mb-2 text-sm font-semibold text-slate-700">近 6 月支出</div>
-              <AreaChart data={summary.monthlyExpenses.map((m) => ({ label: m.name, value: m.amount }))} />
+              <div className="mb-2 text-sm font-semibold text-slate-700">近 6 月支出（MOP）</div>
+              <AreaChart data={summary.monthlyExpenses.map((m) => ({ label: m.name, value: chartPrimary(m.byCurrency) }))} />
             </div>
 
             <div className="rounded-2xl border border-slate-200 bg-white p-4">
-              <div className="mb-2 text-sm font-semibold text-slate-700">供應商支出佔比（Top 8）</div>
-              <DonutChart data={summary.supplierStats.slice(0, 8).map((s) => ({ label: s.name, value: s.total }))} />
+              <div className="mb-2 text-sm font-semibold text-slate-700">供應商支出佔比（Top 8 · MOP）</div>
+              <DonutChart data={summary.supplierStats.slice(0, 8).map((s) => ({ label: s.name, value: chartPrimary(s.byCurrency) }))} />
             </div>
 
             <div className="rounded-2xl border border-slate-200 bg-white p-4">
-              <div className="mb-2 text-sm font-semibold text-slate-700">付款方式分佈</div>
+              <div className="mb-2 text-sm font-semibold text-slate-700">付款方式分佈（MOP）</div>
               {summary.paymentMethodBreakdown.length === 0 ? (
                 <div className="text-sm text-slate-400">無資料</div>
               ) : (
                 <DonutChart
                   data={summary.paymentMethodBreakdown.map((b) => ({
                     label: labelMap[b.method] ?? b.label,
-                    value: b.total,
+                    value: chartPrimary(b.byCurrency),
                   }))}
                 />
               )}
@@ -2657,6 +2670,14 @@ export function InventoryView() {
             </div>
           </section>
         )}
+
+        {/* 2026-10-17 多幣值腳註：統計圖表以 MOP 作圖；HKD／RMB 收據唔換算，
+            逐張幣值見收據列表（每張收據卡片右上角都有幣值標籤）。 */}
+        {summary && summary.count > 0 ? (
+          <p className="mt-2 text-xs text-slate-400">
+            統計圖表以 MOP 為準；HKD／RMB 收據唔換算（唔設匯率），逐張幣值見收據列表。
+          </p>
+        ) : null}
 
         {/* 底部提示條（確認稿嘅 footnote）：講清「主檔管理已經收埋入設置」，
             並留一個直接入口 —— 商家撳完就唔會再喺主頁搵唔到供應商管理。 */}

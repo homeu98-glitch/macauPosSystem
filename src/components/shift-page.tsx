@@ -80,6 +80,14 @@ import { formatMoney, formatMoneyValue } from "@/lib/format";
 import { buildOrderDetailNotes, buildOnlineOrderDetailNotes } from "@/lib/pos/order-notes";
 import { paymentModeLabel } from "@/lib/ledger/order-mapper";
 import { OrderDetailList, type OrderDetailRow } from "@/components/order-detail-list";
+import {
+  CurrencyInline,
+  CurrencyLines,
+  MoneyByCurrency,
+  currencyEntriesText,
+  pickCurrencyField,
+  sortedCurrencyEntries,
+} from "@/components/purchase-currency-display";
 
 /**
  * Ledger 純線上單嘅「餐台」欄標籤（同報表明細同一套文案）。
@@ -349,7 +357,12 @@ function shiftRowToSettlement(row: ShiftHistoryRecord): ShiftSettlementSnapshot 
       acc.push({ method: label, receivable, paid, count });
       return acc;
     }, []),
-    purchase: typeof row.purchasePaid === "number" ? { paid: row.purchasePaid, unpaid: 0 } : null,
+    // 舊記錄只有一個平面 `purchasePaid`（混合幣值、無法追溯還原）⇒
+    // 一律當 MOP（歷史絕大多數收據都係 MOP），渲染端仍兼容舊平面形態。
+    purchase:
+      typeof row.purchasePaid === "number"
+        ? { paidByCurrency: { MOP: row.purchasePaid }, unpaidByCurrency: {} }
+        : null,
     cash: { expected: row.expectedCash, actual: row.actualCash, diff: row.cashDifference },
     pendingEvents: row.pendingEvents,
     failedEvents: row.failedEvents ?? 0,
@@ -1128,7 +1141,11 @@ export function ShiftPage() {
         .map(([method, bucket]) => ({ method, receivable: bucket.receivable, paid: bucket.paid, count: bucket.count }))
         .sort((a, b) => b.paid - a.paid),
       purchase: purchaseToday?.summary
-        ? { paid: purchaseToday.summary.paid, unpaid: purchaseToday.summary.unpaid }
+        ? {
+            // 🔴 2026-10-17 多幣值（J 拍板：唔設匯率）：逐幣值分開，唔同幣值唔加埋。
+            paidByCurrency: pickCurrencyField(purchaseToday.summary.byCurrency, "paid"),
+            unpaidByCurrency: pickCurrencyField(purchaseToday.summary.byCurrency, "unpaid"),
+          }
         : null,
       cash: { expected: expectedCash, actual: actualValue, diff: diffValue },
       pendingEvents: queueSummary.pendingEvents,
@@ -1401,8 +1418,14 @@ export function ShiftPage() {
       prepaid: snapshot.store.prepaid,
       refundCount: snapshot.store.refundCount,
       refundAmount: snapshot.store.refundAmount,
-      /** 今日買貨成本（已付）快照（重打交班明細用）。 */
-      purchasePaid: snapshot.purchase?.paid,
+      /**
+       * 今日買貨成本（已付）快照（重打交班明細用）。
+       * @deprecated 2026-10-17 多幣值：呢個係**混合幣值**嘅舊平面欄（=各幣值加總，
+       * 唔有意義）；紙本真源改用 `snapshot.purchase.paidByCurrency`。保留只係為舊版／雲端欄位兼容。
+       */
+      purchasePaid: snapshot.purchase
+        ? sortedCurrencyEntries(snapshot.purchase.paidByCurrency).reduce((a, [, v]) => a + v, 0)
+        : undefined,
       expectedCash: snapshot.cash.expected,
       paymentBreakdown: Object.fromEntries(
         snapshot.payments.map((bucket) => [
@@ -1844,19 +1867,23 @@ export function ShiftPage() {
                         <span className="mt-1 block">
                           {t("＝今日收據入面")}<span className="font-semibold">{t("「已付款」")}</span>{t("嗰批嘅總額， 即今日真正流出嘅貨錢。")}</span>
                         <span className="mt-1 block tabular-nums text-slate-600">
-                          {purchaseToday.summary.paidCount} {t("張收據")}<br />{t("已付 ")}{formatMoney(purchaseToday.summary.paid)}
+                          {purchaseToday.summary.paidCount} {t("張收據")}<br />{t("已付 ")}{currencyEntriesText(
+                            pickCurrencyField(purchaseToday.summary.byCurrency, "paid"),
+                          ) || formatMoney(purchaseToday.summary.paid)}
                         </span>
                         {/* ⚠️ 未付**唔顯示**（2026-10-05 J 拍板）—— 資料照抓、只係收埋。
                             唔好因為「有資料」就加返，商家會誤以為要即刻俾錢。 */}
                         <span className="mt-1 block text-[11px] text-slate-500">
                           {t("只計已付款收據。來源：庫存收據（expenseRecorder）。")}
+                          <br />
+                          {t("唔同幣值分開顯示，唔會匯總成一個數。")}
                         </span>
                         <span className="mt-1 block text-[11px] text-rose-700">
                           {t("⚠ 呢個係")}<span className="font-semibold">{t("獨立參考數")}</span>{t("， 唔可以同隔籬兩張收入卡加減 —— 佢係買貨開支，唔係當日營業額嘅扣減。")}</span>
                       </InfoBubble>
                     </div>
                     <div className="mt-2 text-2xl font-semibold text-rose-700">
-                      {formatMoney(purchaseToday.summary.paid)}
+                      <MoneyByCurrency byCurrency={pickCurrencyField(purchaseToday.summary.byCurrency, "paid")} />
                     </div>
                     <div className="mt-1 text-xs text-slate-500">
                       {/* 2026-10-13：全購貨統計已改 paid-only（`supplierStats` 亦然），
@@ -1872,7 +1899,9 @@ export function ShiftPage() {
                             <div key={s.name} className="flex items-baseline justify-between gap-2">
                               <span className="truncate">
                                 {s.name} · {s.count} {t("張")}</span>
-                              <span className="shrink-0 font-semibold">{formatMoney(s.total)}</span>
+                              <span className="shrink-0 font-semibold">
+                                <CurrencyInline byCurrency={s.byCurrency} />
+                              </span>
                             </div>
                           ))}
                         </div>
@@ -2905,11 +2934,18 @@ export function ShiftPage() {
                     <div className="mt-3 border-t border-dashed border-slate-300 pt-2">
                       <div className="flex items-baseline justify-between gap-2">
                         <span>{t("今日買貨成本（已付）")}</span>
-                        <span>{formatMoney(previewData.purchase.paid)}</span>
+                        {/* 2026-10-17 多幣值：逐幣值一行；舊記錄（平面 paid）當 MOP 單行。 */}
+                        <span className="text-right">
+                          <CurrencyLines byCurrency={previewData.purchase.paidByCurrency} />
+                        </span>
                       </div>
-                      {previewData.purchase.unpaid > 0 ? (
+                      {sortedCurrencyEntries(previewData.purchase.unpaidByCurrency).length > 0 ? (
                         <div className="text-xs text-slate-500">
-                          {t("（未付 ")}{formatMoney(previewData.purchase.unpaid)} {t("不計入）")}</div>
+                          {t("（未付 ")}
+                          <CurrencyInline byCurrency={previewData.purchase.unpaidByCurrency} />
+                          {" "}
+                          {t("不計入）")}
+                        </div>
                       ) : null}
                     </div>
                   ) : null}

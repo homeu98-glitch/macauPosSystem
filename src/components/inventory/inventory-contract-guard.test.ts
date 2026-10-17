@@ -378,15 +378,15 @@ describe("付款方式：admin 主檔驅動（唔可以再硬編碼）", () => {
       /paidReceipts = receipts\.filter\(\(r\) => r\.payment_status === "paid"\)/.test(stats),
       "過濾條件 = payment_status === \"paid\"",
     );
-    // UI 兩個「合計」行要用 itemsPaidTotal（只計已付款嘅 Σ品項金額），唔可以用 total
+    // UI 兩個「合計」行要用 itemsPaidByCurrency（只計已付款嘅 Σ品項金額、逐幣值），唔可以用 total
     const report = read("src/components/restaurant-daily-report.tsx");
     assert.ok(
-      /purchase\.sel\.itemsPaidTotal/.test(report),
-      "買貨明細卡細項表「合計」行要用 itemsPaidTotal",
+      /purchase\.sel\.itemsPaidByCurrency/.test(report),
+      "買貨明細卡細項表「合計」行要用 itemsPaidByCurrency",
     );
     assert.ok(
-      /purchase\.sel\?\.itemsPaidTotal \?\? 0/.test(report),
-      "貨品細項彈窗「合計」行要用 itemsPaidTotal",
+      /purchase\.sel\?\.itemsPaidByCurrency/.test(report),
+      "貨品細項彈窗「合計」行要用 itemsPaidByCurrency",
     );
     // 2026-10-13 J 拍板：成張卡都係 paid-only ⇒ 連出現條件都要用 paidCount
     // （期間得未付收據 ⇒ 唔好出一張空白 0 蚊卡）

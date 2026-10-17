@@ -161,7 +161,7 @@ export const SHIFT_PREVIEW_SAMPLE: ShiftSettlementSnapshot = {
     { method: "未記錄", receivable: 606, paid: 606, count: 12 },
     { method: "現金", receivable: 138, paid: 133, count: 2 },
   ],
-  purchase: { paid: 240, unpaid: 60 },
+  purchase: { paidByCurrency: { MOP: 240 }, unpaidByCurrency: { MOP: 60 } },
   cash: { expected: 133, actual: 130, diff: -3 },
   pendingEvents: 0,
   failedEvents: 0,

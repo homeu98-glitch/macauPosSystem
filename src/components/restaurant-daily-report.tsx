@@ -18,6 +18,15 @@ import type { LedgerOnlineOrder } from "@/lib/ledger/order-mapper";
 import { posPaymentMethodLabel } from "@/lib/pos/payment-method-label";
 import { fetchPurchaseSummary, type PurchaseSummary, type ItemStat } from "@/lib/inventory-stats";
 import {
+  MoneyByCurrency,
+  CurrencyLines,
+  CurrencyInline,
+  currencyBgClass,
+  currencyTotalForSort,
+  pickCurrencyField,
+  sortedCurrencyEntries,
+} from "@/components/purchase-currency-display";
+import {
   loadAuthSession,
   loadBootstrapCache,
   loadDeletedOrderIds,
@@ -43,7 +52,7 @@ import {
 import {
   computeFootfallFromOrders,
 } from "@/lib/restaurant-footfall";
-import { formatMoney } from "@/lib/format";
+import { formatMoney, formatMoneyValue } from "@/lib/format";
 import { buildOnlineOrderDetailNotes, buildOrderDetailNotes } from "@/lib/pos/order-notes";
 import { OrderDetailList, type OrderDetailRow } from "@/components/order-detail-list";
 // 外賣平台結算（2026-09-26）：報表 10 格下方「MFOOD 區塊」三格。
@@ -2364,15 +2373,18 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
    *    改用 `total` ＝「入貨當期認成本」，同 `gpSubtitle` 文字一致。
    *    ⚠️ 仍然**未扣存貨變動**（入大批貨當期毛利會偏低；冇入貨當期會偏高）——
    *       呢個係已知限制，UI 有寫明；要更準可手動輸入毛利率。
+   *
+   * 🔴 2026-10-17（J 拍板：唔設匯率）：成本只計 **MOP 部分**。HKD／RMB 貨款
+   *    唔換算、唔湊數 ⇒ 毛利卡片明寫「只計 MOP」，唔會靜靜漏計。
    */
   const grossProfit = useMemo(() => {
-    const cogs = purchase.sel?.total ?? 0;
+    const cogs = purchase.sel?.byCurrency?.MOP?.total ?? 0;
     return agg.revenue - cogs;
   }, [agg.revenue, purchase.sel]);
 
   const grossProfitYest = useMemo(() => {
     if (!aggYest) return null;
-    const cogs = purchase.yest?.total ?? 0;
+    const cogs = purchase.yest?.byCurrency?.MOP?.total ?? 0;
     return aggYest.revenue - cogs;
   }, [aggYest, purchase.yest]);
 
@@ -3146,7 +3158,7 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                       purchaseUnavailable ? (
                         <span className="text-slate-400">—</span>
                       ) : (
-                        <Money amount={purchase.sel?.total ?? 0} />
+                        <MoneyByCurrency byCurrency={pickCurrencyField(purchase.sel?.byCurrency, "total")} />
                       )
                     }
                     delta={null}
@@ -3171,7 +3183,7 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                       purchaseUnavailable ? (
                         <span className="text-slate-400">—</span>
                       ) : (
-                        <Money amount={purchase.sel?.paid ?? 0} />
+                        <MoneyByCurrency byCurrency={pickCurrencyField(purchase.sel?.byCurrency, "paid")} />
                       )
                     }
                     delta={null}
@@ -3195,7 +3207,7 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                       purchaseUnavailable ? (
                         <span className="text-slate-400">—</span>
                       ) : (
-                        <Money amount={purchase.sel?.unpaid ?? 0} />
+                        <MoneyByCurrency byCurrency={pickCurrencyField(purchase.sel?.byCurrency, "unpaid")} />
                       )
                     }
                     delta={null}
@@ -3245,6 +3257,7 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                           : pct(grossProfit, grossProfitYest)
                     }
                     subtitle={gpSubtitle}
+                    note={t("成本只計 MOP 貨款；HKD／RMB 唔換算（不設匯率）")}
                     info={
                       <>
                         <span className="block font-semibold text-slate-800">{t("毛利（估）")}</span>
@@ -3259,6 +3272,9 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                           但仍<span className="font-semibold">{t("未扣存貨變動")}</span>
                           （入大批貨當期毛利會偏低；冇入貨當期會偏高）。
                           要更準可撳右上角 edit 直接輸入毛利率。
+                        </span>
+                        <span className="mt-1 block text-[11px] text-slate-500">
+                          {t("成本只計 MOP 貨款；HKD／RMB 唔換算（不設匯率）")}
                         </span>
                       </>
                     }
@@ -3547,28 +3563,30 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                                     {it.unit ? ` ${it.unit}` : ""}
                                   </td>
                                   <td className="py-1.5 text-right text-slate-600">
-                                    {formatMoney(it.avgPrice)}
+                                    {formatMoney(it.avgPrice, it.currency)}
                                   </td>
                                   <td className="py-1.5 text-right font-semibold text-slate-900">
-                                    {formatMoney(it.amount)}
+                                    {formatMoney(it.amount, it.currency)}
                                   </td>
                                 </tr>
                               ))}
                               <tr className="border-t-2 border-slate-300 font-semibold text-slate-900">
-                                <td className="py-1.5 pr-2">{t("合計")}</td>
+                                <td className="py-1.5 pr-2">{t("合計（按幣值）")}</td>
                                 <td className="py-1.5 text-right text-slate-400">—</td>
                                 <td className="py-1.5 text-right text-slate-400">—</td>
                                 <td className="py-1.5 text-right">
-                                  {/* 🔴 2026-10-13：要用 `itemsPaidTotal`（只計已付款嘅 Σ品項金額），
-                                      唔可以用 `total`（全部收據 total_amount，含未付）——
-                                      否則同上面逐行加埋對唔上，仲會將未付計咗入「已花錢」。 */}
-                                  {formatMoney(purchase.sel.itemsPaidTotal)}
+                                  {/* 🔴 2026-10-13：只計已付款嘅 Σ品項金額，唔可以用 `total`
+                                      （全部收據 total_amount，含未付）——否則同上面逐行加埋
+                                      對唔上，仲會將未付計咗入「已花錢」。
+                                      🔴 2026-10-17：改逐幣值（itemsPaidByCurrency）——
+                                      唔同幣值加埋做一個數係錯嘅。 */}
+                                  <CurrencyLines byCurrency={purchase.sel.itemsPaidByCurrency} />
                                 </td>
                               </tr>
                             </tbody>
                           </table>
                           <div className="mt-2 text-[11px] text-slate-400">
-                            {t("以庫存「品項」為單位聚合 · 同名品項跨收據合併 · 顯示前 {n} 項", {
+                            {t("以「品項＋幣值」聚合 · 同名跨幣值分兩行 · 顯示前 {n} 項", {
                               n: Math.min(5, purchase.sel.items.length),
                             })}
                             {purchase.sel.itemsTotal > 5
@@ -3592,7 +3610,7 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                             <tr className="text-left text-[11px] text-slate-400">
                               <th className="pb-1 font-medium">{t("付款方式")}</th>
                               <th className="pb-1 text-right font-medium">{t("張數")}</th>
-                              <th className="pb-1 text-right font-medium">{t("金額")}</th>
+                              <th className="pb-1 text-right font-medium">{t("金額（按幣值）")}</th>
                             </tr>
                           </thead>
                           <tbody className="tabular-nums">
@@ -3601,17 +3619,20 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                                 <td className="py-1.5 pr-2 text-slate-700">{pm.label}</td>
                                 <td className="py-1.5 text-right text-slate-600">{pm.count}</td>
                                 <td className="py-1.5 text-right font-semibold text-slate-900">
-                                  {formatMoney(pm.total)}
+                                  <CurrencyInline byCurrency={pm.byCurrency} />
                                 </td>
                               </tr>
                             ))}
                             <tr className="border-t-2 border-slate-300 font-semibold text-slate-900">
-                              <td className="py-1.5 pr-2">{t("合計")}</td>
+                              <td className="py-1.5 pr-2">{t("合計（按幣值）")}</td>
                               {/* 🔴 2026-10-13：付款方式分佈已係 paid-only + Σ品項基數，
-                                  逐行加埋 = `itemsPaidTotal` ⇒ 左右兩條「合計」必然同一個數。
-                                  唔可以用 `total`（全部收據，含未付／月結）。 */}
+                                  逐行加埋 = `itemsPaidByCurrency` ⇒ 左右兩條「合計」必然同一個數。
+                                  唔可以用 `total`（全部收據，含未付／月結）。
+                                  🔴 2026-10-17：逐幣值顯示（唔同幣值唔加埋）。 */}
                               <td className="py-1.5 text-right">{purchase.sel.paidCount}</td>
-                              <td className="py-1.5 text-right">{formatMoney(purchase.sel.itemsPaidTotal)}</td>
+                              <td className="py-1.5 text-right">
+                                <CurrencyInline byCurrency={purchase.sel.itemsPaidByCurrency} />
+                              </td>
                             </tr>
                           </tbody>
                         </table>
@@ -3619,37 +3640,75 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                     </div>
                   </div>
 
-                  {/* 下：近 6 個月買貨支出柱狀圖 */}
+                  {/* 下：近 6 個月買貨支出柱狀圖（2026-10-17 起逐幣值分色堆疊） */}
                   {purchase.sel.monthlyExpenses.length > 0 ? (
                     <div>
-                      <div className="mb-2 text-xs font-semibold text-slate-500">
-                        {t("近 6 個月買貨支出")}
+                      <div className="mb-2 flex items-center justify-between gap-2">
+                        <span className="text-xs font-semibold text-slate-500">
+                          {t("近 6 個月買貨支出")}
+                        </span>
+                        {/* 圖例：幣值色塊（同 helper 嘅 currencyBgClass 對應） */}
+                        <span className="flex items-center gap-3 text-[10px] text-slate-400">
+                          {(() => {
+                            // 由數據度搵出實際出現過嘅幣值；一個月都冇就出常見三隻。
+                            const seen = new Set<string>();
+                            for (const m of purchase.sel.monthlyExpenses) {
+                              for (const c of Object.keys(m.byCurrency)) seen.add(c);
+                            }
+                            const list = seen.size > 0 ? Array.from(seen) : ["MOP", "HKD", "RMB"];
+                            return list.map((c) => (
+                              <span key={c} className="flex items-center gap-1">
+                                <span className={`inline-block h-2 w-2 rounded-sm ${currencyBgClass(c)}`} />
+                                {c}
+                              </span>
+                            ));
+                          })()}
+                        </span>
                       </div>
                       {/* 🔴 柱一定要 h-full：row 係 `items-end`（align-items:flex-end），
                           欄冇 h-full 就會塌陷做「內容高度」——柱體 flex-1 冇嘢撐 ＝ 0px、
                           % 高度對住 0 計 ⇒ 成排柱隱形，淨低月份文字（2026-10-11 實測）。
-                          同下方 DurationBarChart 同一套路（嗰邊欄有 h-full 所以畫得出）。 */}
+                          同下方 DurationBarChart 同一套路（嗰邊欄有 h-full 所以畫得出）。
+                          🔴 2026-10-17：每根柱按幣值堆疊（MOP 墊底），高度以「該月各幣值
+                          加總」做分母 —— 加數只係為咗定柱高，幣值仍然分開顯示。 */}
                       <div className="flex items-end gap-2" style={{ height: 96 }}>
                         {(() => {
+                          const months = purchase.sel.monthlyExpenses;
                           const max = Math.max(
-                            ...purchase.sel.monthlyExpenses.map((m) => m.amount),
+                            ...months.map((m) => currencyTotalForSort(m.byCurrency)),
                             1,
                           );
-                          const lastIdx = purchase.sel.monthlyExpenses.length - 1;
-                          return purchase.sel.monthlyExpenses.map((m, idx) => (
-                            <div key={m.key} className="flex h-full flex-1 flex-col items-center gap-1">
-                              <div className="flex w-full flex-1 items-end">
-                                <div
-                                  className={`w-full rounded-t ${idx === lastIdx ? "bg-orange-500" : "bg-slate-300"}`}
-                                  style={{
-                                    height: `${Math.max(4, Math.round((m.amount / max) * 100))}%`,
-                                  }}
-                                  title={formatMoney(m.amount)}
-                                />
+                          const lastIdx = months.length - 1;
+                          return months.map((m, idx) => {
+                            const entries = sortedCurrencyEntries(m.byCurrency);
+                            const total = entries.reduce((a, [, v]) => a + v, 0);
+                            // DOM 順序 = 視覺頂→底；反轉令最大幣值（通常 MOP）墊底。
+                            const stack = entries.slice().reverse();
+                            return (
+                              <div key={m.key} className="flex h-full flex-1 flex-col items-center gap-1">
+                                <div className="flex w-full flex-1 items-end">
+                                  <div
+                                    className={`flex w-full flex-col overflow-hidden rounded-t ${
+                                      idx === lastIdx ? "ring-1 ring-orange-400" : ""
+                                    }`}
+                                    style={{ height: `${Math.max(2, (total / max) * 100)}%` }}
+                                    title={entries
+                                      .map(([c, v]) => `${c} ${formatMoneyValue(v)}`)
+                                      .join(" + ")}
+                                  >
+                                    {stack.map(([c, v]) => (
+                                      <span
+                                        key={c}
+                                        className={`block w-full ${currencyBgClass(c)}`}
+                                        style={{ height: `${(v / total) * 100}%` }}
+                                      />
+                                    ))}
+                                  </div>
+                                </div>
+                                <div className="text-[10px] text-slate-400">{m.name}</div>
                               </div>
-                              <div className="text-[10px] text-slate-400">{m.name}</div>
-                            </div>
-                          ));
+                            );
+                          });
                         })()}
                       </div>
                       <div className="mt-2 text-[11px] text-slate-400">
@@ -3657,7 +3716,14 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                           .slice()
                           .reverse()
                           .slice(0, 3)
-                          .map((m) => `${m.name} ${formatMoney(m.amount)}`)
+                          .map((m) =>
+                            [
+                              m.name,
+                              sortedCurrencyEntries(m.byCurrency)
+                                .map(([c, v]) => `${c} ${formatMoneyValue(v)}`)
+                                .join(" + "),
+                            ].join(" "),
+                          )
                           .join(" · ")}
                         {purchase.sel.trend.up + purchase.sel.trend.down > 0
                           ? t(" · 單價上升 {up} 款 · 下降 {down} 款", {
@@ -3665,6 +3731,8 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                               down: purchase.sel.trend.down,
                             })
                           : ""}
+                        {" · "}
+                        {t("柱內按幣值分色堆疊，唔同幣值仍然分開計")}
                       </div>
                     </div>
                   ) : null}
@@ -3860,7 +3928,8 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                       <div>
                         <div className="text-base font-semibold text-slate-900">{t("貨品細項（按金額）")}</div>
                         <div className="text-xs text-slate-500">
-                          {t("共 {n} 款品項", { n: purchaseAllItems.length })} · {t("只計已付款收據")}
+                          {t("共 {n} 款品項", { n: purchaseAllItems.length })} · {t("只計已付款收據")} ·{" "}
+                          {t("幣值跟隨收據")}
                         </div>
                       </div>
                       <button
@@ -3897,20 +3966,38 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                                     {it.qty}
                                     {it.unit ? ` ${it.unit}` : ""}
                                   </td>
-                                  <td className="py-1.5 text-right text-slate-600">{formatMoney(it.avgPrice)}</td>
-                                  <td className="py-1.5 text-right font-semibold text-slate-900">{formatMoney(it.amount)}</td>
+                                  {/* 🔴 2026-10-17：單價／金額跟行幣值（it.currency），
+                                      唔可以再一律當 MOP。 */}
+                                  <td className="py-1.5 text-right text-slate-600">
+                                    {formatMoney(it.avgPrice, it.currency)}
+                                  </td>
+                                  <td className="py-1.5 text-right font-semibold text-slate-900">
+                                    {formatMoney(it.amount, it.currency)}
+                                  </td>
                                 </tr>
                               ))}
                             </tbody>
                           </table>
                         </div>
-                        <div className="mt-3 flex items-center justify-between border-t-2 border-slate-300 pt-2">
-                          <span className="text-sm font-semibold text-slate-900">{t("合計")}</span>
-                          {/* 🔴 2026-10-13：細項合計 = 只計已付款（見 `itemsPaidTotal` 定義），
-                              唔可以用 `total`（含未付收據）。 */}
-                          <span className="text-sm font-semibold text-slate-900">
-                            {formatMoney(purchase.sel?.itemsPaidTotal ?? 0)}
+                        <div className="mt-3 flex items-start justify-between gap-4 border-t-2 border-slate-300 pt-2">
+                          <div>
+                            <span className="text-sm font-semibold text-slate-900">{t("合計（按幣值）")}</span>
+                            <div className="mt-0.5 text-[11px] text-slate-400">
+                              {t("不同幣值分開計算，不會合併成一個數")}
+                              <br />
+                              {t("只有一種幣值時，同而家一樣單行顯示")}
+                            </div>
+                          </div>
+                          {/* 🔴 2026-10-13：細項合計 = 只計已付款（Σ品項金額，未截斷全量），
+                              唔可以用 `total`（含未付收據）。
+                              🔴 2026-10-17：逐幣值顯示。 */}
+                          <span className="text-right text-sm font-semibold text-slate-900">
+                            <CurrencyLines byCurrency={purchase.sel?.itemsPaidByCurrency} />
                           </span>
+                        </div>
+                        <div className="mt-2 text-[11px] text-slate-400">
+                          {t("同名品項跨幣值分開顯示（各自平均價先有意義）")} ·{" "}
+                          {t("MOP＝澳門元 · HKD＝港幣 · RMB＝人民幣")}
                         </div>
                       </>
                     )}
@@ -4428,6 +4515,7 @@ function Kpi({
   subtitle,
   action,
   info,
+  note,
 }: {
   label: string;
   value: React.ReactNode;
@@ -4448,6 +4536,11 @@ function Kpi({
    *    （如毛利嘅 edit），語意唔再撈亂。
    */
   info?: React.ReactNode;
+  /**
+   * 卡片底部附加提示（2026-10-17 多幣值）：例如毛利卡明寫
+   * 「只計 MOP 貨款；HKD／RMB 唔換算」——**必須可見**，唔可以收落 info 氣球。
+   */
+  note?: React.ReactNode;
 }) {
   const hasAside = info != null || action != null;
   return (
@@ -4463,6 +4556,11 @@ function Kpi({
       </div>
       <div className={`mt-1 text-2xl font-bold ${highlight ? "text-orange-600" : "text-slate-900"}`}>{value}</div>
       {subtitle ? <div className="mt-0.5 text-[11px] text-slate-500">{subtitle}</div> : null}
+      {note ? (
+        <div className="mt-1.5 rounded-lg border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] leading-relaxed text-amber-700">
+          {note}
+        </div>
+      ) : null}
       {delta ? <div className={`mt-1 text-[11px] ${delta.cls}`}>{delta.arrow}</div> : null}
     </div>
   );
@@ -4479,6 +4577,15 @@ function Money({ amount, currency = "MOP" }: { amount: number; currency?: string
     </span>
   );
 }
+
+/* ─────────────── 多幣值顯示（2026-10-17 J 拍板）───────────────
+ * 收據各自帶幣值（MOP／HKD／RMB…），系統唔設匯率 ⇒ 係咩幣值顯示咩幣值，
+ * 唔同幣值**永遠唔可以加埋**做一個數。
+ * 共用元件同純函式見 `purchase-currency-display.tsx`（交班頁共用同一套）：
+ * `MoneyByCurrency`（KPI 大數＋「另有」副線）、`CurrencyLines`（逐行）、
+ * `CurrencyInline`（行內串接）、`sortedCurrencyEntries`、`currencyTotalForSort`、
+ * `currencyTextClass`／`currencyBgClass`、`pickCurrencyField`。
+ */
 
 function Card({ title, tag, children, loading }: { title: string; tag?: string; children: React.ReactNode; loading?: boolean }) {
   const t = useT();

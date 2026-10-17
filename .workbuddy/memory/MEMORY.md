@@ -43,6 +43,7 @@
 
 ## 庫存／expenseRecorder
 - `merchants.name` 全表唯一（J 拍板）；NAME_TAKEN 唔可回 id。設定藏 merchants 表保留名 KV（`__shop_settings__:<uid>`／`__global_settings__`，寫入必 merge；唔可以用 `.not("name","like","__%")`）。支付方式主檔＝expenseRecorder `/admin/payment-methods`；「未設定」vs「空清單」用 Array.isArray 分。
+- 🔴 **多幣值（2026-10-17 J 拍板：唔設匯率）**：收據各自帶幣值（MOP／HKD／RMB）⇒ 係咩幣值顯示咩幣值，**唔同幣值永遠唔可以加埋**。聚合 key＝`name.toLowerCase()::currency`（`purchase-items.ts`，零 import）；`ItemStat.currency`＋`buildItemCurrencyTotals()`（由同一份 rows 逐幣值加總 ⇒ 每行加總==合計）；`summary.itemsPaidByCurrency` **取代咗混合數 `itemsPaidTotal`**（已刪）；`SupplierStat`/`MonthlyExpense`/`PaymentMethodBreakdown` 全改 `byCurrency: Record<string,number>`。共用元件 `components/purchase-currency-display.tsx`（`MoneyByCurrency`/`CurrencyLines`/`CurrencyInline`）＋純函式 `lib/purchase-currency.ts`（escpos 都用佢）。`summary.total/paid/unpaid` 仍係混合數 ⇒ **只有 KPI 用途，顯示一定要走 byCurrency**。圖表用 `chartPrimary(byCurrency)`（MOP 優先）＋標「（MOP）」＋腳註。交班快照 `purchase={paidByCurrency,unpaidByCurrency}`，舊平面 `purchasePaid` 當 MOP fallback。
 - 門店層設定上雲已修（2026-10-07，三病灶）：`patchLocalSettings()` 加 POST /api/pos/device-config（要 `posDeviceAuthHeadersFresh()`＋推前 `stripReopenTempTables()`＋body 帶完整 deviceConfig+storeId+localSettings）；`needLocalSettings` 用 `!hasPosLocalSettings()`；庫存頁一次性逐欄補值。守衛 `inventory-contract-guard.test.ts`。
 - 單位必填（含編輯模式，10-08 拍板）；驗證寫喺 save()，唔用 HTML required；標紅用 `ring-2 ring-red-300` 唔用 border-*。品項建議兩步查詢驗 merchant 歸屬；聚合純函式 `inventory-item-suggestions.ts`（零 import）。
 - `GET /api/inventory/master-usage` 只拉 merchant_id、SCAN_LIMIT=1500、唔可以拉 raw_ocr_data。expenseRecorder 要 next@16.3.0 先 build 到。

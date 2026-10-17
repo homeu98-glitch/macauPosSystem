@@ -1,4 +1,5 @@
 import { formatMacauDateTime, formatMacauMonthDayTime, formatMoney } from "@/lib/format";
+import { currencyEntriesText, sortedCurrencyEntries } from "@/lib/purchase-currency";
 import { RECEIPT_PAPER_COLUMNS } from "@/lib/escpos-render";
 import { buildRetailReceiptBlocks } from "@/lib/retail/receipt-retail-blocks";
 import { posPaymentMethodLabel } from "@/lib/pos/payment-method-label";
@@ -1230,8 +1231,16 @@ export function buildShiftContent(data: ShiftSettlementSnapshot, opts: ShiftCont
     section_purchase: purchase ? (titles.section_purchase ?? "") : "",
     purchase_paid: purchase
       ? // 未付成本唔計入，但一定要講清楚，否則商家會以為買貨成本漏咗（原硬編行為，保留）
-        `今日買貨成本（已付）：${money(purchase.paid)}` +
-        (purchase.unpaid > 0 ? `\n（未付 ${money(purchase.unpaid)} 不計入）` : "")
+        // 🔴 2026-10-17 多幣值（J 拍板：唔設匯率）：逐幣值分開印，唔同幣值唔加埋。
+        //    舊快照得一個平面數（混合幣值）⇒ 照舊用 `money()` 印（當默認幣值）。
+        `今日買貨成本（已付）：${
+          currencyEntriesText(purchase.paidByCurrency) || money(purchase.paid ?? 0)
+        }` +
+        (sortedCurrencyEntries(purchase.unpaidByCurrency).length > 0 || (purchase.unpaid ?? 0) > 0
+          ? `\n（未付 ${
+              currencyEntriesText(purchase.unpaidByCurrency) || money(purchase.unpaid ?? 0)
+            } 不計入）`
+          : "")
       : "",
     section_cash: titles.section_cash ?? "",
     expected_cash: `應收現金：${money(cash.expected)}`,

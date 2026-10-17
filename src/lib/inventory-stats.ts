@@ -10,7 +10,13 @@ import { customRangeToISO, instantInRange } from "@/lib/ledger/date-range";
  * ⚠️ 呢度**同時** import 嚟本地用（`buildPurchaseSummary` 要用），
  *    並喺檔尾 re-export 畀外部（取代原本重複實作）。
  */
-import { buildItemStats, PURCHASE_ITEMS_PREVIEW, type ItemStat } from "@/lib/purchase-items";
+import {
+  buildItemStats,
+  buildItemCurrencyTotals,
+  normalizeItemCurrency,
+  PURCHASE_ITEMS_PREVIEW,
+  type ItemStat,
+} from "@/lib/purchase-items";
 
 /**
  * 付款方式顯示名（庫存頁／日報表付款方式分佈共用）。
@@ -171,10 +177,19 @@ export type StatReceipt = {
   items: StatItem[];
 };
 
-export type SupplierStat = { name: string; count: number; total: number };
-export type MonthlyExpense = { key: string; name: string; amount: number };
+export type SupplierStat = { name: string; count: number; byCurrency: Record<string, number> };
+export type MonthlyExpense = { key: string; name: string; byCurrency: Record<string, number> };
 export type TrendSummary = { up: number; down: number };
-export type PaymentMethodBreakdown = { method: string; label: string; total: number; count: number };
+/**
+ * 付款方式分佈（2026-10-17 多幣值）：每種付款方式一項，金額**逐幣值**分開
+ * （唔可以將 MOP＋HKD 加埋做一個數）。`count` 係該方式嘅收據張數。
+ */
+export type PaymentMethodBreakdown = {
+  method: string;
+  label: string;
+  count: number;
+  byCurrency: Record<string, number>;
+};
 export type PriceTrendPoint = { key: string; name: string; up: number; down: number };
 
 export type PurchaseSummary = {
@@ -202,8 +217,13 @@ export type PurchaseSummary = {
    * ⚠️ 呢個**唔等於** `paid`（嗰個係收據 `total_amount` 加總，同 Σ品項有折扣／雜費差異），
    *    亦**唔等於** `total`。UI 嘅細項表「合計」行一定要用呢個欄位，
    *    唔可以用 `paid`／`total` —— 否則同細項逐行加埋對唔上（原本 2026-10-13 bug）。
+   *
+   * 🔴 2026-10-17 多幣值（J 拍板）：改為**逐幣值**分開統計。唔同幣值加埋做一個數
+   *    係錯嘅（MOP＋RMB 無意義）；只有一種幣值時 UI 單行顯示（同以前一模一樣）。
+   *    由 {@link buildItemCurrencyTotals} 對 `items` 同一份 rows 計 ⇒
+   *    每幣值加總必然等於 UI 逐行加總。
    */
-  itemsPaidTotal: number;
+  itemsPaidByCurrency: Record<string, number>;
   /**
    * 各幣值分開統計（2026-10-11 多幣值）。
    * 用家決策：各幣值**分開**計總數，唔可以匯總做一個數（唔同幣值加埋會錯）。
@@ -302,7 +322,7 @@ export function buildPurchaseSummary(receipts: StatReceipt[], fullItems = false)
    * 未付款（unpaid／月結／稍後付款…）唔係已實現支出。
    *
    * ── 受影響（全改 paid-only）────────────────────────────────
-   * · `items`／`itemsTotal`／`itemsPaidTotal`（貨品細項排行 + 合計）
+   * · `items`／`itemsTotal`／`itemsPaidByCurrency`（貨品細項排行 + 合計）
    * · `paymentMethodBreakdown`（付款方式分佈）
    * · `monthlyExpenses`（近 6 個月買貨支出柱狀圖）
    * · `supplierStats`、`trend`、`priceTrendSeries`
@@ -314,7 +334,8 @@ export function buildPurchaseSummary(receipts: StatReceipt[], fullItems = false)
    */
   const paidReceipts = receipts.filter((r) => r.payment_status === "paid");
   const allItems = buildItemStats(paidReceipts);
-  const itemsPaidTotal = round2(allItems.reduce((sum, it) => sum + it.amount, 0));
+  // 🔴 2026-10-17：由同一份 rows 逐幣值加總 ⇒ UI 每幣值合計必然等於逐行加總。
+  const itemsPaidByCurrency = buildItemCurrencyTotals(allItems);
   return {
     total: round2(total),
     paid: round2(paid),
@@ -329,7 +350,7 @@ export function buildPurchaseSummary(receipts: StatReceipt[], fullItems = false)
     priceTrendSeries: buildPriceTrendSeries(paidReceipts, 6),
     items: fullItems ? allItems : allItems.slice(0, PURCHASE_ITEMS_PREVIEW),
     itemsTotal: allItems.length,
-    itemsPaidTotal,
+    itemsPaidByCurrency,
     byCurrency,
   };
 }
@@ -345,7 +366,7 @@ export function buildPurchaseSummary(receipts: StatReceipt[], fullItems = false)
  * 點解唔再用 `total_amount`：細項表逐行係 Σ品項，而付款方式分佈／月度支出原本用
  * `total_amount` ⇒ 同一張卡兩個「合計」會差少少（實測 2026-10-12：438.20 vs 438.21），
  * 商家望住兩個唔同嘅數會以為系統計錯。全部統一做 Σ品項後，
- * **每一行加埋必然等於 `itemsPaidTotal`**。
+ * **每一行加埋必然等於 `itemsPaidByCurrency`**（2026-10-17 起逐幣值）。
  *
  * ⚠️ 防禦：完全冇品項行嘅舊單據（例如淨 OCR 總額）Σ 會係 0 ⇒ 退回 `total_amount`，
  *    唔可以令單據喺圖表入面「消失」。
@@ -358,47 +379,68 @@ function receiptItemAmount(r: StatReceipt): number {
   return sum > 0 ? round2(sum) : normalizeNumber(r.total_amount, 0);
 }
 
+/**
+ * 幣值分桶加總（顯示排序用；唔代表「實際總值」——跨幣值加數本身無意義，
+ * 呢度只係為咗有個穩定、可預期嘅排序鍵）。
+ */
+function currencySum(byCurrency: Record<string, number>): number {
+  return round2(Object.values(byCurrency).reduce((a, v) => a + v, 0));
+}
+
+/** 將一筆金額記入对应幣值嘅桶，回傳該桶（方便串聯）。 */
+function addToBucket(
+  map: Map<string, Record<string, number>>,
+  key: string,
+  cur: string,
+  amt: number,
+): Record<string, number> {
+  const bucket = map.get(key) ?? {};
+  bucket[cur] = round2((bucket[cur] ?? 0) + amt);
+  map.set(key, bucket);
+  return bucket;
+}
+
 export function buildSupplierStats(receipts: StatReceipt[]): SupplierStat[] {
-  const totals = new Map<string, { name: string; count: number; total: number }>();
+  const buckets = new Map<string, Record<string, number>>();
+  const counts = new Map<string, number>();
   for (const r of receipts) {
-    const current = totals.get(r.merchant_name) ?? { name: r.merchant_name, count: 0, total: 0 };
-    current.count += 1;
-    current.total += receiptItemAmount(r);
-    totals.set(r.merchant_name, current);
+    const cur = normalizeItemCurrency(r.currency);
+    addToBucket(buckets, r.merchant_name, cur, receiptItemAmount(r));
+    counts.set(r.merchant_name, (counts.get(r.merchant_name) ?? 0) + 1);
   }
-  return Array.from(totals.values())
-    .map((row) => ({ ...row, total: round2(row.total) }))
-    .sort((a, b) => b.total - a.total);
+  return Array.from(buckets.entries())
+    .map(([name, byCurrency]) => ({ name, count: counts.get(name) ?? 0, byCurrency }))
+    .sort((a, b) => currencySum(b.byCurrency) - currencySum(a.byCurrency) || a.name.localeCompare(b.name));
 }
 
 export function buildPaymentMethodBreakdown(receipts: StatReceipt[]): PaymentMethodBreakdown[] {
-  const totals = new Map<string, { total: number; count: number }>();
+  const buckets = new Map<string, Record<string, number>>();
+  const counts = new Map<string, number>();
   for (const r of receipts) {
     const method = r.payment_method || "unknown";
-    const current = totals.get(method) ?? { total: 0, count: 0 };
-    current.total += receiptItemAmount(r);
-    current.count += 1;
-    totals.set(method, current);
+    const cur = normalizeItemCurrency(r.currency);
+    addToBucket(buckets, method, cur, receiptItemAmount(r));
+    counts.set(method, (counts.get(method) ?? 0) + 1);
   }
-  return Array.from(totals.entries())
-    .map(([method, v]) => ({
+  return Array.from(buckets.entries())
+    .map(([method, byCurrency]) => ({
       method,
       label: PAYMENT_METHOD_LABEL[method] ?? method,
-      total: round2(v.total),
-      count: v.count,
+      count: counts.get(method) ?? 0,
+      byCurrency,
     }))
-    .sort((a, b) => b.total - a.total);
+    .sort((a, b) => currencySum(b.byCurrency) - currencySum(a.byCurrency));
 }
 
 export function buildMonthlyExpenses(receipts: StatReceipt[], months = 6): MonthlyExpense[] {
   const now = new Date();
-  const buckets = new Map<string, number>();
+  const buckets = new Map<string, Record<string, number>>();
   const keys: string[] = [];
   for (let i = months - 1; i >= 0; i -= 1) {
     const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
     const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
     if (!buckets.has(key)) {
-      buckets.set(key, 0);
+      buckets.set(key, {});
       keys.push(key);
     }
   }
@@ -406,12 +448,12 @@ export function buildMonthlyExpenses(receipts: StatReceipt[], months = 6): Month
     const d = new Date(r.receipt_date);
     if (Number.isNaN(d.getTime())) continue;
     const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-    if (buckets.has(key)) buckets.set(key, (buckets.get(key) ?? 0) + receiptItemAmount(r));
+    if (buckets.has(key)) addToBucket(buckets, key, normalizeItemCurrency(r.currency), receiptItemAmount(r));
   }
   return keys.map((key) => ({
     key,
     name: `${new Date(`${key}-01`).getMonth() + 1}月`,
-    amount: round2(buckets.get(key) ?? 0),
+    byCurrency: buckets.get(key) ?? {},
   }));
 }
 
@@ -514,6 +556,8 @@ export function buildTrendSummary(receipts: StatReceipt[]): TrendSummary {
  */
 export {
   buildItemStats,
+  buildItemCurrencyTotals,
+  normalizeItemCurrency,
   PURCHASE_ITEMS_PREVIEW,
   type ItemStat,
   type PurchaseItemInput,

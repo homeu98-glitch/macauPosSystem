@@ -1,0 +1,574 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>買貨明細多幣值 — 實機確認稿 2026-10-17</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,"Segoe UI","PingFang TC","Microsoft JhengHei",sans-serif;background:#e2e8f0;color:#0f172a;font-size:14px;line-height:1.5}
+
+  /* ── 審稿用工具列（深色，唔屬產品介面）────────────────────── */
+  .rev{position:relative;background:#0f172a;color:#e2e8f0;padding:12px 16px}
+  .rev .rt{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+  .rev .rt h1{font-size:15px;font-weight:700;color:#fff}
+  .rev .rt span{font-size:11px;color:#94a3b8}
+  .rev .tabs{display:flex;gap:6px;margin-top:10px;flex-wrap:wrap}
+  .rev .tabs button{border:1px solid #334155;background:#1e293b;color:#cbd5e1;border-radius:9px;padding:7px 14px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit}
+  .rev .tabs button.on{background:#f97316;border-color:#f97316;color:#fff}
+
+  /* ── 固定畫布 + 等比縮放 ──────────────────────────────────── */
+  .stage{max-width:1180px;margin:14px auto 0;position:relative;overflow:hidden;border-radius:18px;box-shadow:0 10px 34px rgba(15,23,42,.22)}
+  .canvas{width:1180px;height:880px;position:absolute;top:0;left:0;transform-origin:top left;display:flex;flex-direction:column;overflow:hidden;background:#f1f5f9}
+  .screenwrap{flex:1;min-height:0;display:none;flex-direction:column}
+  .screenwrap.on{display:flex}
+
+  /* ── 報表頁外殼 ──────────────────────────────────────────── */
+  .topbar{flex:none;background:#fff;border-bottom:1px solid #e2e8f0;padding:14px 18px;display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+  .topbar .h1{font-size:17px;font-weight:700}
+  .topbar .sub{margin-top:3px;font-size:12px;color:#64748b}
+  .topbar .sub .muted{color:#94a3b8}
+  .ctrls{display:flex;align-items:center;gap:8px}
+  .csv{background:#0f172a;color:#fff;border:0;border-radius:8px;padding:7px 12px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit}
+  .chips{display:flex;gap:3px;background:#f1f5f9;border-radius:9px;padding:3px}
+  .chips button{border:0;background:transparent;border-radius:6px;padding:5px 10px;font-size:12px;color:#475569;cursor:default;font-family:inherit}
+  .chips button.on{background:#fff;color:#0f172a;font-weight:600;box-shadow:0 1px 2px rgba(15,23,42,.08)}
+
+  .pbody{flex:1;min-height:0;display:flex;flex-direction:column;gap:12px;padding:14px 18px;overflow:hidden}
+
+  /* ── KPI 四格（成本與毛利）───────────────────────────────── */
+  .kpirow{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;flex:none}
+  .kpi{background:#fff;border:1px solid #e2e8f0;border-radius:16px;padding:14px}
+  .kpi .top{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}
+  .kpi .lbl{font-size:12px;color:#64748b}
+  .kpi .val{margin-top:3px;font-size:24px;font-weight:700;color:#0f172a;font-variant-numeric:tabular-nums;white-space:nowrap}
+  .kpi .val .cur{font-size:13px;font-weight:600;margin-right:4px}
+  .kpi .ss{margin-top:3px;font-size:11px;color:#64748b}
+  .kpi .alt{margin-top:3px;font-size:11px;color:#475569;font-variant-numeric:tabular-nums}
+  .kpi .ball{flex-shrink:0;width:16px;height:16px;border-radius:50%;border:1px solid #cbd5e1;background:#f8fafc;color:#94a3b8;font-size:10px;line-height:14px;text-align:center;font-weight:600}
+  .kpi.cost{background:#fff9f6;border-color:#fecdd3}
+  .kpi.cost .lbl{color:#b91c1c}
+  .kpi.cost .val{color:#b91c1c}
+  .kpi.cost .ss{color:#991b1b}
+  .kpi.cost.hero{background:#fef2f2;border:2px solid #f87171}
+  .kpi.cost.hero .val{font-size:22px}
+  .kpi .edit{flex-shrink:0;font-size:11px;color:#94a3b8;border:0;background:transparent;cursor:pointer;font-family:inherit;padding:1px 4px;border-radius:5px}
+  .warn{margin-top:6px;font-size:11px;color:#b45309;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:4px 8px;line-height:1.5}
+
+  /* ── 卡片 ────────────────────────────────────────────────── */
+  .card{background:#fff;border:1px solid #e2e8f0;border-radius:16px;padding:16px;flex:none}
+  .card .ch{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:12px}
+  .card .ct{font-size:14px;font-weight:700}
+  .card .cg{font-size:12px;color:#94a3b8;font-variant-numeric:tabular-nums}
+  .tworow{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;grid-auto-rows:max-content}
+  .seclbl{font-size:12px;font-weight:700;color:#64748b;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;gap:8px}
+  .viewall{flex-shrink:0;border:0;background:#f1f5f9;color:#475569;border-radius:7px;padding:4px 9px;font-size:11px;font-weight:600;cursor:pointer;font-family:inherit}
+  .viewall:hover{background:#e2e8f0}
+
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  thead th{text-align:right;font-size:11px;font-weight:600;color:#64748b;padding:6px 10px;border-bottom:1px solid #e2e8f0;white-space:nowrap}
+  thead th:first-child{text-align:left}
+  tbody td{padding:6px 10px;border-bottom:1px solid #f1f5f9;font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
+  tbody td:first-child{text-align:left;font-weight:600;color:#0f172a}
+  tbody tr:last-child td{border-bottom:0}
+  tr.tot td{background:#f8fafc;font-weight:700}
+  .mut{color:#94a3b8}
+  .cur{font-size:11px;font-weight:700;margin-right:3px}
+  .c-mop{color:#334155}
+  .c-hkd{color:#b45309}
+  .c-rmb{color:#be123c}
+  .c-oth{color:#0f766e}
+  .foot-note{margin-top:10px;font-size:11px;color:#94a3b8;line-height:1.7}
+
+  /* ── 彈窗 ────────────────────────────────────────────────── */
+  .veil{position:absolute;inset:0;background:rgba(15,23,42,.52);display:flex;align-items:center;justify-content:center;padding:16px;z-index:10}
+  .modal{width:780px;max-height:100%;background:#fff;border-radius:18px;box-shadow:0 24px 60px rgba(15,23,42,.4);display:flex;flex-direction:column;overflow:hidden}
+  .mhead{flex:none;display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding:14px 18px 10px}
+  .mhead .mt{font-size:15px;font-weight:700;display:flex;align-items:center;gap:8px}
+  .mhead .ms{margin-top:2px;font-size:11px;color:#94a3b8;font-variant-numeric:tabular-nums}
+  .mclose{flex-shrink:0;border:0;background:#f1f5f9;color:#334155;border-radius:9px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit}
+  .mclose:hover{background:#e2e8f0}
+  .pill{font-size:10px;font-weight:700;padding:2px 8px;border-radius:999px;background:#fef3c7;color:#b45309}
+  .mscroll{flex:1;min-height:0;overflow-y:auto;padding:0 18px}
+  .mtotal{flex:none;border-top:2px solid #cbd5e1;margin:0 18px;padding:10px 0 12px;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:start}
+  .mtotal .tl{font-size:13px;font-weight:700}
+  .mtotal .tnote{font-size:11px;color:#94a3b8;margin-top:3px;line-height:1.6}
+  .mtotal .tlines{text-align:right}
+  .totline{font-size:13px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1.7;white-space:nowrap}
+  .mfoot{flex:none;padding:8px 18px 12px;font-size:11px;color:#94a3b8;line-height:1.7}
+
+  /* ── 註釋圓點 ────────────────────────────────────────────── */
+  .rel{position:relative}
+  .anno{position:absolute;width:20px;height:20px;border-radius:50%;background:#dc2626;color:#fff;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;box-shadow:0 1px 4px rgba(15,23,42,.35);z-index:20}
+  .anno.a1{top:-9px;right:96px}
+  .anno.a2{top:50%;left:-26px;margin-top:-10px}
+  .anno.a3{top:-9px;right:0}
+  .anno.a4{top:-9px;left:12px}
+  .anno.a5{top:-9px;left:12px}
+  /*  inline 版（用於表格內：span 唔可以係 thead/tr 嘅直接子元素，
+      會被瀏覽器 foster-parent 搬走 ⇒ 一定要擺落 th/td 入面）*/
+  .anno.inl{position:static;display:inline-flex;margin-left:6px;width:16px;height:16px;font-size:10px;vertical-align:1px;box-shadow:none}
+  .pill2{font-size:10px;font-weight:700;padding:2px 8px;border-radius:999px;background:#f1f5f9;color:#475569}
+  .shiftbtns{display:flex;gap:10px;margin-top:12px}
+  .sbtn{border:1px solid #cbd5e1;background:#fff;color:#334155;border-radius:10px;padding:9px 16px;font-size:12px;font-weight:600;cursor:default;font-family:inherit}
+  .sbtn.pri{background:#0f172a;border-color:#0f172a;color:#fff}
+
+  /* ── 月度支出柱狀圖（分色堆疊）───────────────────────────── */
+  .bars{display:flex;align-items:flex-end;gap:10px;height:92px;padding-top:6px}
+  .bars .b{flex:1;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:4px;min-width:0}
+  .bars .b .stack{width:100%;border-radius:5px 5px 0 0;overflow:hidden;display:flex;flex-direction:column;justify-content:flex-end}
+  .bars .b .seg{width:100%}
+  .bars .b .cap{font-size:10px;color:#94a3b8;font-variant-numeric:tabular-nums}
+  .legend{display:flex;align-items:center;gap:14px;margin-top:8px;font-size:11px;color:#64748b}
+  .legend .li{display:inline-flex;align-items:center;gap:5px}
+  .legend .dot{width:9px;height:9px;border-radius:3px;display:inline-block}
+
+  /* ── 交班頁 ──────────────────────────────────────────────── */
+  .ghost{background:#fff;border:1px dashed #cbd5e1;border-radius:16px;padding:16px;color:#94a3b8}
+  .ghost .gt{font-size:13px;font-weight:600;color:#64748b;margin-bottom:10px}
+  .ghost .gl{height:11px;border-radius:6px;background:#e2e8f0;margin-bottom:9px}
+  .big{display:flex;align-items:baseline;gap:8px}
+  .big .bv{font-size:30px;font-weight:800;color:#0f172a;font-variant-numeric:tabular-nums}
+  .big .bv .cur{font-size:15px}
+
+  /* ── 改動點圖例（審稿用，喺畫布外）───────────────────────── */
+  .legendbox{max-width:1180px;margin:14px auto 28px;background:#fff;border:1px solid #e2e8f0;border-radius:16px;padding:16px 18px}
+  .legendbox h2{font-size:14px;font-weight:700;margin-bottom:10px}
+  .legendbox ol{margin-left:20px;display:flex;flex-direction:column;gap:6px}
+  .legendbox li{font-size:12.5px;color:#334155;line-height:1.7}
+  .legendbox li b{color:#0f172a}
+  .ba{margin-top:12px;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:12px}
+  .ba .box{border-radius:12px;padding:10px 12px;font-size:12px;line-height:1.8}
+  .ba .before{background:#fef2f2;border:1px solid #fecdd3;color:#991b1b}
+  .ba .after{background:#f0fdf4;border:1px solid #bbf7d0;color:#166534}
+  .ba .box .bt{font-weight:700;font-size:11px;margin-bottom:4px}
+  .impl{margin-top:12px;font-size:11.5px;color:#64748b;line-height:1.8;border-top:1px dashed #e2e8f0;padding-top:10px}
+</style>
+</head>
+<body>
+
+<!-- ═══ 審稿工具列（唔屬產品介面） ═══ -->
+<div class="rev">
+  <div class="rt">
+    <h1>買貨明細 · 多幣值顯示 — 實機確認稿</h1>
+    <span>澳門 POS · 2026-10-17 · 深色欄屬審稿用，唔屬產品介面 · 固定畫布 1180×880（iPad 橫向）</span>
+  </div>
+  <div class="tabs" id="revtabs">
+    <button type="button" data-tab="scr-modal" class="on">① 報表 · 貨品明細彈窗</button>
+    <button type="button" data-tab="scr-card">② 報表 · 買貨明細卡</button>
+    <button type="button" data-tab="scr-shift">③ 交班頁 · 已付支出</button>
+  </div>
+</div>
+
+<div class="stage" id="stage">
+<div class="canvas" id="canvas">
+
+  <!-- ═══════════ 畫面 1：報表 · 貨品明細彈窗 ═══════════ -->
+  <section class="screenwrap on" id="scr-modal">
+    <div class="topbar">
+      <div>
+        <div class="h1">店鋪每日營運總結</div>
+        <div class="sub">表嫂美食 · 2026-10-17（澳門）· 篩選影響全部模塊 <span class="muted">· 每 10 分鐘自動更新</span></div>
+      </div>
+      <div class="ctrls">
+        <button type="button" class="csv">導出 CSV</button>
+        <div class="chips">
+          <button type="button" class="on">今日</button><button type="button">昨日</button><button type="button">7天</button><button type="button">30天</button><button type="button">全部</button><button type="button">自訂</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="pbody">
+      <div class="kpirow">
+        <div class="kpi cost">
+          <div class="top"><div class="lbl">買貨總額</div><span class="ball">i</span></div>
+          <div class="val"><span class="cur c-mop">MOP</span>512.31</div>
+          <div class="alt">另有 <span class="cur c-hkd">HKD</span>88.00 · <span class="cur c-rmb">RMB</span>85.20</div>
+          <div class="ss">12 張收據 · 3 間供貨商</div>
+        </div>
+        <div class="kpi cost">
+          <div class="top"><div class="lbl">已付支出</div><span class="ball">i</span></div>
+          <div class="val"><span class="cur c-mop">MOP</span>437.81</div>
+          <div class="alt">另有 <span class="cur c-hkd">HKD</span>88.00 · <span class="cur c-rmb">RMB</span>85.20</div>
+          <div class="ss">11 張收據 · 同交班頁一致</div>
+        </div>
+        <div class="kpi cost">
+          <div class="top"><div class="lbl">未付支出</div><span class="ball">i</span></div>
+          <div class="val"><span class="cur c-mop">MOP</span>74.50</div>
+          <div class="ss">1 張月結單 · 新增負債</div>
+        </div>
+        <div class="kpi cost hero">
+          <div class="top"><div class="lbl">毛利（估）</div><button type="button" class="edit">edit</button></div>
+          <div class="val"><span class="cur c-mop">MOP</span>2,974</div>
+          <div class="ss">成本率 14.7% · 營業額 − 買貨總額</div>
+          <div class="warn">暫只按 MOP 貨款計；HKD／RMB 不換算（不設匯率）</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="ch"><span class="ct">買貨明細</span><span class="cg">2026-10-17 · 11 張收據 · 14 款品項</span></div>
+        <div style="height:150px;display:flex;align-items:center;justify-content:center;color:#cbd5e1;font-size:12px">（彈窗打開時，背面內容被遮暗）</div>
+      </div>
+    </div>
+
+    <!-- 彈窗 -->
+    <div class="veil">
+      <div class="modal">
+        <div class="mhead rel">
+          <div>
+            <div class="mt">貨品明細（按金額）<span class="pill">多幣值</span></div>
+            <div class="ms">共 15 行 · 只計已付款收據 · 幣值跟隨收據</div>
+          </div>
+          <button type="button" class="mclose kbtn" data-k="close">關閉</button>
+        </div>
+        <div class="mscroll">
+          <table>
+            <thead><tr><th>品項</th><th>數量</th><th>單價<span class="anno inl">1</span></th><th>金額</th></tr></thead>
+            <tbody id="mtbody"></tbody>
+          </table>
+        </div>
+        <div class="mtotal rel">
+          <div>
+            <div class="tl">合計（按幣值）</div>
+            <div class="tnote">不同幣值分開計算，不會合併成一個數<br />只有一種幣值時，同而家一樣單行顯示</div>
+          </div>
+          <div class="tlines" id="mtotal"></div>
+          <span class="anno a3">3</span>
+        </div>
+        <div class="mfoot">同名品項跨幣值分開顯示（各自平均價先有意義）· MOP＝澳門元 · HKD＝港幣 · RMB＝人民幣</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════ 畫面 2：報表 · 買貨明細卡 ═══════════ -->
+  <section class="screenwrap" id="scr-card">
+    <div class="topbar">
+      <div>
+        <div class="h1">店鋪每日營運總結</div>
+        <div class="sub">表嫂美食 · 2026-10-17（澳門）· 篩選影響全部模塊 <span class="muted">· 每 10 分鐘自動更新</span></div>
+      </div>
+      <div class="ctrls">
+        <button type="button" class="csv">導出 CSV</button>
+        <div class="chips">
+          <button type="button" class="on">今日</button><button type="button">昨日</button><button type="button">7天</button><button type="button">30天</button><button type="button">全部</button><button type="button">自訂</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="pbody">
+      <div class="kpirow rel">
+        <div class="kpi cost">
+          <div class="top"><div class="lbl">買貨總額</div><span class="ball">i</span></div>
+          <div class="val"><span class="cur c-mop">MOP</span>512.31</div>
+          <div class="alt">另有 <span class="cur c-hkd">HKD</span>88.00 · <span class="cur c-rmb">RMB</span>85.20</div>
+          <div class="ss">12 張收據 · 3 間供貨商</div>
+        </div>
+        <div class="kpi cost">
+          <div class="top"><div class="lbl">已付支出</div><span class="ball">i</span></div>
+          <div class="val"><span class="cur c-mop">MOP</span>437.81</div>
+          <div class="alt">另有 <span class="cur c-hkd">HKD</span>88.00 · <span class="cur c-rmb">RMB</span>85.20</div>
+          <div class="ss">11 張收據 · 同交班頁一致</div>
+        </div>
+        <div class="kpi cost">
+          <div class="top"><div class="lbl">未付支出</div><span class="ball">i</span></div>
+          <div class="val"><span class="cur c-mop">MOP</span>74.50</div>
+          <div class="ss">1 張月結單 · 新增負債</div>
+        </div>
+        <div class="kpi cost hero">
+          <div class="top"><div class="lbl">毛利（估）</div><button type="button" class="edit">edit</button></div>
+          <div class="val"><span class="cur c-mop">MOP</span>2,974</div>
+          <div class="ss">成本率 14.7% · 營業額 − 買貨總額</div>
+          <div class="warn">暫只按 MOP 貨款計；HKD／RMB 不換算（不設匯率）</div>
+        </div>
+        <span class="anno a4">4</span>
+      </div>
+
+      <div class="card rel">
+        <div class="ch"><span class="ct">買貨明細</span><span class="cg">2026-10-17 · 11 張收據 · 14 款品項（15 行）</span></div>
+        <div class="tworow">
+          <div>
+            <div class="seclbl">
+              <span>貨品細項（按金額）</span>
+              <button type="button" class="viewall kbtn" data-k="view-all">查看全部（共 15 行）</button>
+            </div>
+            <table>
+              <thead><tr><th>品項</th><th>數量</th><th>單價</th><th>金額</th></tr></thead>
+              <tbody id="ctbody"></tbody>
+            </table>
+            <div class="foot-note">以「品項 ＋ 幣值」聚合 · 同名跨幣值分兩行 · 顯示前 5 行</div>
+          </div>
+          <div class="rel">
+            <span class="anno a5">5</span>
+            <div class="seclbl"><span>付款方式分佈</span></div>
+            <table>
+              <thead><tr><th>付款方式</th><th>張數</th><th>金額（按幣值）</th></tr></thead>
+              <tbody id="ptbody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div style="margin-top:14px">
+          <div class="seclbl"><span>近 6 個月買貨支出</span></div>
+          <div class="bars" id="mbars"></div>
+          <div class="legend">
+            <span class="li"><span class="dot" style="background:#0284c7"></span>MOP</span>
+            <span class="li"><span class="dot" style="background:#d97706"></span>HKD</span>
+            <span class="li"><span class="dot" style="background:#e11d48"></span>RMB</span>
+            <span style="margin-left:auto">10月（月至今）＝ MOP 11,900 + HKD 320.00 + RMB 210.00</span>
+          </div>
+          <div class="foot-note">柱內按幣值分色堆疊；唔同幣值仍然分開計，顏色只係識別用</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ═══════════ 畫面 3：交班頁 · 已付支出 ═══════════ -->
+  <section class="screenwrap" id="scr-shift">
+    <div class="topbar">
+      <div>
+        <div class="h1">交班</div>
+        <div class="sub">表嫂美食 · 2026-10-17（澳門）· <span class="muted">已開工 · 第 3 班</span></div>
+      </div>
+      <div class="ctrls">
+        <div class="chips">
+          <button type="button" class="on">今日</button><button type="button">昨日</button><button type="button">7天</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="pbody">
+      <div style="flex:none;font-size:11px;color:#94a3b8">↓ 以下四格維持原狀（全部 MOP 口徑），唔受今次改動影響</div>
+      <div class="kpirow">
+        <div class="kpi">
+          <div class="top"><div class="lbl">應收金額合計</div><span class="pill2">原狀</span></div>
+          <div class="val"><span class="cur c-mop">MOP</span>3,712</div>
+          <div class="ss">線下 2,384 · 線上 1,328</div>
+        </div>
+        <div class="kpi">
+          <div class="top"><div class="lbl">實收金額合計</div><span class="pill2">原狀</span></div>
+          <div class="val"><span class="cur c-mop">MOP</span>3,486</div>
+          <div class="ss">已扣退款 · 線下 2,180 · 線上 1,306</div>
+        </div>
+        <div class="kpi">
+          <div class="top"><div class="lbl">訂單數</div><span class="pill2">原狀</span></div>
+          <div class="val">42</div>
+          <div class="ss">線下 29 單 · 線上 13 單</div>
+        </div>
+        <div class="kpi">
+          <div class="top"><div class="lbl">客單價</div><span class="pill2">原狀</span></div>
+          <div class="val"><span class="cur c-mop">MOP</span>83</div>
+          <div class="ss">營業額 ÷ 訂單數</div>
+        </div>
+      </div>
+
+      <div class="card rel">
+        <span class="anno a5">5</span>
+        <div class="ch"><span class="ct">已付支出（今日買貨）</span><span class="cg">只計已付款收據 · 幣值跟隨收據</span></div>
+        <div class="big">
+          <span class="bv"><span class="cur c-mop">MOP</span>437.81</span>
+          <span style="font-size:12px;color:#475569">另有 <span class="cur c-hkd">HKD</span>88.00 · <span class="cur c-rmb">RMB</span>85.20</span>
+        </div>
+        <div class="ss" style="margin-top:2px;font-size:11px;color:#64748b">11 張收據 · 供貨商 3 間</div>
+        <table style="margin-top:10px">
+          <thead><tr><th>供貨商分拆</th><th>張數</th><th>金額（按幣值）</th></tr></thead>
+          <tbody id="supbody"></tbody>
+        </table>
+        <div class="foot-note">幣值跟隨收據；唔同幣值分開顯示，唔會加埋做一個數</div>
+      </div>
+
+      <div class="ghost" style="flex:none">
+        <div class="gt">訂單明細（今日已結帳）· 交班其餘內容（不受今次改動影響）</div>
+        <div class="gl" style="width:88%"></div>
+        <div class="gl" style="width:72%"></div>
+        <div class="gl" style="width:80%"></div>
+        <div class="shiftbtns">
+          <button type="button" class="sbtn pri">打印交班明細</button>
+          <button type="button" class="sbtn">跳過打印，直接交班</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</div>
+</div>
+
+<!-- ═══ 改動點圖例（審稿用） ═══ -->
+<div class="legendbox">
+  <h2>改動點（對應畫面紅色圓點）</h2>
+  <ol>
+    <li><b>每行單價／金額改用收據本身幣值</b>——RMB 收據唔會再顯示成 MOP；幣值碼著色（MOP 深灰／HKD 琥珀／RMB 玫紅），舊收據冇幣值 ⇒ 顯示 MOP。</li>
+    <li><b>同名品項跨幣值分兩行</b>（例：魷魚 MOP 103.00 ／ 魷魚 RMB 66.00）——改動前會加埋做一個假 MOP 數，平均單價都係錯。</li>
+    <li><b>合計逐幣值一行</b>，按金額大→小排；只有一種幣值時維持單行（同而家一模一樣）。</li>
+    <li><b>成本三格</b>：大數顯示 MOP，其餘幣值列副線（summary.byCurrency 現成數據，唔使改 API）；<b>毛利（估）暫只計 MOP</b>，卡片明寫「不設匯率」。</li>
+    <li><b>付款方式分佈／供貨商分拆／月度柱狀圖</b>同步逐幣值；月度柱＝分色堆疊＋圖例。</li>
+  </ol>
+  <div class="ba">
+    <div class="box before">
+      <div class="bt">✗ 改動前（而家）</div>
+      魷魚 只有一行「MOP 169.00」（MOP 103.00 ＋ RMB 66.00 被加埋）<br />
+      合計「MOP 523.01」（三種幣值混為一數）
+    </div>
+    <div class="box after">
+      <div class="bt">✓ 改動後（本稿）</div>
+      魷魚「MOP 103.00」／魷魚「RMB 66.00」兩行<br />
+      合計「MOP 437.81」／「HKD 88.00」／「RMB 85.20」三行
+    </div>
+  </div>
+  <div class="impl">
+    落地改動：<b>purchase-items.ts</b>（聚合鍵加幣值、ItemStat 加 currency）→ <b>inventory-stats.ts</b>（新增 itemsPaidByCurrency，刪走混合數 itemsPaidTotal）→ <b>restaurant-daily-report.tsx</b>（彈窗／卡片／KPI 三格／付款方式／月度圖）→ <b>shift-page.tsx</b>（已付支出＋供貨商分拆）＋ <b>purchase-items.test.ts</b> 守恆測試（跨幣值必須分兩行、混合幣值唔可以加埋）。API／DB 唔使改——幣值一直都喺收據度。
+  </div>
+</div>
+
+<script>
+(function(){
+  "use strict";
+
+  /* ── 示範數據（商戶資料，全部由 array 生成 UI）──────────── */
+  var ITEMS = [
+    { name:"魷魚",     qty:"2 斤",   price:51.50, amount:103.00, cur:"MOP" },
+    { name:"蝦醬",     qty:"2 瓶",   price:44.00, amount:88.00,  cur:"HKD" },
+    { name:"魷魚",     qty:"1.5 斤", price:44.00, amount:66.00,  cur:"RMB" },
+    { name:"筷子",     qty:"1 包",   price:64.80, amount:64.80,  cur:"MOP" },
+    { name:"白鯭",     qty:"3 斤",   price:15.00, amount:45.00,  cur:"MOP" },
+    { name:"雞扒",     qty:"3.9 磅", price:10.00, amount:39.00,  cur:"MOP" },
+    { name:"魚腩",     qty:"1 條",   price:38.00, amount:38.00,  cur:"MOP" },
+    { name:"核桃",     qty:"3 斤",   price:12.17, amount:36.51,  cur:"MOP" },
+    { name:"白糖",     qty:"10 斤",  price:2.97,  amount:29.70,  cur:"MOP" },
+    { name:"葡蚬",     qty:"1 斤",   price:25.00, amount:25.00,  cur:"MOP" },
+    { name:"橡膠手套", qty:"10 對",  price:2.18,  amount:21.80,  cur:"MOP" },
+    { name:"黃花",     qty:"1 條",   price:21.00, amount:21.00,  cur:"MOP" },
+    { name:"全蛋面",   qty:"1 包",   price:14.00, amount:14.00,  cur:"MOP" },
+    { name:"生菜",     qty:"1.62 斤",price:6.80,  amount:11.00,  cur:"RMB" },
+    { name:"西洋菜",   qty:"1 斤",   price:8.20,  amount:8.20,   cur:"RMB" }
+  ];
+  var PAYMENTS = [
+    { name:"現金",   count:5, cur:"MOP", amount:285.81 },
+    { name:"現金",   count:0, cur:"HKD", amount:88.00 },
+    { name:"信用卡", count:4, cur:"MOP", amount:152.00 },
+    { name:"轉帳",   count:2, cur:"RMB", amount:85.20 }
+  ];
+  var MONTHS = [
+    { m:"5月",  mop:9800 },
+    { m:"6月",  mop:11200 },
+    { m:"7月",  mop:7600 },
+    { m:"8月",  mop:13400 },
+    { m:"9月",  mop:10500 },
+    { m:"10月", mop:11900, hkd:320, rmb:210 }
+  ];
+  var SUPPLIERS = [
+    { name:"海鮮行", count:3, parts:[["MOP",141.00],["HKD",88.00],["RMB",66.00]] },
+    { name:"乾貨行", count:4, parts:[["MOP",166.81]] },
+    { name:"菜欄",   count:4, parts:[["MOP",130.00],["RMB",19.20]] }
+  ];
+  var CUR_TOTALS = [["MOP",437.81],["HKD",88.00],["RMB",85.20]];
+
+  function curCls(c){
+    return c === "HKD" ? "c-hkd" : c === "RMB" ? "c-rmb" : c === "MOP" ? "c-mop" : "c-oth";
+  }
+  function money(n){
+    return Number(n).toLocaleString("en-US",{ minimumFractionDigits:2, maximumFractionDigits:2 });
+  }
+  function amt(cur, n){
+    return '<span class="cur ' + curCls(cur) + '">' + cur + "</span>" + money(n);
+  }
+
+  /* ── 貨品細項行 ─────────────────────────────────────────── */
+  function itemRow(it, withAnno){
+    return '<tr class="itrow">' +
+      "<td>" + it.name + (withAnno ? '<span class="anno inl">2</span>' : "") + "</td>" +
+      "<td>" + it.qty + "</td>" +
+      "<td>" + amt(it.cur, it.price) + "</td>" +
+      '<td style="font-weight:700;color:#0f172a">' + amt(it.cur, it.amount) + "</td>" +
+      "</tr>";
+  }
+  var modalRows = ITEMS.map(function(it, i){
+    return itemRow(it, i === 3); // 第 4 行（魷魚 RMB）貼註釋 2
+  }).join("");
+  document.getElementById("mtbody").innerHTML = modalRows;
+
+  var cardRows = ITEMS.slice(0,5).map(function(it){ return itemRow(it, false); }).join("") +
+    '<tr class="tot"><td>合計</td><td class="mut">—</td><td class="mut">—</td>' +
+    '<td style="text-align:right">' + CUR_TOTALS.map(function(p){ return amt(p[0], p[1]); }).join("<br />") + "</td></tr>";
+  document.getElementById("ctbody").innerHTML = cardRows;
+
+  /* ── 合計行（彈窗）──────────────────────────────────────── */
+  document.getElementById("mtotal").innerHTML = CUR_TOTALS.map(function(p){
+    return '<div class="totline">' + amt(p[0], p[1]) + "</div>";
+  }).join("");
+
+  /* ── 付款方式分佈（同名付款方式按幣值併行顯示）──────────── */
+  var payRows = [
+    { name:"現金",   count:5, parts:[["MOP",285.81],["HKD",88.00]] },
+    { name:"信用卡", count:4, parts:[["MOP",152.00]] },
+    { name:"轉帳",   count:2, parts:[["RMB",85.20]] }
+  ].map(function(p){
+    return "<tr><td>" + p.name + "</td><td>" + p.count + "</td>" +
+      '<td style="text-align:right">' + p.parts.map(function(x){ return amt(x[0], x[1]); }).join(" · ") + "</td></tr>";
+  }).join("") +
+  '<tr class="tot"><td>合計</td><td>11</td>' +
+  '<td style="text-align:right">' + CUR_TOTALS.map(function(p){ return amt(p[0], p[1]); }).join(" · ") + "</td></tr>";
+  document.getElementById("ptbody").innerHTML = payRows;
+
+  /* ── 月度支出（分色堆疊柱）──────────────────────────────── */
+  var MAX = 13400, H = 92;
+  var barHtml = MONTHS.map(function(m){
+    var segs = "";
+    if (m.rmb) segs += '<div class="seg" style="height:' + (m.rmb / MAX * H).toFixed(1) + 'px;background:#e11d48"></div>';
+    if (m.hkd) segs += '<div class="seg" style="height:' + (m.hkd / MAX * H).toFixed(1) + 'px;background:#d97706"></div>';
+    segs += '<div class="seg" style="height:' + (m.mop / MAX * H).toFixed(1) + 'px;background:#0284c7"></div>';
+    return '<div class="b"><div class="stack" style="height:' + ((m.mop + (m.hkd||0) + (m.rmb||0)) / MAX * H).toFixed(1) + 'px">' + segs + "</div>" +
+      '<div class="cap">' + m.m + "</div></div>";
+  }).join("");
+  document.getElementById("mbars").innerHTML = barHtml;
+
+  /* ── 供貨商分拆（交班頁）────────────────────────────────── */
+  document.getElementById("supbody").innerHTML = SUPPLIERS.map(function(s){
+    return "<tr><td>" + s.name + "</td><td>" + s.count + "</td>" +
+      '<td style="text-align:right">' + s.parts.map(function(x){ return amt(x[0], x[1]); }).join(" · ") + "</td></tr>";
+  }).join("") +
+  '<tr class="tot"><td>合計</td><td>11</td>' +
+  '<td style="text-align:right">' + CUR_TOTALS.map(function(p){ return amt(p[0], p[1]); }).join(" · ") + "</td></tr>";
+
+  /* ── 頁籤切換（el.onclick，唔用 addEventListener）───────── */
+  function pickTab(id){
+    var wraps = document.querySelectorAll(".screenwrap");
+    for (var i = 0; i < wraps.length; i++) wraps[i].classList.toggle("on", wraps[i].id === id);
+    var tabs = document.querySelectorAll("#revtabs button");
+    for (var j = 0; j < tabs.length; j++) tabs[j].classList.toggle("on", tabs[j].getAttribute("data-tab") === id);
+    fit();
+  }
+  var tabs = document.querySelectorAll("#revtabs button");
+  for (var i = 0; i < tabs.length; i++) (function(el){
+    el.onclick = function(){ pickTab(el.getAttribute("data-tab")); };
+  })(tabs[i]);
+
+  /* ── 產品按鈕（data-k 單一分派器）──────────────────────── */
+  var handlers = {
+    "view-all": function(){ pickTab("scr-modal"); },
+    "close":    function(){ pickTab("scr-card"); }
+  };
+  var kbtns = document.querySelectorAll(".kbtn");
+  for (var k = 0; k < kbtns.length; k++) (function(el){
+    el.onclick = function(){
+      var h = handlers[el.getAttribute("data-k")];
+      if (h) h();
+    };
+  })(kbtns[k]);
+
+  /* ── 等比縮放 ───────────────────────────────────────────── */
+  var MIN_SCALE = 0.55;
+  function fit(){
+    var stage = document.getElementById("stage");
+    var canvas = document.getElementById("canvas");
+    var w = stage.clientWidth || 1180;
+    var s = Math.min(1, Math.max(w / 1180, MIN_SCALE));
+    canvas.style.transform = "scale(" + s + ")";
+    stage.style.height = Math.round(880 * s) + "px";
+    stage.style.overflowX = (1180 * s > w) ? "auto" : "hidden";
+  }
+  window.addEventListener("resize", fit);
+  fit();
+})();
+</script>
+</body>
+</html>

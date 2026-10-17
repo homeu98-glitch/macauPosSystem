@@ -10,7 +10,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { buildItemStats, PURCHASE_ITEMS_PREVIEW } from "./purchase-items.ts";
+import {
+  buildItemStats,
+  buildItemCurrencyTotals,
+  normalizeItemCurrency,
+  PURCHASE_ITEMS_PREVIEW,
+} from "./purchase-items.ts";
 
 type Receipt = Parameters<typeof buildItemStats>[0][number];
 
@@ -18,6 +23,7 @@ function receipt(
   id: string,
   total: number,
   items: Array<{ name: string; unit_price: number; quantity: number; quantity_unit?: string }>,
+  currency?: string,
 ): Receipt {
   return {
     id,
@@ -26,6 +32,7 @@ function receipt(
     total_amount: total,
     payment_status: "paid",
     payment_method: "cash",
+    ...(currency !== undefined ? { currency } : {}),
     items,
   };
 }
@@ -117,4 +124,77 @@ test("buildItemStats：qty 為 0 時 avgPrice 為 0，唔可以出現 NaN／Infi
 test("PURCHASE_ITEMS_PREVIEW：必須係正整數（截斷上限，唔可以係 0／負）", () => {
   assert.ok(Number.isInteger(PURCHASE_ITEMS_PREVIEW));
   assert.ok(PURCHASE_ITEMS_PREVIEW > 0);
+});
+
+/* ─────────────── 2026-10-17 多幣值（J 拍板）─────────────── */
+
+test("🔴 buildItemStats：同名品項跨幣值必須分成兩行（唔可以加埋做一個假 MOP 數）", () => {
+  const out = buildItemStats([
+    receipt("r1", 0, [{ name: "魷魚", unit_price: 51.5, quantity: 2 }], "MOP"),   // MOP 103.00
+    receipt("r2", 0, [{ name: "魷魚", unit_price: 44, quantity: 1.5 }], "RMB"),   // RMB 66.00
+  ]);
+  assert.equal(out.length, 2, "同名唔同幣值應該出兩行");
+  const mop = out.find((x) => x.currency === "MOP");
+  const rmb = out.find((x) => x.currency === "RMB");
+  assert.ok(mop && rmb);
+  assert.equal(mop.amount, 103);
+  assert.equal(rmb.amount, 66);
+  assert.equal(mop.avgPrice, 51.5);
+  assert.equal(rmb.avgPrice, 44);
+  assert.notEqual(mop.key, rmb.key, "聚合 key 必須含幣值");
+});
+
+test("buildItemStats：同名同幣值跨收據仍然合併（多幣值改動唔可以破壞原行為）", () => {
+  const out = buildItemStats([
+    receipt("r1", 0, [{ name: "墨魚滑", unit_price: 40, quantity: 2 }], "MOP"),
+    receipt("r2", 0, [{ name: "墨魚滑", unit_price: 40, quantity: 3 }], "MOP"),
+    receipt("r3", 0, [{ name: "墨魚滑", unit_price: 40, quantity: 1 }], "MOP"),
+  ]);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].amount, 240);
+  assert.equal(out[0].currency, "MOP");
+});
+
+test("buildItemStats：收據冇幣值 ⇒ fallback MOP（同 API 讀取端口徑一致）", () => {
+  const out = buildItemStats([receipt("r1", 0, [{ name: "豬扒", unit_price: 27, quantity: 2 }])]);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].currency, "MOP");
+});
+
+test("normalizeItemCurrency：trim ＋ 統一做大寫（mop／Mop 都變 MOP）", () => {
+  assert.equal(normalizeItemCurrency("mop"), "MOP");
+  assert.equal(normalizeItemCurrency("  Rmb  "), "RMB");
+  assert.equal(normalizeItemCurrency("HKD"), "HKD");
+  assert.equal(normalizeItemCurrency(""), "MOP");
+  assert.equal(normalizeItemCurrency(undefined), "MOP");
+  assert.equal(normalizeItemCurrency(null), "MOP");
+});
+
+test("🔴 buildItemCurrencyTotals：逐幣值加總，唔同幣值絕對唔可以加埋", () => {
+  const stats = buildItemStats([
+    receipt("r1", 0, [{ name: "魷魚", unit_price: 51.5, quantity: 2 }, { name: "蝦醬", unit_price: 44, quantity: 2 }], "MOP"), // MOP 103 + 88
+    receipt("r2", 0, [{ name: "魷魚", unit_price: 44, quantity: 1.5 }, { name: "生菜", unit_price: 6.8, quantity: 1.62 }], "RMB"), // RMB 66 + 11.016
+  ]);
+  const totals = buildItemCurrencyTotals(stats);
+  assert.deepEqual(totals, { MOP: 191, RMB: 77.02 });
+});
+
+test("buildItemCurrencyTotals：每幣值加總 = 該幣值逐行加總（UI 合計必然對得上）", () => {
+  const stats = buildItemStats([
+    receipt("r1", 0, [
+      { name: "A", unit_price: 10.11, quantity: 3 },
+      { name: "B", unit_price: 5.55, quantity: 2 },
+    ], "MOP"),
+    receipt("r2", 0, [{ name: "C", unit_price: 7.77, quantity: 1 }], "HKD"),
+    receipt("r3", 0, [{ name: "A", unit_price: 9.99, quantity: 1 }], "MOP"),
+  ]);
+  const totals = buildItemCurrencyTotals(stats);
+  for (const [cur, total] of Object.entries(totals)) {
+    const sum = stats.filter((s) => s.currency === cur).reduce((a, s) => a + s.amount, 0);
+    assert.equal(total, Math.round(sum * 100) / 100, `${cur} 加總要同逐行加總一致`);
+  }
+});
+
+test("buildItemCurrencyTotals：空陣列 ⇒ 空物件（唔可以出 MOP 0 噪音鍵）", () => {
+  assert.deepEqual(buildItemCurrencyTotals([]), {});
 });

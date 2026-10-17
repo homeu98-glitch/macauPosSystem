@@ -777,8 +777,21 @@ export type ShiftSettlementSnapshot = {
     inStorePaidMop: number;
   } | null;
   payments: { method: string; receivable: number; paid: number; count: number }[];
-  /** 今日買貨成本——冇做成本記錄時 null。 */
-  purchase: { paid: number; unpaid: number } | null;
+  /**
+   * 今日買貨成本——冇做成本記錄時 null。
+   *
+   * 🔴 2026-10-17 多幣值（J 拍板：唔設匯率）：改**逐幣值**（paidByCurrency／
+   *    unpaidByCurrency），唔同幣值唔加埋。舊快照（重打歷史交班單）可能仍然係
+   *    平面 `{ paid, unpaid }`（混合幣值嘅舊數值，無法追溯還原）⇒
+   *    渲染端必須兼容兩種形態，見 `escpos-template.ts`。
+   */
+  purchase: {
+    paidByCurrency?: Record<string, number>;
+    unpaidByCurrency?: Record<string, number>;
+    /** @deprecated 舊版平面數（混合幣值）；只有舊記錄先至有，渲染時 fallback 用。 */
+    paid?: number;
+    unpaid?: number;
+  } | null;
   cash: { expected: number; actual?: number; diff?: number };
   // 冇 G 區（待同步/技術狀態唔上紙本），但歷史記錄仍要記，跟住快照走。
   pendingEvents: number;
