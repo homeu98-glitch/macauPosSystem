@@ -5,6 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import { clearAuthSession, loadAuthSession } from "@/lib/storage";
+import { decodeAdminSessionToken, isAdminSessionTokenExpired } from "@/lib/admin-session-token-client";
 
 /**
  * Admin panel 外殼（view-only）：
@@ -22,11 +23,19 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     const session = loadAuthSession();
-    if (!session?.adminSessionToken) {
+    const token = session?.adminSessionToken;
+    // 🔴 2026-10-17 修（J 拍板）：admin panel 身份必須以「登入嗰陣輸入嘅 admin 帳號」為準，
+    // 唔可以繼承 POS 收銀登入嘅 account。之前 admin 登入做咗 { ...existing, adminSessionToken }，
+    // 會保留 POS 收銀嘅 account，令 admin 頂部顯示成收銀戶口，仲以為「用咗之前個戶口入嚟」。
+    // 呢度由 token payload 解碼出真正嘅 admin account（token 本身 encode 咗 account + role），
+    // 同時驗 expiry：過期／解唔到就彈返登入頁。真正授權仍由 server 端 HMAC 驗簽把關
+    //（每個 admin API route 都會再 verify 一次，客戶端解密唔等於放行）。
+    const claims = token ? decodeAdminSessionToken(token) : null;
+    if (!claims || isAdminSessionTokenExpired(claims)) {
       router.replace("/admin");
       return;
     }
-    setAccount(session.account || "admin");
+    setAccount(claims.account);
     setAuthed(true);
   }, [router]);
 
