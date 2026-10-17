@@ -4,6 +4,7 @@ import { getSupabaseServerClient, getSupabaseWriteClient } from "@/lib/supabase-
 
 import {
   SESSION_KEY_MAX_LEN,
+  SESSION_OFFLINE_WINDOW_MS,
   SESSION_RETENTION_DAYS,
   sanitizeBuildId,
   sanitizeSessionKey,
@@ -309,4 +310,73 @@ export async function clearPosSession(id: string): Promise<boolean> {
     noteFailure("clear", { message: err instanceof Error ? err.message : String(err) });
     return false;
   }
+}
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * 自動清除「已死」記錄（2026-10-17，J 拍板）
+ *
+ * 背景：工作階段記錄歷來**只有人手逐行清除**，分頁閂咗冇登出嗰啲永遠沉底，
+ * admin 頁越積越多（商家 2026-10-17 回報「卡住删唔到」）。
+ * 判準（`isStalePosSession()`，`session-record.ts`）：`last_seen_at` 超過
+ * 離線門檻（30 分鐘）＝分頁實質已死；軟踢窗口（`isRevokePending()`）過後嘅
+ * 已關閉行一齊清。
+ *
+ * 🔴 兩條鐵律同本模組其他函式一致：**永遠唔 throw、永遠唔阻擋業務**；
+ * 表唔存在（未跑 0047）靜靜放過。
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/** 節流自動清理：每個 process 最多每隔 5 分鐘跑一次（掛喺 admin GET 上）。 */
+export const STALE_CLEANUP_THROTTLE_MS = 5 * 60_000;
+
+let lastStaleCleanupMs = 0;
+
+/**
+ * 立即清除全部「已死」記錄（`last_seen_at < now - maxSilenceMs`）。
+ *
+ * @returns 刪除咗幾多行（0 ＝ 冇嘢刪／失敗，一律靜默）。
+ */
+export async function clearStalePosSessions(opts: {
+  maxSilenceMs?: number;
+  nowMs?: number;
+} = {}): Promise<number> {
+  try {
+    const supabase = getSupabaseWriteClient() ?? getSupabaseServerClient();
+    if (!supabase) return 0;
+    const silenceMs = opts.maxSilenceMs ?? SESSION_OFFLINE_WINDOW_MS;
+    const cutoffIso = new Date((opts.nowMs ?? Date.now()) - silenceMs).toISOString();
+    const { error, count } = await supabase
+      .from("pos_sessions")
+      .delete({ count: "exact" })
+      .lt("last_seen_at", cutoffIso);
+    if (error) {
+      noteFailure("clear-stale", error);
+      return 0;
+    }
+    return count ?? 0;
+  } catch (err) {
+    noteFailure("clear-stale", { message: err instanceof Error ? err.message : String(err) });
+    return 0;
+  }
+}
+
+/**
+ * 節流版自動清理（**掛喺 `/api/admin/sessions` GET 上**）：
+ * 每個 process 5 分鐘內最多跑一次；未過節流直接 return（`ran: false`）。
+ *
+ * 點解掛 admin GET 而唔係 POS 終端路徑：呢度已經係 30 秒一輪嘅既有請求，
+ * **零新增請求**；清理只影響 admin 頁自己睇到嘅嘢，絕對摸唔到落單熱路徑。
+ * admin 冇開頁嘅時候唔自動清 —— 人手清除掣（PATCH `clear-stale`）補。
+ */
+export async function cleanupStalePosSessionsIfDue(
+  nowMs: number = Date.now(),
+): Promise<{ ran: boolean; deleted: number }> {
+  if (nowMs - lastStaleCleanupMs < STALE_CLEANUP_THROTTLE_MS) return { ran: false, deleted: 0 };
+  lastStaleCleanupMs = nowMs;
+  const deleted = await clearStalePosSessions({ nowMs });
+  return { ran: true, deleted };
+}
+
+/** 只供測試／診斷：重設清理節流。 */
+export function resetStaleCleanupThrottleForTest(): void {
+  lastStaleCleanupMs = 0;
 }

@@ -23,6 +23,7 @@ import {
   groupPosSessions,
   isRevokePending,
   isSessionBehind,
+  isStalePosSession,
   sanitizeBuildId,
   sanitizeSessionKey,
   sessionRowId,
@@ -302,6 +303,9 @@ describe("summarizePosSessions ── admin KPI", () => {
     assert.equal(s.behind, 1);
     assert.equal(s.revokedPending, 1);
     assert.equal(s.openOver24h, 1);
+    assert.equal(s.openNow, 3);
+    assert.equal(s.revokedCount, 2);
+    assert.equal(s.offlineCount, 0);
     assert.equal(s.oldestOpenedAt, ago(26 * 60 * 60_000));
   });
 
@@ -309,7 +313,53 @@ describe("summarizePosSessions ── admin KPI", () => {
     const s = summarizePosSessions([], NOW, SERVER_BUILD);
     assert.equal(s.total, 0);
     assert.equal(s.stores, 0);
+    assert.equal(s.openNow, 0);
+    assert.equal(s.revokedCount, 0);
+    assert.equal(s.offlineCount, 0);
     assert.equal(s.oldestOpenedAt, null);
+  });
+});
+
+describe("isStalePosSession ── 自動清除判準（2026-10-17，J 拍板）", () => {
+  it("30 秒前上報 → 唔清", () => {
+    assert.equal(isStalePosSession(row({ last_seen_at: ago(30_000) }), NOW), false);
+  });
+
+  it("啱啱好 30 分鐘 → 唔清（邊界包含）", () => {
+    assert.equal(isStalePosSession(row({ last_seen_at: ago(SESSION_OFFLINE_WINDOW_MS) }), NOW), false);
+  });
+
+  it("30 分鐘零 1 毫秒 → 清", () => {
+    assert.equal(isStalePosSession(row({ last_seen_at: ago(SESSION_OFFLINE_WINDOW_MS + 1) }), NOW), true);
+  });
+
+  it("閒置（6~30 分鐘）→ 唔清（輪詢閘沉默期，健康機可以咁靜）", () => {
+    assert.equal(isStalePosSession(row({ last_seen_at: ago(10 * 60_000) }), NOW), false);
+    assert.equal(isStalePosSession(row({ last_seen_at: ago(29 * 60_000) }), NOW), false);
+  });
+
+  it("已強制關閉但仍有上報（未過軟踢窗口）→ 唔清", () => {
+    assert.equal(
+      isStalePosSession(row({ revoked_at: ago(120_000), last_seen_at: ago(5_000) }), NOW),
+      false,
+    );
+  });
+
+  it("已強制關閉且超過 30 分鐘無上報 → 清（軟踢窗口已過，留著只剩噪音）", () => {
+    assert.equal(
+      isStalePosSession(row({ revoked_at: ago(60 * 60_000), last_seen_at: ago(40 * 60_000) }), NOW),
+      true,
+    );
+  });
+
+  it("last_seen_at 讀唔到 → 清（寧願清都唔好永久卡住；欄位實際 NOT NULL，雙重保險）", () => {
+    assert.equal(isStalePosSession(row({ last_seen_at: "唔係時間" }), NOW), true);
+  });
+
+  it("門檻同離線門檻一致：stale ⇒ 非 revoked 時 classify 一定係 off", () => {
+    const r = row({ last_seen_at: ago(SESSION_OFFLINE_WINDOW_MS + 1) });
+    assert.equal(isStalePosSession(r, NOW), true);
+    assert.equal(classifyPosSession(r, NOW), "off");
   });
 });
 

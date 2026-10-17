@@ -135,6 +135,12 @@ export type PosSessionGroup = {
 /** admin 頁頂部 KPI（5 格；同既有 KPI 帶規則一致）。 */
 export type PosSessionSummary = {
   total: number;
+  /** 真·開啟中（使用中＋閒置）——KPI「開啟中工作階段」用呢個，**唔數已死嘅**。 */
+  openNow: number;
+  /** 已強制關閉行數。 */
+  revokedCount: number;
+  /** 已離線行數（> 30 分鐘無上報、未撤銷）。 */
+  offlineCount: number;
   stores: number;
   multiOpenStores: number;
   behind: number;
@@ -341,6 +347,12 @@ export function summarizePosSessions(
     .filter((ms): ms is number => ms !== null);
   return {
     total: rows.length,
+    openNow: rows.filter((r) => {
+      const state = classifyPosSession(r, nowMs);
+      return state === "live" || state === "idle";
+    }).length,
+    revokedCount: rows.filter((r) => classifyPosSession(r, nowMs) === "rev").length,
+    offlineCount: rows.filter((r) => classifyPosSession(r, nowMs) === "off").length,
     stores: groups.length,
     multiOpenStores: groups.filter((g) => g.multiOpen).length,
     behind: rows.filter((r) => isSessionBehind(r, serverBuildId)).length,
@@ -362,6 +374,30 @@ export function summarizePosSessions(
 export function canClearPosSession(row: Pick<PosSessionRow, "last_seen_at" | "revoked_at">, nowMs: number): boolean {
   const state = classifyPosSession(row, nowMs);
   return state === "off" || state === "rev";
+}
+
+/**
+ * 呢個 record 係咪「已死」——**自動清除**嘅唯一判準（2026-10-17，J 拍板）。
+ *
+ * ## 門檻點解係 30 分鐘（而唔係用戶原本提案嘅 5 分鐘）
+ *
+ * 輪詢閘令一部**健康但閒置**嘅收銀機最長 5 分鐘先出一次聲
+ * （`POLL_INTERVAL_PUSHED_MS`），GET 續期節流又係 5 分鐘
+ * （`SESSION_STATE_TOUCH_THROTTLE_MS`）⇒ 健康機 `last_seen` 年齡恆常 ≈ 5 分鐘。
+ * 短過 6 分鐘就會誤刪健康分頁（多開／舊版本偵測全日假警報）；而且分頁未死，
+ * 下次 POST sync 會起返個 row（`opened_at` 重置 ⇒「已開 26 小時」變「已開 1 分鐘」）。
+ * ⇒ 直接用**離線門檻** `SESSION_OFFLINE_WINDOW_MS`：超過即視為分頁實質已死。
+ *
+ * ## 點解 revoked 行都適用
+ *
+ * 軟踢窗口 ＝「下達後 POS 端下次連線先見到」；`isRevokePending()` 過咗離線門檻
+ * 都算冇待生效 ⇒ 超過 30 分鐘無上報嘅已關閉行留著只剩噪音。
+ * （代價：管理操作紀錄因此只保留約 30 分鐘，admin 頁文案有相應更新。）
+ */
+export function isStalePosSession(row: Pick<PosSessionRow, "last_seen_at">, nowMs: number): boolean {
+  const lastMs = isoToMs(row.last_seen_at);
+  if (lastMs === null) return true;
+  return nowMs - lastMs > SESSION_OFFLINE_WINDOW_MS;
 }
 
 /**

@@ -13,6 +13,7 @@ import {
   describePosSessionState,
   groupPosSessions,
   isSessionBehind,
+  isStalePosSession,
   summarizePosSessions,
   type PosSessionRow,
   type PosSessionState,
@@ -43,6 +44,16 @@ import {
  * 呢個頁面係喺**同一部電腦**開，而本專案對請求量極敏感（egress 計費）。
  * ⇒ 30 秒一次、**分頁隱藏即停**、離開頁面 clearInterval。
  * ⇒ 亦因為咁，呢頁**唔會**顯示即時秒級狀態（門檻本身就係分鐘級）。
+ *
+ * ## 🔴 自動清除「已死」記錄（2026-10-17，J 拍板）
+ *
+ * 商家實測痛點：分頁閂咗冇登出 ⇒ 記錄沉底；「關閉多餘」只係軟踢（行數完全不變）；
+ * 逐行「清除」要撳幾十次。而家：
+ *   · 本頁每次載入（GET）會**節流自動清理**（每個 process 5 分鐘一次）——
+ *     刪除超過 30 分鐘無上報嘅記錄（＝分頁實質已死；軟踢窗口過咗嘅已關閉行一齊）；
+ *   · 工具列「清理已離線（N）」＝ 人手即刻清曬；
+ *   · 🔴 門檻係 30 分鐘而**唔係** 5 分鐘：輪詢閘令健康閒置機最長 5 分鐘先出聲，
+ *     5 分鐘會誤刪健康分頁（多開／舊版本偵測全日假警報）。
  */
 
 type AdminSessionRow = PosSessionRow;
@@ -54,6 +65,14 @@ type SessionsPayload = {
   nowIso?: string;
   stores?: Array<{ id: string; name: string }>;
   sessions?: AdminSessionRow[];
+};
+
+/** PATCH 回傳（`clear-stale` 會多一個 `deleted`）。 */
+type SessionsMutationPayload = {
+  ok?: boolean;
+  error?: string;
+  deleted?: number;
+  results?: Array<{ ok: boolean; error?: string }>;
 };
 
 const STATUS_FILTERS = [
@@ -139,6 +158,8 @@ export default function AdminSessionsPage() {
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  /** 成功提示（綠色；8 秒後自動消失，唔使人手關）。 */
+  const [notice, setNotice] = useState<string | null>(null);
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
 
   const [filterStore, setFilterStore] = useState("all");
@@ -234,6 +255,19 @@ export default function AdminSessionsPage() {
   );
   const detailRow = useMemo(() => rows.find((r) => r.id === detailId) ?? null, [rows, detailId]);
 
+  /** 「已死」記錄數（> 30 分鐘無上報）＝ 工具列「清理已離線」掣嘅計數。 */
+  const staleCount = useMemo(
+    () => rows.filter((r) => isStalePosSession(r, nowMs)).length,
+    [rows, nowMs],
+  );
+
+  /** 成功提示 8 秒後自動消失。 */
+  useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(null), 8_000);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
+
   /** 管理操作紀錄：由已撤銷嘅 row 反推（0047 冇另開 audit 表，避免多一張表要維護）。 */
   const auditRows = useMemo(
     () =>
@@ -255,8 +289,9 @@ export default function AdminSessionsPage() {
     return live.filter((s) => s.id !== keep.id).map((s) => s.id);
   }
 
-  async function submitAction(action: "revoke" | "clear", ids: string[], reason?: string) {
-    if (ids.length === 0 || busyRef.current) return;
+  async function submitAction(action: "revoke" | "clear" | "clear-stale", ids: string[], reason?: string) {
+    if (busyRef.current) return;
+    if (action !== "clear-stale" && ids.length === 0) return;
     const token = loadAuthSession()?.adminSessionToken;
     if (!token) {
       setError("未授權，請先登入。");
@@ -264,16 +299,23 @@ export default function AdminSessionsPage() {
     }
     busyRef.current = true;
     setBusy(true);
+    setNotice(null);
     try {
       const res = await fetch("/api/admin/sessions", {
         method: "PATCH",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ action, ids, reason: reason ?? null }),
+        body: JSON.stringify(
+          action === "clear-stale" ? { action } : { action, ids, reason: reason ?? null },
+        ),
       });
-      const json = (await res.json()) as { ok?: boolean; error?: string; results?: Array<{ ok: boolean; error?: string }> };
+      const json = (await res.json()) as SessionsMutationPayload;
       if (!res.ok || !json.ok) {
         const firstError = json.results?.find((r) => !r.ok)?.error;
         setError(firstError ?? json.error ?? `操作失敗（HTTP ${res.status}）`);
+      } else if (action === "clear-stale") {
+        setNotice(
+          `已清理 ${json.deleted ?? 0} 個已死工作階段記錄（超過 30 分鐘無上報，含已強制關閉）。`,
+        );
       }
       setConfirmIds([]);
       setConfirmReason("");
@@ -297,13 +339,20 @@ export default function AdminSessionsPage() {
           <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>
         )}
 
+        {notice && (
+          <div className="rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">{notice}</div>
+        )}
+
         {/* KPI：固定 5 格（沿既有 KPI 帶規則，唔另開第 6 張卡） */}
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
           {[
             {
               label: "開啟中工作階段",
-              value: String(summary.total),
-              sub: `${summary.stores} 間店家`,
+              value: String(summary.openNow),
+              sub:
+                summary.revokedCount + summary.offlineCount > 0
+                  ? `${summary.stores} 間店家 · 已關閉 ${summary.revokedCount} · 已離線 ${summary.offlineCount}`
+                  : `${summary.stores} 間店家`,
               tone: "",
             },
             {
@@ -424,6 +473,17 @@ export default function AdminSessionsPage() {
                 {autoRefresh ? "30 秒自動更新：開" : "30 秒自動更新：關"}
               </button>
             </span>
+            {staleCount > 0 ? (
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void submitAction("clear-stale", [])}
+                title="移除超過 30 分鐘無上報的工作階段記錄（分頁實質已死；含已強制關閉嗰啲）"
+                className="min-h-[36px] rounded-lg border border-slate-300 px-3 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+              >
+                清理已離線（{staleCount}）
+              </button>
+            ) : null}
             <button
               type="button"
               onClick={() => void load()}
@@ -570,7 +630,9 @@ export default function AdminSessionsPage() {
           <section className="overflow-hidden rounded-xl border border-slate-200 bg-white">
             <div className="flex flex-wrap items-center gap-2 border-b border-slate-200 bg-slate-50 px-4 py-2.5">
               <h2 className="mr-auto text-sm font-semibold text-slate-900">管理操作紀錄</h2>
-              <span className="text-[11px] text-slate-400">只保留最近 30 日 · 唔可以刪除</span>
+              <span className="text-[11px] text-slate-400">
+                只保留約 30 分鐘（逾 30 分鐘無上報自動清除）· 唔可以手動刪除
+              </span>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
@@ -608,7 +670,7 @@ export default function AdminSessionsPage() {
         <p className="text-xs text-slate-400">
           狀態口徑：最後上報 ≤ 6 分鐘＝使用中（輪詢閘最多 5 分鐘唔出聲，門檻一定要夠鬆）；
           6~30 分鐘＝閒置；&gt; 30 分鐘＝已離線。「強制關閉」係軟踢：該分頁下次連線才生效，
-          只擋新單／加菜，結帳與退款照樣放行。
+          只擋新單／加菜，結帳與退款照樣放行。超過 30 分鐘無上報的記錄（含已強制關閉）會自動清除。
         </p>
       </div>
 

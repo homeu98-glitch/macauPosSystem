@@ -1,0 +1,3 @@
+base=https://iyrywzormzisyppkokbi.supabase.co
+total rows: null
+RESULT: anon 讀 pos_sessions 失敗 HTTP 401: {"code":"42501","details":null,"hint":"Grant the required privileges to the current role with: GRANT SELECT ON public.pos_sessions TO anon;","message":"permission denied for table pos_sessions"}
