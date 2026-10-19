@@ -1,0 +1,4 @@
+{
+  "充值返回失敗": "Credit-back failed",
+  "未能取得商家 ID 或會員電話，無法充值返回差額。請重新輸入會員電話後再試。": "Could not get the merchant ID or member phone — cannot credit the difference back. Please re-enter the member phone and try again."
+}
