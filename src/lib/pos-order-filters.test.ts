@@ -91,10 +91,11 @@ describe("getPaymentBadge（快餐付款維度）", () => {
 });
 
 /**
- * 返結閘（2026-10-17 J 拍板逆轉：本地快餐 counter 單由「排除」改為「可以返結」）。
+ * 返結閘（2026-10-17 J 拍板逆轉：本地快餐 counter 單由「排除」改為「可以返結」；
+ * 2026-10-19 再度放寬：搬咗落嚟嘅線上 counter 單——自取／外送採納——都可以返結）。
  *
  * 實案背景：快餐模式以前完全冇反結功能（用戶定金句「除咗快餐」）。而家要參考堂食補返，
- * 但**純線上單維持排除**（錢同狀態喺 Ledger，要衝上游，另議）。
+ * 再加上「到店優惠改價」需要線上單都可以返結（v3 mockup 畫面 ①③④⑤）。
  * 判斷錯會直接反映成 UI：錯 appear = 撳咗彈「返結失敗」；錯 exclude = 撳咗冇反應。
  */
 describe("isReopenable（返結閘）", () => {
@@ -108,18 +109,26 @@ describe("isReopenable（返結閘）", () => {
     assert.equal(isReopenable(order({ id: "r4", tableId: "table-a01", status: "paid" })), true);
   });
 
-  it("純線上快餐單（onlineOrderId + counter）任何狀態都唔可以返結", () => {
+  // 🔴 2026-10-19（J 拍板，v3 mockup）：線上單「搬咗落嚟」之後可以返結。
+  // 排位去真枱嘅堂食單原有行為已接受；今次重點係「自取／外送採納 counter」。
+  it("線上自取／外送單採納成 counter 單：settled / paid 可以返結（2026-10-19 放寬）", () => {
     assert.equal(
       isReopenable(order({ id: "r5", tableId: "counter", onlineOrderId: "led-1", status: "settled" })),
-      false,
+      true,
     );
     assert.equal(
       isReopenable(order({ id: "r6", tableId: "counter", onlineOrderId: "led-2", status: "paid" })),
-      false,
+      true,
     );
   });
 
-  it("線上堂食單轉咗真枱 → 當本地單，可以返結（原有行為）", () => {
+  it("未搬落嚟嘅純線上投影（onlineOrderId + 冇 tableId）維持排除", () => {
+    // 未採納／未排位嘅單只有 Ledger 投影，loadOrders() 搵唔到 →
+    // reopenPosOrder 會彈「找不到訂單」，所以閘一定要擋。
+    assert.equal(isReopenable(order({ id: "r5b", tableId: undefined, onlineOrderId: "led-9", status: "settled" })), false);
+  });
+
+  it("線上堂食單排咗真枱 → 當本地單，可以返結（原有行為）", () => {
     assert.equal(
       isReopenable(order({ id: "r7", tableId: "table-a01", onlineOrderId: "led-3", status: "settled" })),
       true,

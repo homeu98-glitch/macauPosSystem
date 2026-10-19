@@ -1840,6 +1840,20 @@ export const EN_DICT: Record<string, string> = {
   "同名品項跨幣值分開顯示（各自平均價先有意義）": "The same item in different currencies is shown separately (each average price is only meaningful on its own)",
   "MOP＝澳門元 · HKD＝港幣 · RMB＝人民幣": "MOP = Macanese pataca · HKD = Hong Kong dollar · RMB = Chinese yuan",
   "唔同幣值分開顯示，唔會匯總成一個數。": "Different currencies are shown separately, never summed into one number.",
+  "搬去線下 · 揀枱同返結": "Move in-store · pick a table & reopen",
+  "搬去線下 · 採納同返結": "Move in-store · adopt as counter & reopen",
+  "搬去線下並返結": "Move in-store & reopen",
+  "搬去線下並改價": "Move in-store & edit price",
+  "搬去線下失敗": "Failed to move in-store",
+  "揀枱（必填）—— 揀後會建立本地堂食單，保留線上單號": "Pick a table (required) — a local dine-in order will be created, keeping the online order ID",
+  "揀返結原因（必填）": "Select a reopen reason (required)",
+  "此單已完成：返結只影響帳務補救，唔影響已交付嘅餐。": "This order is completed: reopening only fixes the books — food already served is not affected.",
+  "此單線上已付 {amt}，返結唔會沖正／退款（款項喺會員通 Ledger）。改價後嘅差額會喺結帳時處理。": "Paid online {amt} (member balance). Reopening will not reverse or refund it (funds stay in the Ledger); any difference after repricing is handled at checkout.",
+  "未收款單唔使返結 —— 系統搬去線下後直接跳去工作枱改價。": "Unpaid orders don't need reopening — after moving in-store you'll go straight to the workspace to edit the price.",
+  "系統會依序做：① 排位（建立本地堂食單，保留線上單號）② 線上單標「已完成」並喺線上列表剔除 ③ 張單變「已返結」→ 跳去工作枱改價。": "The system will: ① assign a table (create a local dine-in order, keeping the online order ID) ② mark the online order completed and remove it from the online list ③ reopen the order → jump to the workspace to edit.",
+  "系統會依序做：① 採納成 counter 單（建立本地單，保留線上單號）② 張單變「已返結」→ 跳去工作枱改價。": "The system will: ① adopt as a counter order (create a local order, keeping the online order ID) ② reopen the order → jump to the workspace to edit.",
+  "此單已取消或已退款，唔可以搬去線下返結。": "This order is cancelled or refunded — it cannot be moved in-store for reopening.",
+  "此單本機已完成但線上仍未收款，請檢查付款狀態。": "This order is completed locally but still unpaid online — please check the payment status.",
 };
 
 /**

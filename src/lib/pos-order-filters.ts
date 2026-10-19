@@ -8,8 +8,9 @@ export function isLocalPosOrder(order: PosOrder): boolean {
 }
 
 /**
- * 本地面板可見範圍：本地單 + 「已轉到堂食枱」嘅線上堂食單。
- * 純線上快餐 / 自取 / 外賣（counter / 無枱）屬上游 Ledger 對賬，唔喺本地面板管理，亦唔可以返結。
+ * 本地面板可見範圍：本地單 + 「已排到真枱」嘅線上堂食單。
+ * 線上自取 / 外送單採納嘅 counter 單屬快餐 strip / 自取面板管理
+ * （2026-10-19 起可以返結，但停留 counter 面板，唔入枱面流程）。
  * 美容同其他本地單無 onlineOrderId，一律當本地單。
  */
 export function isLocalOrTransferredDineIn(order: PosOrder): boolean {
@@ -21,27 +22,36 @@ export function isLocalOrTransferredDineIn(order: PosOrder): boolean {
 /**
  * 可返結：只可對「已結帳」（settled / paid）嘅單返結。
  *
- * 線上單分兩種：
- * - 純線上快餐 / 自取 / 外賣（onlineOrderId 存在，且未轉枱 = tableId 係 counter 或無枱）：
- *   由上游 Ledger 對賬，POS 端唔支援返結。
- * - 「線上堂食單轉到枱」（onlineOrderId 存在 + tableId 唔係 counter）：
- *   已變成喺店堂食單，當本地單處理，可以返結。
+ * 線上單分兩種（都係已經「搬咗落嚟」＝ 經 `upsertLedgerLocalOrder()` 入咗
+ * 本機 `orders` store，有完整本地記錄同審計欄）：
+ * - 「線上堂食單排到真枱」（onlineOrderId + tableId 唔係 counter）：
+ *   已變成喺店堂食單，當本地單處理，可以返結（原有行為）。
+ * - 「線上自取／外送單採納 counter」（onlineOrderId + tableId === "counter"）：
+ *   由快餐 strip / 自取面板管理。🔴 **2026-10-19 放寬（J 拍板，見
+ *   docs/mockups/online-order-reopen-reprice-2026-10-19-v3）**：可以返結 ——
+ *   「到店優惠改價」功能需要佢。以前排除嘅理由係「錢喺 Ledger」；而家差額
+ *   改由結帳時嘅「差額處理」（充值返回／現金退款／店方保留）解決，見
+ *   pos-app 結帳差額模態。
+ *
+ * 未搬落嚟嘅純線上單（冇 tableId，只得 Ledger 投影）永遠排除 —— 撂咗會
+ * 去 `loadOrders()` 搵唔到單，彈「找不到訂單」。
  * 美容同其他本地單無 onlineOrderId，一律當本地單。
  *
  * 🔴 2026-10-17 逆轉（J 拍板，見 docs/38 決策 4 標註）：**本地快餐單
  * （`!onlineOrderId && tableId === "counter"`）由「排除」改為「可以返結」** ——
- * 以前用戶定金句「除咗快餐」，而家要參考堂食補返。純線上單（counter/無枱）仍然排除。
+ * 以前用戶定金句「除咗快餐」，而家要參考堂食補返。
  *
  * ⚠️ 2026-10-17 由 `@/lib/pos-orders` 搬嚟呢個純模組 —— 返結閘係沉默 bug 高風險區
  * （撳咗冇反應／出現咗唔應該出現嘅掣），一定要喺 `node --test` 覆蓋到。
  */
 export function isReopenable(order: PosOrder): boolean {
-  // 純線上快餐 / 自取 / 外賣（onlineOrderId + counter/無枱）：錢同狀態喺 Ledger，唔支援返結。
+  // 線上單：一定要「搬咗落嚟」（有 tableId）先可以返結。純 Ledger 投影
+  // （未採納／未排位，冇 tableId）排除，杜絕亂路徑。
   if (order.onlineOrderId) {
-    const isInStoreDineIn = !!order.tableId && order.tableId !== "counter";
-    if (!isInStoreDineIn) return false;
+    if (!order.tableId) return false;
   }
-  // 本地單（含 2026-10-17 起嘅本地快餐 counter 單）＋ 已轉枱線上堂食單：只看狀態。
+  // 本地單（含 2026-10-17 起嘅本地快餐 counter 單）＋ 已搬落嚟嘅線上單
+  // （排位真枱／採納 counter）：只看狀態。
   return order.status === "settled" || order.status === "paid";
 }
 
@@ -77,7 +87,9 @@ export function transferredLedgerOrderIds(localOrders: PosOrder[]): Set<string> 
  * 冇可取餐掣**，收銀完全管唔到（只有線上訂單面板先見到）。
  *
  * ⚠️ 「本地／線上」嘅分工由 `isLocalOrTransferredDineIn()` 負責：
- * 線上 counter 單一律返 false → 唔會入「店內線下訂單」面板，唔會同枱面/返結流程撈埋。
+ * 線上 counter 單一律返 false → 唔會入「店內線下訂單」面板。2026-10-19 起
+ * 呢批單可以返結（`isReopenable()` 放寬），但返結時**跳過 temp 枱**
+ * （見 `reopenPosOrder()`）→ 留返 counter 直接編輯，唔會入枱面流程。
  */
 export function isQuickCounterOrder(order: PosOrder): boolean {
   return order.tableId === "counter";

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { formatMacauDateTime } from "@/lib/format";
 
 import { AppSidebar } from "@/components/app-sidebar";
@@ -23,7 +24,9 @@ import {
   printKitchenForLedgerOrder,
   resolveLedgerPosOrderForReceipt,
 } from "@/lib/ledger/ledger-pos-bridge";
+import { rememberOnlineCustomer } from "@/lib/ledger/online-customer-cache";
 import { TableAssignModal } from "@/components/table-assign-modal";
+import { OnlineReopenModal } from "@/components/online-reopen-modal";
 import {
   isOnlineDineIn,
   onlinePaymentBadge,
@@ -40,7 +43,7 @@ import {
 // ⚠️ 一定要 alias：呢個檔自己有一個 `loadOrders`（拉 Ledger 線上單嘅 async loader），
 // 撞名會令本機訂單讀取變成 Promise。
 import { loadOperatingMode, loadOrders as loadLocalOrders } from "@/lib/storage";
-import { transferredLedgerOrderIds } from "@/lib/pos-order-filters";
+import { isReopenable, transferredLedgerOrderIds } from "@/lib/pos-order-filters";
 import {
   describeNoReceiptPrinterError,
   printReceiptForLedgerOrderOnce,
@@ -79,6 +82,7 @@ import {
 } from "@/lib/ledger/order-date-filter";
 import type { CustomDateRange } from "@/lib/ledger/date-range";
 import { orderEventISO } from "@/lib/pos/order-event-time";
+import { reopenPosOrder } from "@/lib/pos-orders";
 import { getOrderDetail, listMerchantOrders } from "@/lib/ledger/orders";
 import { getLedgerMerchantId, restoreLedgerSession } from "@/lib/ledger/session";
 import { useLedgerOrdersRealtime } from "@/lib/ledger/use-ledger-orders-realtime";
@@ -277,6 +281,9 @@ export function OnlineOrders({
 }) {
   // ⚠️ 一定要放喺所有 early return 之前（Rules of Hooks）。
   const t = useT();
+  // 「搬去線下 · 返結」完成後跳去收銀台工作枱（深連結 `/pos?tableId=&orderId=`，
+  // 同線下訂單「返結帳」同一個目的地 —— `/` 自 2026-09-17 起係選擇工作台頁）。
+  const router = useRouter();
   /**
    * `t` 嘅 identity 每次切語言都會變（`useT()` 內部係 `useCallback([lang])`）。
    * 直接入 `useCallback` / `useEffect` deps 嘅話，切一次語言會令下面幾個 callback
@@ -341,6 +348,12 @@ export function OnlineOrders({
   const [receiptPreviewOrder, setReceiptPreviewOrder] = useState<PosOrder | null>(null);
   const [assigningOrderId, setAssigningOrderId] = useState<string | null>(null);
   const [assigningTableId, setAssigningTableId] = useState<string | null>(null);
+  /**
+   * 「搬去線下 · 返結」流程（2026-10-19 到店優惠改價）：撳列表／詳情嘅「返結」掇
+   * 開確認彈窗 → 搬去線下（排位／採納 counter）→ 已收款單再返結 → 跳工作枱。
+   */
+  const [reopenFlowOrderId, setReopenFlowOrderId] = useState<string | null>(null);
+  const [reopenFlowBusy, setReopenFlowBusy] = useState(false);
   const [balanceFallbackOrderId, setBalanceFallbackOrderId] = useState<string | null>(null);
   const [reprintingOrderId, setReprintingOrderId] = useState<string | null>(null);
   const [audioReady, setAudioReady] = useState(false);
@@ -1037,6 +1050,114 @@ export function OnlineOrders({
     }
   }
 
+  /**
+   * 「搬去線下 · 返結」（2026-10-19 到店優惠改價，v3 mockup 畫面 ①③④⑤）。
+   *
+   * 統一入口：線上單未搬落嚟之前維持「撂唔到直接返結」—— 一律先搬去線下：
+   *   ① 餐廳模式堂食單 → `assignLedgerOrderToTable()`（揀咗真枱，保留線上單號，
+   *      並照「排位」口径將 Ledger 推去 completed）；
+   *      快餐模式／自取／外送單 → `adoptLedgerOrderAsQuickCounter()`（counter 化）。
+   *   ② 已收款單 → `reopenPosOrder()`（原因必填）→ 跳去工作枱改價重結；
+   *      未收款單 → 跳過返結，直接跳去工作枱改價（分支 A）。
+   *
+   * 已收款單返結**唔沖正**（款項喺會員通 Ledger，POS 冇 RPC 可以沖正）——
+   * 改價後嘅差額由結帳時嘅「差額處理」解決（見 pos-app 結帳差額模態）。
+   */
+  async function runReopenFlow(order: LedgerOnlineOrder, params: { tableId: string | null; reason: string }) {
+    const paid = order.paymentStatus === "paid";
+    // 記低顧客資料（name + phone）—— 結帳差額「充值返回原支付戶口」要電話先 call
+    // `applyPosTopup`（Ledger phone 從未落 pos_orders；見 online-customer-cache 註釋）。
+    rememberOnlineCustomer(order.id, { name: order.customerName, phone: order.phone });
+    // 同 `reopenFlowNeedsTable` 同一判断，但用參數唔用 state（modal 傳出嚟嘅單先係權威）。
+    const needsTable = loadOperatingMode() !== "quick" && isOnlineDineIn(order);
+    setReopenFlowBusy(true);
+    setActionLoadingKey(`${order.id}:reopen`);
+    try {
+      // 本機已有 row（之前接單／排位／採納過）→ 大多數情况唔使重新採納：
+      // `upsertLedgerLocalOrder()` 會**無條件覆寫 status**（settled → paid），
+      // 重新採納等於製造一次不必要嘅狀態跳＋ORDER_UPDATED 事件。
+      const existing = loadLocalOrders().find((row) => row.id === `ledger-${order.id}`) ?? null;
+      if (
+        existing &&
+        (existing.status === "cancelled" ||
+          existing.status === "refunded" ||
+          existing.status === "partially_refunded")
+      ) {
+        setToast({ tone: "error", message: t("此單已取消或已退款，唔可以搬去線下返結。") });
+        return;
+      }
+      // 未收款 + 本機已 settled = 矛盾狀態（本地收咗錢但 Ledger 未收款）：
+      // 重新採納會將單復活（settled → sent_to_kitchen），絕對唔可以做 → 講清楚叫收銀查。
+      if (existing && !paid && existing.status === "settled") {
+        setToast({ tone: "error", message: t("此單本機已完成但線上仍未收款，請檢查付款狀態。") });
+        return;
+      }
+
+      let posOrderId: string;
+      let posTableId: string;
+      if (!existing || (paid && existing.status !== "reopened" && !isReopenable(existing))) {
+        // 需要搬去線下：未入過本機，或已收款但本機 row 未收款（draft / sent_to_kitchen）
+        // → 重新採納修正 status（paid + prepaidAmount）。
+        const detail = await getOrderDetail(order.id);
+        const tableName = tables.find((row) => row.id === params.tableId)?.name ?? "";
+        if (needsTable) {
+          const adopted = await assignLedgerOrderToTable({
+            ledgerOrder: order,
+            tableId: params.tableId as string,
+            tableName,
+            detail,
+          });
+          posOrderId = adopted.posOrder.id;
+          posTableId = adopted.posOrder.tableId ?? "counter";
+          // 排位路徑要交代 Ledger 同步結果（同「排位」掇同一口径，唔可以扮成功）。
+          if (!adopted.ledgerProgress.ok) {
+            setToast({
+              tone: "error",
+              message: t("{action} {table}，但同步線上訂單狀態失敗：{err}", {
+                action: adopted.created ? t("已排位") : t("已改枱到"),
+                table: tableName,
+                err: adopted.ledgerProgress.error ?? t("未知錯誤"),
+              }),
+            });
+            return;
+          }
+        } else {
+          const adopted = await adoptLedgerOrderAsQuickCounter({ ledgerOrder: order, detail });
+          posOrderId = adopted.posOrder.id;
+          posTableId = adopted.posOrder.tableId ?? "counter";
+        }
+      } else if (existing) {
+        posOrderId = existing.id;
+        posTableId = existing.tableId ?? "counter";
+      } else {
+        return;
+      }
+
+      if (paid) {
+        const session = loadAuthSession();
+        const operator = session?.name ?? session?.account ?? "收銀";
+        const result = await reopenPosOrder({ orderId: posOrderId, reason: params.reason, operator });
+        if (!result.ok) {
+          setToast({ tone: "error", message: result.error ?? t("返結失敗") });
+          return;
+        }
+        // temp 枱（堂食路徑先有）→ 用 temp 枱 id；counter 單刻意唔建 temp 枱 → 用原 tableId。
+        // 🔴 一定要帶 tableId：丟空 ⇒ deep-link 直接 return，撳咗等如冇反應。
+        const tableId = result.tempTable?.id ?? posTableId ?? "";
+        setReopenFlowOrderId(null);
+        router.push(`/pos?tableId=${encodeURIComponent(tableId)}&orderId=${encodeURIComponent(posOrderId)}`);
+        return;
+      }
+      setReopenFlowOrderId(null);
+      router.push(`/pos?tableId=${encodeURIComponent(posTableId)}&orderId=${encodeURIComponent(posOrderId)}`);
+    } catch (err) {
+      setToast({ tone: "error", message: err instanceof Error ? err.message : t("搬去線下失敗") });
+    } finally {
+      setReopenFlowBusy(false);
+      setActionLoadingKey(null);
+    }
+  }
+
   async function acceptInStoreFallback(order: LedgerOnlineOrder) {
     setActionLoadingKey(`${order.id}:in-store-fallback`);
     try {
@@ -1183,6 +1304,22 @@ export function OnlineOrders({
             {t(onlineTableAssignLabel(order))}
           </button>
         ) : null}
+        {/* 「返結」（2026-10-19 到店優惠改價）：線上單統一入口，樣式同線下「返結帳」。
+            已收款單 → 搬去線下後彈返結確認（改價重結）；未收款單 → 搬去線下後直接去
+            工作枱改價（跳過返結）；已完成單保留入口（彈警告，只影響帳務補救）。
+            未接單（pending）要先行現有接單流程；已取消／有待確認申請 → 隱藏。 */}
+        {!hasRequest && raw !== "pending" && raw !== "cancelled" ? (
+          <button
+            className={`${btn} whitespace-nowrap bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-60`}
+            disabled={orderLoading || reopenFlowBusy}
+            onClick={() => {
+              setReopenFlowOrderId(order.id);
+            }}
+            type="button"
+          >
+            {t("返結")}
+          </button>
+        ) : null}
         {!hasRequest && raw === "pending" ? (
           <>
             <button
@@ -1286,24 +1423,38 @@ export function OnlineOrders({
     ? orders.find((item) => item.id === balanceFallbackOrderId) ?? null
     : null;
   const assigningOrder = assigningOrderId ? orders.find((item) => item.id === assigningOrderId) ?? null : null;
+  /** 「搬去線下 · 返結」彈窗嘅目標單（`orders` 全量搵，唔受日期篩選影響）。 */
+  const reopenFlowOrder = reopenFlowOrderId ? orders.find((item) => item.id === reopenFlowOrderId) ?? null : null;
+  /**
+   * 返結流程使唔使揀枱：**餐廳模式**嘅線上堂食單要揀真枱（排位）；
+   * 快餐模式（連堂食單都採納 counter）同自取／外送單一律 counter 採納，唔使揀。
+   * 判断同 `runAcceptAndBridge()` 嘅快餐分支一致（`loadOperatingMode()`）。
+   */
+  const reopenFlowNeedsTable =
+    reopenFlowOrder != null && loadOperatingMode() !== "quick" && isOnlineDineIn(reopenFlowOrder);
 
   /**
-   * 排位彈窗「唔可以揀」嘅枱：本機進行中（draft / 製作中 / 已收款未完成 / 返結）而有真枱號嘅單。
+   * 排位彈窗／返結彈窗「唔可以揀」嘅枱：本機進行中（draft / 製作中 / 已收款未完成 / 返結）而有真枱號嘅單。
    * 剔除目標單自己，令「改枱」時原本張枱仍然可揀。
+   * ⚠️ 目標單嘅本機 row id 係 `ledger-<ledgerId>`（`buildLedgerPosOrder`），
+   *    同 LedgerOnlineOrder.id 差一個前綴 —— 直接用 `assigningOrder.id` 比永遠唔中，
+   *    已搬落嚟嘅目標單會霸住自己張枱（2026-10-19 修正）。
    */
   const occupiedTableIds = useMemo(() => {
-    if (!assigningOrder) return [] as string[];
+    const target = assigningOrder ?? reopenFlowOrder;
+    if (!target) return [] as string[];
+    const targetLocalId = `ledger-${target.id}`;
     const openStatuses = new Set(["draft", "sent_to_kitchen", "paid", "reopened"]);
     return loadLocalOrders()
       .filter(
         (row) =>
-          row.id !== assigningOrder.id &&
+          row.id !== targetLocalId &&
           !!row.tableId &&
           row.tableId !== "counter" &&
           openStatuses.has(row.status),
       )
       .map((row) => row.tableId as string);
-  }, [assigningOrder]);
+  }, [assigningOrder, reopenFlowOrder]);
 
   const panel = (
     <>
@@ -1569,6 +1720,20 @@ export function OnlineOrders({
             action: t(onlineTableAssignLabel(assigningOrder)),
             code: tOrderCode(t, assigningOrder),
           })}
+        />
+      ) : null}
+
+      {/* 「搬去線下 · 返結」（2026-10-19）：線上單統一入口嘅確認彈窗。 */}
+      {reopenFlowOrder ? (
+        <OnlineReopenModal
+          busy={reopenFlowBusy}
+          needsTable={reopenFlowNeedsTable}
+          occupiedTableIds={occupiedTableIds}
+          onClose={() => setReopenFlowOrderId(null)}
+          onConfirm={(params) => void runReopenFlow(reopenFlowOrder, params)}
+          order={reopenFlowOrder}
+          orderCode={tOrderCode(t, reopenFlowOrder)}
+          tables={tables}
         />
       ) : null}
 

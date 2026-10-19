@@ -182,7 +182,10 @@ export async function reopenPosOrder(params: {
   //    快餐機可能根本冇 floors（createReopenTempTable 會降級新建「返結枱」floor，污染枱面）；
   //    且快餐結帳流程 `quickPaidFlow` 要求 `tableId === "counter"` 先行到。
   //    留返 counter 直接可編輯，tempTable = null 下面所有 `tempTable ? … : 原值` 分支自然沿用原枱。
-  const isQuickCounter = !order.onlineOrderId && order.tableId === "counter";
+  // 🔴 2026-10-19（到店優惠改價，v3 mockup）：**線上採納嘅 counter 單同樣跳過** ——
+  //    佢哋由快餐 strip / 右欄「自取 / 掃碼訂單」面板管理，搬去 temp 枱會跌出
+  //    counter 面板（`tableId !== "counter"`）兼跌入枱面流程，違反分工。
+  const isQuickCounter = order.tableId === "counter";
   const tempTable = isQuickCounter ? null : createReopenTempTable(order);
 
   // ② 切狀態 + 寫審計

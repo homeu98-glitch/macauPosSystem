@@ -2573,8 +2573,11 @@ export function PosApp() {
    *
    * 以前 `isActionableQuickOrder()` 只收 `draft/sent_to_kitchen/paid`，reopened 單
    * 一返結就會喺 strip 消失 —— 收銀完全睇唔返，亦冇入口改價／加餐後重結。
-   * 只取**本地** counter 單：純線上單（`onlineOrderId` + counter）錢同狀態喺 Ledger，
-   * `isReopenable()` 已經排除，唔會返結，所以呢度唔需要（亦唔應該）出現。
+   * 🔴 2026-10-19（到店優惠改價）：線上採納嘅 counter 單（`onlineOrderId` +
+   *    counter，經 `adoptLedgerOrderAsQuickCounter()` 入咗 `orders` store）都算
+   *    「搬咗落嚟」，可以返結（`isReopenable()` 放寬）→ 返結後同樣要停留喺
+   *    呢個 strip，先改到價再重結。未採納嘅純線上單未有本地記錄，永遠行唔到
+   *    呢度。
    * 排序同 strip 一致（單號由小到大）。
    */
   const quickReopenedOrders = useMemo(
