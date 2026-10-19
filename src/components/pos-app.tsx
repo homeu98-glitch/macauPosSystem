@@ -157,7 +157,10 @@ import {
 import { executeLedgerMemberCheckout, LedgerMemberCheckoutError } from "@/lib/ledger/checkout-member";
 import { friendlyLedgerMemberError } from "@/lib/ledger/member-errors";
 import { getLedgerMerchantId } from "@/lib/ledger/session";
-import { lookupCustomerWallet } from "@/lib/ledger/members";
+import { applyPosTopup, lookupCustomerWallet } from "@/lib/ledger/members";
+import { getOnlineCustomer } from "@/lib/ledger/online-customer-cache";
+import { computeCheckoutDiff, maskPhoneForReceipt } from "@/lib/pos/checkout-diff";
+import { PosCheckoutDiffModal, type CheckoutDiffOption } from "@/components/pos-checkout-diff-modal";
 import { useOnlineOrderSettings } from "@/lib/pos/use-online-order-settings";
 import {
   avosToMop,
@@ -658,6 +661,25 @@ export function PosApp() {
   // 備註來源 localSettings.compNotePresets（設置 → 備註 → 免單備註），可自由輸入補充。
   const [compModalOpen, setCompModalOpen] = useState(false);
   const [compNote, setCompNote] = useState("");
+  // 結帳差額處理（2026-10-19 到店優惠改價，mockup v3 畫面 ⑤）：線上已付 > 新金額
+  // → 應收 0 但客人多付 → 彈差額模態（充值返回／現金退款／店方保留）。
+  // `checkoutDiffPending` 記住彈窗前原本要行嘅結帳動作，差額處理完接返去。
+  const [checkoutDiffOrderId, setCheckoutDiffOrderId] = useState<string | null>(null);
+  const [checkoutDiffBusy, setCheckoutDiffBusy] = useState(false);
+  const [checkoutDiffPending, setCheckoutDiffPending] = useState<
+    { kind: "online-paid" } | { kind: "payment"; method: string } | null
+  >(null);
+  // 已處理過差額嘅單（防重複充值）：settle handler 讀佢寫入訂單審計欄；
+  // 重試結帳（例如 settle 失敗）會 skip 充值、直接入原本結帳流程。
+  // `phoneMask` = 遮罩電話（例 `6393****`）→ 收據註腳用；完整電話唔落盤（個資紅線）。
+  const checkoutDiffHandledRef = useRef<
+    Map<string, { option: CheckoutDiffOption; txnId?: string; reason?: string; phoneMask?: string }>
+  >(
+    new Map(),
+  );
+  // 每張單嘅充值冪等鍵（重試重用同一 key —— Ledger `merchant_apply_pos_txn`
+  // 以呢個 key 去重；換新 key = 雙重退款，見 members.ts `applyPosTopup` 註釋）。
+  const checkoutDiffIdemKeyRef = useRef<Map<string, string>>(new Map());
   const [orderActionRequest, setOrderActionRequest] = useState<
     | {
         /**
@@ -2821,6 +2843,23 @@ export function PosApp() {
     paymentSummary.total <= 0 &&
     paymentSummary.prepaidAmount > 0;
 
+  /**
+   * 結帳差額（2026-10-19 到店優惠改價，mockup v3 畫面 ⑤）：
+   * **線上已付 > 新金額** → 應收 0，但客人多付咗錢 → 一定要處理差額先結得帳。
+   *
+   * 判準收喺純函式 `computeCheckoutDiff()`（有守衛測試釘住：
+   * 加菜／未付款／本地單恒 0，唔會誤彈模態）。
+   */
+  const checkoutDiffForOrder = (order: PosOrder | null | undefined): number =>
+    computeCheckoutDiff({
+      onlineOrderId: order?.onlineOrderId,
+      prepaidAmount: order?.prepaidAmount,
+      baseTotal: paymentBase.total,
+      discountAmount,
+    });
+  const checkoutDiffOrder =
+    checkoutDiffOrderId ? orders.find((order) => order.id === checkoutDiffOrderId) ?? null : null;
+
   const changeDue = useMemo(() => {
     const received = Number(receivedAmount);
     if (!Number.isFinite(received) || received <= 0) return 0;
@@ -4871,6 +4910,8 @@ export function PosApp() {
       const hasGrantRedeem = selectedGrantIds.length > 0;
       // 返結 temp 枱重結：還原原枱並清掉 temp 標記
       const isReopenRestore = Boolean(targetOrder.reopenOriginalTableId);
+      // 差額處理記錄（2026-10-19；本單處理過先有值）→ 寫入訂單審計欄。
+      const diffRecord = checkoutDiffHandledRef.current.get(targetOrder.id);
       const updatedOrder: PosOrder = {
         ...targetOrder,
         status: quickPaidFlow ? "paid" : "settled",
@@ -4890,6 +4931,12 @@ export function PosApp() {
               ? `會員券 + ${method}`
               : method,
         discountAmount,
+        // ── 差額處理審計（2026-10-19）：充值 txn id／現金退款／店方保留原因 ──
+        diffHandling: diffRecord?.option,
+        diffAmount: diffRecord ? checkoutDiffForOrder(targetOrder) : undefined,
+        diffTxnId: diffRecord?.txnId,
+        diffReason: diffRecord?.reason,
+        diffPhoneMask: diffRecord?.phoneMask,
         // ── 折扣備註（2026-09-11）：凡 discountAmount > 0 必然有原因（結帳頁彈窗係硬閘）。
         //    免單唔行呢條路（佢有自己嘅 compNote 審計欄），所以呢度只跟 discountAmount。
         //    清折扣時一併清原因，避免留低「冇折扣但有原因」嘅孤兒備註污糟報表。
@@ -4998,6 +5045,14 @@ export function PosApp() {
           reopenCount: updatedOrder.reopenCount ?? 0,
           reopenedAt: updatedOrder.reopenedAt ?? null,
           reopenReason: updatedOrder.reopenReason ?? null,
+          // ── 差額處理審計（0067 migration，2026-10-19）────────────────────
+          // 同 reopen 審計一樣放頂層（server 讀 `eventPayload.diffHandling`）。
+          // 只有處理過差額先有值；冇帶 → server 唔寫（唔會抹走舊值）。
+          diffHandling: updatedOrder.diffHandling ?? null,
+          diffAmount: updatedOrder.diffAmount ?? null,
+          diffTxnId: updatedOrder.diffTxnId ?? null,
+          diffReason: updatedOrder.diffReason ?? null,
+          diffPhoneMask: updatedOrder.diffPhoneMask ?? null,
           // 不可變業務時間（0057）：結帳嗰刻嘅裝置鐘。server 只接受字串值、永不自己落章
           // （見 sync/route.ts ORDER_SETTLED 段），所以冇值嘅舊單都唔會被呢度抹走。
           settledAt: updatedOrder.settledAt ?? null,
@@ -5140,6 +5195,15 @@ export function PosApp() {
     const targetOrder = resolveSettleTargetOrder(payingOrderId);
     if (!targetOrder) {
       setToast({ tone: "info", message: noSettleTargetMessage() });
+      return;
+    }
+
+    // 🔴 差額處理閘（2026-10-19 到店優惠改價）：線上已付 > 新金額 → 未處理過差額
+    // 就唔准落單，改為彈差額模態（充值返回／現金退款／店方保留），處理完接返嚟。
+    const pendingDiff = checkoutDiffForOrder(targetOrder);
+    if (pendingDiff > 0 && !checkoutDiffHandledRef.current.has(targetOrder.id)) {
+      setCheckoutDiffPending({ kind: "payment", method });
+      setCheckoutDiffOrderId(targetOrder.id);
       return;
     }
 
@@ -5324,6 +5388,91 @@ export function PosApp() {
     settleCompOrder(targetOrder, reason, now);
   }
 
+  /**
+   * 差額處理確認（2026-10-19 到店優惠改價，mockup v3 畫面 ⑤）：
+   * ① `topup` → 先 call `applyPosTopup` 攞 txn id（充值返回原支付戶口，
+   *    Ledger 禁 POS 沖正餘額故用 topup 語意）；失敗就**唔結帳**（錢未退到）。
+   * ② `cash` / `none` → 冇 Ledger 呼叫，直接記低處理方式。
+   * ③ 寫入 `checkoutDiffHandledRef`（防重複充值）→ 接返原本嘅結帳動作
+   *    （彈窗前記低咗：online-paid 完成／指定支付方式）。
+   */
+  async function handleCheckoutDiffConfirm(params: {
+    option: CheckoutDiffOption;
+    reason?: string;
+    phone?: string;
+  }) {
+    const order = checkoutDiffOrder;
+    if (!order || !bootstrap) return;
+    // 已處理過（重試路徑）→ 直接行原本結帳，唔再充值。
+    if (checkoutDiffHandledRef.current.has(order.id)) {
+      proceedCheckoutAfterDiff();
+      return;
+    }
+    setCheckoutDiffBusy(true);
+    try {
+      let txnId: string | undefined;
+      if (params.option === "topup") {
+        const merchantId = getLedgerMerchantId();
+        const phone = (params.phone ?? "").trim();
+        if (!merchantId || !phone) {
+          setToast({
+            tone: "error",
+            message: t("未能取得商家 ID 或會員電話，無法充值返回差額。請重新輸入會員電話後再試。"),
+          });
+          return;
+        }
+        // 同一張單重用同一個冪等鍵：網絡抖動導致「Ledger 收咗但回應丟失」時，
+        // 收銀重試會命中同一筆（唔會雙重退款）。
+        const idempotencyKey =
+          checkoutDiffIdemKeyRef.current.get(order.id) ?? crypto.randomUUID();
+        checkoutDiffIdemKeyRef.current.set(order.id, idempotencyKey);
+        const result = await applyPosTopup({
+          merchantId,
+          phone,
+          amountAvos: mopToAvos(checkoutDiffForOrder(order)),
+          idempotencyKey,
+        });
+        txnId = result.txnId || undefined;
+      }
+      checkoutDiffHandledRef.current.set(order.id, {
+        option: params.option,
+        txnId,
+        reason: params.reason?.trim() || undefined,
+        // 遮罩電話（`6393****`）→ 寫入訂單畀收據註腳；完整電話唔落盤。
+        phoneMask: params.option === "topup" ? maskPhoneForReceipt(params.phone) || undefined : undefined,
+      });
+      setCheckoutDiffOrderId(null);
+      proceedCheckoutAfterDiff();
+    } catch (err) {
+      setToast({
+        tone: "error",
+        message: err instanceof Error ? err.message : t("充值返回失敗"),
+      });
+    } finally {
+      setCheckoutDiffBusy(false);
+    }
+  }
+
+  /** 差額處理完 → 接返彈窗前原本要行嘅結帳動作。 */
+  function proceedCheckoutAfterDiff() {
+    const pending = checkoutDiffPending;
+    setCheckoutDiffPending(null);
+    if (!pending) {
+      // 冇記低（例如由 guard 直接開）→ 跟而家結帳頁判準。
+      if (isOnlinePaidComplete) {
+        completeOnlinePaidOrder();
+      } else {
+        void confirmPayment(selectedPaymentMethod || paymentMethods[0] || "現金");
+      }
+      return;
+    }
+    if (pending.kind === "online-paid") {
+      completeOnlinePaidOrder();
+      return;
+    }
+    void confirmPayment(pending.method);
+  }
+
   function completeOnlinePaidOrder() {
     if (!bootstrap) return;
     // 🔴 2026-09-14：同上 —— 「客人已支付，完成訂單」都只可以作用喺
@@ -5334,8 +5483,19 @@ export function PosApp() {
       return;
     }
 
+    // 🔴 差額處理閘（2026-10-19）：線上已付 > 新金額 → 未處理過差額唔准完成，
+    // 彈差額模態先（充值返回／現金退款／店方保留）。
+    const pendingDiff = checkoutDiffForOrder(targetOrder);
+    if (pendingDiff > 0 && !checkoutDiffHandledRef.current.has(targetOrder.id)) {
+      setCheckoutDiffPending({ kind: "online-paid" });
+      setCheckoutDiffOrderId(targetOrder.id);
+      return;
+    }
+
     const settledGrandTotal = Math.max(0, paymentBase.total - discountAmount);
     const quickPaidFlow = isQuickMode && targetOrder.tableId === "counter";
+    // 差額處理記錄（本單處理過先有值）→ 寫入訂單審計欄（Task #6 收據／詳情用）。
+    const diffRecord = checkoutDiffHandledRef.current.get(targetOrder.id);
     const updatedOrder: PosOrder = {
       ...targetOrder,
       status: quickPaidFlow ? "paid" : "settled",
@@ -5352,6 +5512,12 @@ export function PosApp() {
       // ── 不可變業務時間（0057）：完成線上已支付單都係一次結帳，照寫（重結＝覆寫）──
       settledAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
+      // ── 差額處理審計（2026-10-19）：充值 txn id／現金退款／店方保留原因 ──
+      diffHandling: diffRecord?.option,
+      diffAmount: diffRecord ? pendingDiff : undefined,
+      diffTxnId: diffRecord?.txnId,
+      diffReason: diffRecord?.reason,
+      diffPhoneMask: diffRecord?.phoneMask,
     };
 
     const nextOrders = orders.map((order) => (order.id === targetOrder.id ? updatedOrder : order));
@@ -5380,6 +5546,14 @@ export function PosApp() {
         partySize: updatedOrder.partySize ?? null,
         // 不可變業務時間（0057）：server 只接受字串值、永不自己落章（見 sync/route.ts）。
         settledAt: updatedOrder.settledAt ?? null,
+        // ── 差額處理審計（0067 migration，2026-10-19）：充值 txn id／遮罩電話／
+        //    現金退款／店方保留原因。只有處理過差額先有值；冇帶 → server 唔寫
+        //    （「有值先寫」唔會抹走舊值，離線重推時事件次序唔保證）。
+        diffHandling: updatedOrder.diffHandling ?? null,
+        diffAmount: updatedOrder.diffAmount ?? null,
+        diffTxnId: updatedOrder.diffTxnId ?? null,
+        diffReason: updatedOrder.diffReason ?? null,
+        diffPhoneMask: updatedOrder.diffPhoneMask ?? null,
       },
       status: "pending",
       createdAt: updatedOrder.updatedAt,
@@ -7995,6 +8169,28 @@ export function PosApp() {
                       (useMemberBalance && memberDeduction > 0 && paymentSummary.total > 0 && !selectedPaymentMethod)
                     }
                     onClick={() => {
+                      // 🔴 差額處理閘（2026-10-19）：線上已付 > 新金額 → 未處理過差額
+                      //    就唔行結帳，改為彈差額模態（充值返回／現金退款／店方保留）。
+                      const diffOrder = currentSettlementOrder;
+                      if (
+                        diffOrder &&
+                        checkoutDiffForOrder(diffOrder) > 0 &&
+                        !checkoutDiffHandledRef.current.has(diffOrder.id)
+                      ) {
+                        setCheckoutDiffPending(
+                          isOnlinePaidComplete
+                            ? { kind: "online-paid" }
+                            : {
+                                kind: "payment",
+                                method:
+                                  useMemberBalance && memberDeduction > 0 && paymentSummary.total <= 0
+                                    ? "會員餘額"
+                                    : selectedPaymentMethod || paymentMethods[0] || "現金",
+                              },
+                        );
+                        setCheckoutDiffOrderId(diffOrder.id);
+                        return;
+                      }
                       // 🔴 用 `isOnlinePaidComplete`（已排除「用會員餘額付清」）——
                       //    直接寫 `total <= 0` 會走數（見該變數註解）。
                       if (isOnlinePaidComplete) {
@@ -8340,6 +8536,35 @@ export function PosApp() {
               );
             })()}
         </ResponsiveModal>
+      ) : null}
+
+      {/* 結帳差額處理模態（2026-10-19 到店優惠改價，mockup v3 畫面 ⑤）：
+          線上已付 > 新金額 → 應收 0 但客人多付 → 三選項（充值返回／現金退款／店方保留）
+          ＋ topup 堆疊一次「確認充值」。加菜情况（新價 > 已付）唔彈（現有行為不變）。 */}
+      {checkoutDiffOrder ? (
+        <PosCheckoutDiffModal
+          baseTotal={paymentBase.total}
+          busy={checkoutDiffBusy}
+          currency={bootstrap.currency}
+          customerName={
+            checkoutDiffOrder.onlineOrderId
+              ? getOnlineCustomer(checkoutDiffOrder.onlineOrderId)?.name
+              : undefined
+          }
+          discountAmount={discountAmount}
+          memberPhone={
+            checkoutDiffOrder.onlineOrderId
+              ? getOnlineCustomer(checkoutDiffOrder.onlineOrderId)?.phone
+              : undefined
+          }
+          onClose={() => {
+            setCheckoutDiffOrderId(null);
+            setCheckoutDiffPending(null);
+          }}
+          onConfirm={(params) => handleCheckoutDiffConfirm(params)}
+          orderCode={checkoutDiffOrder.tableName || checkoutDiffOrder.localOrderNo}
+          prepaidAmount={checkoutDiffOrder.prepaidAmount ?? 0}
+        />
       ) : null}
 
       {/* 免單備註彈窗：備註必填（設置 → 備註 → 免單備註 提供預設選項，可自由輸入補充） */}

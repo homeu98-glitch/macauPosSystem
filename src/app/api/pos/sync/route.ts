@@ -204,6 +204,30 @@ function partySizeOrNull(value: unknown): number | null {
 }
 
 /**
+ * 差額處理方式（0067 migration）：只接受 `topup` / `cash` / `none`，其餘一律 null。
+ *
+ * ⚠️ 同 `uuidOrNull` 同一個理由：`pos_orders.diff_handling` 雖然係 text（唔會爆
+ * upsert），但寫入唔合法值會令「報表按方式匯總」嘅 group by 出現垃圾分組，
+ * 所以喺 server 入口做白名單。冇處理過差額（undefined / null / 空字串）→ null。
+ */
+function diffHandlingOrNull(value: unknown): string | null {
+  if (value !== "topup" && value !== "cash" && value !== "none") return null;
+  return value;
+}
+
+/**
+ * 差額金額（0067 migration）：正數先寫，兩位小數；非數字 / ≤0 → null。
+ *
+ * ⚠️ 唔可以用 `money()`（缺值回 0）—— 0 同 NULL 語意唔同：
+ * 0 會被讀做「差額 0 元但處理過」，NULL 先係「未處理過差額」。
+ */
+function diffAmountOrNull(value: unknown): number | null {
+  const n = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return Math.round(n * 100) / 100;
+}
+
+/**
  * 打印任務有效期（`pos_print_jobs.ttl`，epoch **millis** 絕對期限）。
  *
  * ── 🔴 2026-09-15（P1）為咩要喺 server 端補呢個欄 ──────────────────────
@@ -1401,6 +1425,16 @@ export async function POST(request: Request) {
           reopen_count: Math.max(0, Math.trunc(Number(order.reopenCount) || 0)),
           reopened_at: isoOrNull(order.reopenedAt),
           reopen_reason: text(order.reopenReason, MAX_TEXT_LEN),
+          // ── 結帳差額處理審計（0067 migration，2026-10-19）─────────────────────
+          // 同 reopen 審計同一型：逐欄顯式複製漏抄 = 換機後睇唔到差額憑證
+          //（「差額已處理」徽章 + 收據 `diff_note` 註腳齊齊消失）。
+          // 未跑 migration → 下面 42703 降級會拔走呢五欄（功能靜默停用，
+          // 金額 / items / 狀態全部照寫，主流程不受影響）。
+          diff_handling: diffHandlingOrNull(order.diffHandling),
+          diff_amount: diffAmountOrNull(order.diffAmount),
+          diff_txn_id: text(order.diffTxnId, MAX_TEXT_LEN),
+          diff_reason: text(order.diffReason, MAX_TEXT_LEN),
+          diff_phone_mask: text(order.diffPhoneMask, MAX_TEXT_LEN),
           // 方案 B（2026-09-09）：`updated_at` 一律 server 蓋章（收件時間，單一鐘域）；
           // client 裝置時鐘時間戳另存 `client_updated_at`，專供 LWW 守門同鐘域比較。
           // 注意：`created_at` 維持 client 時間（首次建立）—— 訂單排序（compareOrderByLocalNo）
@@ -1434,7 +1468,7 @@ export async function POST(request: Request) {
           // 兩個 migration 邊個未跑都修得返；呢啲欄本身值係 NULL / 0，拔走無損。
           // 呢個降級係一次過嘅：migration 跑完之後寫入自然帶返新欄。
           console.warn(
-            `[pos/sync] pos_orders 新欄唔存在（0034 / 0038 / 0043 未跑），降級寫入訂單 ${orderId}`,
+            `[pos/sync] pos_orders 新欄唔存在（0034 / 0038 / 0043 / 0067 未跑），降級寫入訂單 ${orderId}`,
           );
           const legacyRecord = { ...baseRecord };
           delete legacyRecord.discount_note;
@@ -1446,6 +1480,13 @@ export async function POST(request: Request) {
           delete legacyRecord.reopen_count;
           delete legacyRecord.reopened_at;
           delete legacyRecord.reopen_reason;
+          // 0067 差額審計欄 —— 未跑 migration 時拔走。代價只係「差額已處理徽章 /
+          // 收據 diff_note 註腳暫時唔顯示」，主流程不受影響。
+          delete legacyRecord.diff_handling;
+          delete legacyRecord.diff_amount;
+          delete legacyRecord.diff_txn_id;
+          delete legacyRecord.diff_reason;
+          delete legacyRecord.diff_phone_mask;
           // 0057 不可變業務時間 —— 未跑 migration 時拔走（漂移保護暫時停用，主流程不受影響）。
           delete legacyRecord.settled_at;
           ({ error: oErr } = await writeOrder(legacyRecord));
@@ -1636,18 +1677,44 @@ export async function POST(request: Request) {
           }
         }
 
+        // ── 差額處理審計（0067，2026-10-19）：結帳係主寫入點 ──
+        // 差額處理正正喺結帳嗰刻發生（充值返回／現金退款／店方保留），所以同
+        // discountNote 一樣「payload 有帶先寫」：冇帶 = 呢張單未處理過差額
+        // → 唔寫（唔可以無條件寫 null 抹走 ORDER_UPDATED 已寫嘅值，
+        // 離線重推時事件次序唔保證）。
+        if ("diffHandling" in eventPayload) {
+          const settledDiffHandling = diffHandlingOrNull(eventPayload.diffHandling);
+          // 只有方式合法先寫（連金額一齊）：方式非法而金額有值 = 爛資料，
+          // 寫咗落去會令報表按方式匯總出現垃圾分組。
+          if (settledDiffHandling) {
+            patch.diff_handling = settledDiffHandling;
+            patch.diff_amount = diffAmountOrNull(eventPayload.diffAmount);
+            patch.diff_txn_id = text(eventPayload.diffTxnId, MAX_TEXT_LEN);
+            patch.diff_reason = text(eventPayload.diffReason, MAX_TEXT_LEN);
+            patch.diff_phone_mask = text(eventPayload.diffPhoneMask, MAX_TEXT_LEN);
+          }
+        }
+
         const writeSettlePatch = async (record: Record<string, unknown>) =>
           await supabase.from("pos_orders").update(record).eq("id", settledOrderId).eq("store_id", storeId).select("id");
 
         let { data: settledRows, error: sErr } = await writeSettlePatch(patch);
         if (sErr && isMissingColumnError(sErr)) {
-          // 🔻 0034 / 0043 未跑：拔走新欄再寫，唔可以因為新欄令結帳狀態上唔到雲。
-          console.warn(`[pos/sync] pos_orders 新欄唔存在（0034 / 0043 未跑），降級寫入結帳 ${settledOrderId}`);
+          // 🔻 0034 / 0043 / 0067 未跑：拔走新欄再寫，唔可以因為新欄令結帳狀態上唔到雲。
+          console.warn(
+            `[pos/sync] pos_orders 新欄唔存在（0034 / 0043 / 0067 未跑），降級寫入結帳 ${settledOrderId}`,
+          );
           const legacyPatch = { ...patch };
           delete legacyPatch.discount_note;
           delete legacyPatch.reopen_count;
           delete legacyPatch.reopened_at;
           delete legacyPatch.reopen_reason;
+          // 0067 差額審計欄 —— 未跑 migration 時拔走（徽章／註腳暫時唔顯示，主流程不受影響）。
+          delete legacyPatch.diff_handling;
+          delete legacyPatch.diff_amount;
+          delete legacyPatch.diff_txn_id;
+          delete legacyPatch.diff_reason;
+          delete legacyPatch.diff_phone_mask;
           // 0057 不可變業務時間 —— 未跑 migration 時拔走（主流程不受影響）。
           delete legacyPatch.settled_at;
           ({ data: settledRows, error: sErr } = await writeSettlePatch(legacyPatch));

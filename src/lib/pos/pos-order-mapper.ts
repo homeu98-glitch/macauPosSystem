@@ -116,6 +116,22 @@ export interface PosOrderRow {
    *    收銀台平台單嘅「平台單號」會閃返空白（店員冇得同平台後台對數）。
    */
   external_order_id?: string | null;
+  /**
+   * 結帳差額處理審計（0067 migration，2026-10-19；未跑 migration → undefined）。
+   *
+   * 🔴 為咩一定要 map 返出嚟：差額憑證（充值 txn id／遮罩電話／原因）只存
+   *    client 嘅話，realtime echo（本機被雲端覆蓋嘅主要途徑）會將佢哋
+   *    整唔見 ⇒ 「差額已處理」徽章閃返冇、補打收據走失 `diff_note` 註腳。
+   *    同 0038 `member_*` / 0043 `reopen_*` 同一型漏抄。
+   *
+   * ⚠️ `diff_phone_mask` 只係遮罩版（`6393****`）—— 完整會員電話係個資紅線，
+   *    從來唔落 DB（見 `lib/ledger/online-customer-cache.ts`）。
+   */
+  diff_handling?: string | null;
+  diff_amount?: number | string | null;
+  diff_txn_id?: string | null;
+  diff_reason?: string | null;
+  diff_phone_mask?: string | null;
 }
 
 export function mapPosOrderRow(row: PosOrderRow): PosOrder {
@@ -177,6 +193,13 @@ export function mapPosOrderRow(row: PosOrderRow): PosOrder {
     platformNetAmount: numOrUndef(row.platform_net_amount),
     platformSubsidyNet: numOrUndef(row.platform_subsidy_net),
     platformSettledAt: row.platform_settled_at ?? undefined,
+    // 結帳差額處理審計（0067）：冇欄 / NULL → undefined（＝未處理過差額）。
+    // 漏 map = realtime echo 抹走本機剛寫入嘅差額憑證（徽章閃返冇、收據註腳走失）。
+    diffHandling: (row.diff_handling as PosOrder["diffHandling"]) ?? undefined,
+    diffAmount: numOrUndef(row.diff_amount),
+    diffTxnId: row.diff_txn_id ?? undefined,
+    diffReason: row.diff_reason ?? undefined,
+    diffPhoneMask: row.diff_phone_mask ?? undefined,
   };
 }
 

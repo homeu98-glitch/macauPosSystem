@@ -29,6 +29,7 @@ import {
   LocalOrderPanelTab,
   matchesLocalOrderPanelTab,
   getOrderStatusBadge,
+  getDiffHandledBadge,
   mergeOrderLists,
   filterResurrectedOrders,
 } from "@/lib/pos-order-filters";
@@ -671,6 +672,9 @@ export function LocalOrdersPanel({
                   const badge = getOrderStatusBadge(order);
                   // 付款狀態（已結帳 / 未結帳）——快餐單先顯示（見 getPaymentBadge）。
                   const paymentBadge = getPaymentBadge(order);
+                  // 差額處理徽章（2026-10-19 線上單到店改價）：處理過「客人多付」
+                  // 差額先有值，冇處理過 → null（唔顯示，現有卡片零影響）。
+                  const diffBadge = getDiffHandledBadge(order);
                   // 折扣指示：原價（line-through）+ 折後價（amber），收埋喺金額欄第二行
                   const itemSaving = orderItemDiscountTotal(order.items);
                   const wholeSaving = Math.max(0, order.discountAmount ?? 0);
@@ -739,6 +743,14 @@ export function LocalOrdersPanel({
                               className={`inline-flex shrink-0 items-center whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-semibold ${paymentBadge.bgClass} ${paymentBadge.textClass}`}
                             >
                               {t(paymentBadge.label)}
+                            </span>
+                          ) : null}
+                          {diffBadge ? (
+                            <span
+                              className={`inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-semibold ${diffBadge.bgClass} ${diffBadge.textClass}`}
+                            >
+                              <span className={`h-1.5 w-1.5 rounded-full ${diffBadge.dotClass}`} />
+                              {t(diffBadge.label)}
                             </span>
                           ) : null}
                         </div>
@@ -940,6 +952,39 @@ export function LocalOrdersPanel({
                     {t("返結原因：")}{viewingOrder.reopenReason}
                   </div>
                 ) : null}
+                {/* 差額處理記錄（2026-10-19 線上單到店改價）：處理過「客人多付」
+                    差額先有值 —— 徽章 ＋ 一行明細（方式／金額／遮罩電話／憑證／原因），
+                    同收據 `diff_note` 註腳同一份資料。 */}
+                {viewingOrder.diffHandling
+                  ? (() => {
+                      const diffBadge = getDiffHandledBadge(viewingOrder);
+                      const optionLabel =
+                        viewingOrder.diffHandling === "topup"
+                          ? t("充值返回原支付戶口")
+                          : viewingOrder.diffHandling === "cash"
+                            ? t("現金退款")
+                            : t("唔退差額 · 店方保留");
+                      const detail = [
+                        `${optionLabel} ${formatMoney(Math.max(0, viewingOrder.diffAmount ?? 0), currency)}`,
+                        viewingOrder.diffPhoneMask ? `（${viewingOrder.diffPhoneMask}）` : "",
+                        viewingOrder.diffTxnId ? ` · ${t("交易憑證")} ${viewingOrder.diffTxnId}` : "",
+                        viewingOrder.diffReason ? ` · ${viewingOrder.diffReason}` : "",
+                      ].join("");
+                      return (
+                        <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-amber-700">
+                          {diffBadge ? (
+                            <span
+                              className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-semibold ${diffBadge.bgClass} ${diffBadge.textClass}`}
+                            >
+                              <span className={`h-1.5 w-1.5 rounded-full ${diffBadge.dotClass}`} />
+                              {t(diffBadge.label)}
+                            </span>
+                          ) : null}
+                          <span>{t("差額處理：{detail}", { detail })}</span>
+                        </div>
+                      );
+                    })()
+                  : null}
               </div>
               <div className="flex flex-wrap items-center justify-end gap-2">
                 <div

@@ -407,6 +407,15 @@ export type ReceiptSectionId =
   | "split_payment"
   /** 會員積分（本單賺取 / 結餘） */
   | "points_earned"
+  /**
+   * 結帳差額處理註記（2026-10-19 到店優惠改價：線上已付 > 結帳總額）。
+   *
+   * 靜態文字區塊（同 `scheduled_pickup` 同一手法）：內容由 POS 端
+   * `buildReceiptContent()` 砌好，下游三端只 loop `snapshot.blocks` 印
+   * `content[id]` → **加呢個 id 唔使改 Companion / APK / print-hub**。
+   * 冇處理過差額嘅單內容空白 → renderer 自動略過（舊單零影響）。
+   */
+  | "diff_note"
   /** 換貨單：標示原單號 */
   | "exchange_of"
   /** 退換貨條款（模板層級自由文字 `ReceiptTemplate.returnPolicyText`；空白 = 唔印） */
@@ -1425,6 +1434,26 @@ export interface PosOrder {
   reopenOriginalTableId?: string;
   /** 返結時原枱名（temp 枱結帳後還原用） */
   reopenOriginalTableName?: string;
+
+  // ── 結帳差額處理（2026-10-19 到店優惠改價；線上已付 > 結帳總額）──
+  /**
+   * 差額處理方式：`topup` = 充值返回原支付戶口（會員通餘額）／
+   * `cash` = 櫃現金退款／`none` = 唔退，店方保留（記其他收入）。
+   * 有值 = 張單係「多付差額」單，結帳時處理過。
+   */
+  diffHandling?: "topup" | "cash" | "none";
+  /** 差額處理金額（正數，客人多付部份 ＝ 線上已付 − 結帳總額） */
+  diffAmount?: number;
+  /** 充值返回嘅 Ledger `merchant_apply_pos_txn` txn id（對帳憑證；會員通後台可查） */
+  diffTxnId?: string;
+  /** 店方保留（`none`）嘅必填原因 */
+  diffReason?: string;
+  /**
+   * 充值返回戶口嘅**遮罩電話**（例 `6393****`，收據註腳用）。
+   * 🔴 淨存遮罩版 —— 完整會員電話係個資紅線，從來唔落 `pos_orders`（見
+   * `lib/ledger/online-customer-cache.ts`）。呢格唔可反推出完整電話。
+   */
+  diffPhoneMask?: string;
 
   // ── 返結會員扣款快照（供反向回滾 / 重結用）──
   /** 上次結帳透過會員餘額扣減的 avos（不含券），供返結反向回滾 */

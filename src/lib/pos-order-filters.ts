@@ -141,6 +141,20 @@ export function getPaymentBadge(order: PosOrder): OrderStatusBadge {
     : { label: "未結帳", bgClass: "bg-slate-100", textClass: "text-slate-500", dotClass: "bg-slate-400" };
 }
 
+/**
+ * 差額處理徽章（2026-10-19 線上單到店改價；mockup v3 畫面 ⑥ 訂單卡片腳）。
+ *
+ * 結帳時處理過「客人多付」差額（充值返回原支付戶口／現金退款／店方保留）
+ * 先有值 → 卡片／詳情顯示「差額已處理」（amber，同 mockup `b-amber`）。
+ * 冇處理過（`diffHandling` 空）→ null， caller 唔顯示。
+ *
+ * 用法同 `getPaymentBadge()`：純中文 label，顯示位包 `t()`。
+ */
+export function getDiffHandledBadge(order: PosOrder): OrderStatusBadge | null {
+  if (!order.diffHandling) return null;
+  return { label: "差額已處理", bgClass: "bg-amber-50", textClass: "text-amber-700", dotClass: "bg-amber-500" };
+}
+
 export function orderTimestamp(order: PosOrder): number {
   return Date.parse(order.updatedAt || order.createdAt || "") || 0;
 }

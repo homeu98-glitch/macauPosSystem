@@ -677,6 +677,8 @@ export async function resolveLedgerPosOrderForReceipt(
   const built = buildLedgerPosOrder(ledgerOrder, resolvedDetail, assigned?.tableId, assigned?.tableName);
 
   // 保留本機已知嘅狀態類欄位（唔可以俾 projection 嘅預設值蓋掉）。
+  // 差額處理審計（2026-10-19）同屬「本機先有」嘅欄位：Ledger 冇呢個概念，
+  // 唔保留嘅話補打收據會走失 `diff_note` 註腳（充值返回憑證）。
   const known = cached ?? loadOrders().find((row) => row.id === built.id) ?? null;
   const stable: PosOrder = known
     ? {
@@ -685,6 +687,15 @@ export async function resolveLedgerPosOrderForReceipt(
         ...(known.fulfillmentStatus ? { fulfillmentStatus: known.fulfillmentStatus } : {}),
         ...(known.prepaidAmount != null ? { prepaidAmount: known.prepaidAmount } : {}),
         ...(known.createdAt ? { createdAt: known.createdAt } : {}),
+        ...(known.diffHandling
+          ? {
+              diffHandling: known.diffHandling,
+              diffAmount: known.diffAmount,
+              diffTxnId: known.diffTxnId,
+              diffReason: known.diffReason,
+              diffPhoneMask: known.diffPhoneMask,
+            }
+          : {}),
       }
     : built;
 

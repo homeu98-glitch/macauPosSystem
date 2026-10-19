@@ -423,13 +423,15 @@ export const defaultPosLocalSettings: PosLocalSettings = {
         // 餐飲 / 自助機單完全唔受影響。加下游三端唔使改（見 ReceiptSectionId 註釋）。
         split_payment: { visible: true, size: "s", bold: false, align: "left" },
         points_earned: { visible: true, size: "s", bold: false, align: "left" },
+        // 差額處理註記（2026-10-19）：無差額單內容空白 → renderer 略過，零影響。
+        diff_note: { visible: true, size: "s", bold: false, align: "left" },
         exchange_of: { visible: true, size: "s", bold: false, align: "left" },
         return_policy: { visible: true, size: "s", bold: false, align: "left" },
         order_note: { visible: true, size: "s", bold: false, align: "left" },
         qr_code: { visible: true, size: "s", bold: false, align: "center" },
         footer: { visible: true, size: "s", bold: false, align: "center" },
       },
-      order: ["store_name", "store_tel", "order_no", "exchange_of", "table_name", "order_time", "scheduled_pickup", "checkout_time", "server", "divider", "items", "discount_breakdown", "subtotal_before_discount", "service_charge_amount", "tax_amount", "rounding_amount", "discount_amount", "total", "cash_tendered", "change_amount", "payment_method", "split_payment", "points_earned", "order_note", "return_policy", "qr_code", "footer"],
+      order: ["store_name", "store_tel", "order_no", "exchange_of", "table_name", "order_time", "scheduled_pickup", "checkout_time", "server", "divider", "items", "discount_breakdown", "subtotal_before_discount", "service_charge_amount", "tax_amount", "rounding_amount", "discount_amount", "total", "cash_tendered", "change_amount", "payment_method", "split_payment", "points_earned", "diff_note", "order_note", "return_policy", "qr_code", "footer"],
       footerText: "多謝惠顧，歡迎再次光臨",
     },
     label: {
@@ -498,13 +500,15 @@ export const defaultPosLocalSettings: PosLocalSettings = {
         // 餐飲 / 自助機單完全唔受影響。加下游三端唔使改（見 ReceiptSectionId 註釋）。
         split_payment: { visible: true, size: "s", bold: false, align: "left" },
         points_earned: { visible: true, size: "s", bold: false, align: "left" },
+        // 差額處理註記（2026-10-19）：無差額單內容空白 → renderer 略過，零影響。
+        diff_note: { visible: true, size: "s", bold: false, align: "left" },
         exchange_of: { visible: true, size: "s", bold: false, align: "left" },
         return_policy: { visible: true, size: "s", bold: false, align: "left" },
         order_note: { visible: true, size: "s", bold: false, align: "left" },
         qr_code: { visible: true, size: "s", bold: false, align: "center" },
         footer: { visible: true, size: "s", bold: false, align: "center" },
       },
-      order: ["store_name", "store_tel", "order_no", "exchange_of", "table_name", "order_time", "scheduled_pickup", "checkout_time", "server", "divider", "items", "discount_breakdown", "subtotal_before_discount", "service_charge_amount", "tax_amount", "rounding_amount", "discount_amount", "total", "cash_tendered", "change_amount", "payment_method", "split_payment", "points_earned", "order_note", "return_policy", "qr_code", "footer"],
+      order: ["store_name", "store_tel", "order_no", "exchange_of", "table_name", "order_time", "scheduled_pickup", "checkout_time", "server", "divider", "items", "discount_breakdown", "subtotal_before_discount", "service_charge_amount", "tax_amount", "rounding_amount", "discount_amount", "total", "cash_tendered", "change_amount", "payment_method", "split_payment", "points_earned", "diff_note", "order_note", "return_policy", "qr_code", "footer"],
       footerText: "多謝惠顧，歡迎再次光臨",
     },
     // 交班結算單模板（第五個槽位，2026-09-10）。直接引用 escpos-template 嘅出廠預設，

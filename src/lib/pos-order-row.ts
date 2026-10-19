@@ -141,6 +141,22 @@ export type PosOrderDbRow = {
    * 有值 ＝ 已對帳（可計差額率）；NULL ＝ 待對帳（UI 唔可以顯示 0）。
    */
   platform_settled_at?: string | null;
+  /**
+   * 結帳差額處理審計（0067 migration，2026-10-19；未跑 migration → undefined）。
+   *
+   * 🔴 為咩一定要 map 返出嚟：差額憑證（充值 txn id／遮罩電話／原因）漏抄 =
+   *    報表／交班（讀雲端為唯一可信源）永遠睇唔到「差額去咗邊」，
+   *    換機後「差額已處理」徽章同補打收據嘅 `diff_note` 註腳齊齊消失。
+   *    同 0034 `discount_note` / 0043 `reopen_*` 一模一樣嘅漏抄型 bug。
+   *
+   * ⚠️ `diff_phone_mask` 只係遮罩版（`6393****`）—— 完整會員電話係個資紅線，
+   *    從來唔落 DB（見 `lib/ledger/online-customer-cache.ts`）。
+   */
+  diff_handling?: string | null;
+  diff_amount?: number | string | null;
+  diff_txn_id?: string | null;
+  diff_reason?: string | null;
+  diff_phone_mask?: string | null;
 };
 
 /**
@@ -208,6 +224,13 @@ export const POS_ORDER_DB_COLUMNS = [
   "platform_net_amount",
   "platform_subsidy_net",
   "platform_settled_at",
+  // 結帳差額處理審計（0067 migration，2026-10-19）。「差額已處理」徽章同
+  // 收據 `diff_note` 註腳靠佢；唔投影 = 寫得入、讀唔出（見檔頭鐵律）。
+  "diff_handling",
+  "diff_amount",
+  "diff_txn_id",
+  "diff_reason",
+  "diff_phone_mask",
 ] as const;
 
 /** PostgREST `.select()` 用嘅投影字串（＝ 上面清單 join）。 */
@@ -291,5 +314,14 @@ export function mapOrderRow(order: PosOrderDbRow) {
     platformNetAmount: numOrUndef(order.platform_net_amount),
     platformSubsidyNet: numOrUndef(order.platform_subsidy_net),
     platformSettledAt: order.platform_settled_at ?? undefined,
+    // 結帳差額處理審計（0067 migration，2026-10-19）：冇欄 / NULL → undefined。
+    // 🔴 漏抄呢幾行 = 報表／交班（讀雲端）睇唔到差額憑證，換機後徽章同
+    //    收據 `diff_note` 註腳齊齊消失（同 platform_net_amount 同一型出庫漏抄）。
+    // 型別寫 inline —— 本檔要保持零 import 先可以被 `node --test` 直接載入。
+    diffHandling: (order.diff_handling as "topup" | "cash" | "none" | undefined) ?? undefined,
+    diffAmount: numOrUndef(order.diff_amount),
+    diffTxnId: order.diff_txn_id ?? undefined,
+    diffReason: order.diff_reason ?? undefined,
+    diffPhoneMask: order.diff_phone_mask ?? undefined,
   };
 }

@@ -85,6 +85,15 @@ export async function GET(request: Request) {
         // 不可變業務時間（0057 migration，2026-09-24）：報表／交班日歸屬以佢為準。
         //    未跑 migration 嘅環境 → 欄位唔存在 → undefined → 落返舊鏈（唔會爆）。
         settledAt: order.settled_at ?? undefined,
+        // ── 結帳差額處理審計（0067 migration，2026-10-19）──────────────────
+        // 「差額已處理」徽章同收據 `diff_note` 註腳嘅雲端真源。唔帶 =
+        // 換機／另一部機永遠睇唔到差額憑證（同 reopen_* 一樣嘅漏抄型 bug）。
+        // 未跑 migration → 欄位唔存在 → undefined → 徽章靜默唔出（唔會爆）。
+        diffHandling: (order.diff_handling as "topup" | "cash" | "none" | undefined) ?? undefined,
+        diffAmount: order.diff_amount == null ? undefined : Number(order.diff_amount),
+        diffTxnId: order.diff_txn_id ?? undefined,
+        diffReason: order.diff_reason ?? undefined,
+        diffPhoneMask: order.diff_phone_mask ?? undefined,
       })) ?? [],
   });
 }

@@ -12,6 +12,7 @@ import { describe, it } from "node:test";
 import {
   filterQuickActionBarOrders,
   transferredLedgerOrderIds,
+  getDiffHandledBadge,
   getPaymentBadge,
   isLocalOrTransferredDineIn,
   isPaidOrderStatus,
@@ -330,6 +331,22 @@ describe("getPaymentBadge 型別契約", () => {
   it("回傳完整 badge token（bg / text / dot），UI 可以直接套 className", () => {
     const badge: OrderStatusBadge = getPaymentBadge(order({ id: "z1", status: "paid" }));
     assert.ok(badge.bgClass && badge.textClass && badge.dotClass);
+  });
+});
+
+describe("getDiffHandledBadge（差額已處理徽章，2026-10-19）", () => {
+  it("處理過差額（topup / cash / none）→ 有徽章", () => {
+    for (const handling of ["topup", "cash", "none"] as const) {
+      const badge = getDiffHandledBadge(order({ id: "d1", diffHandling: handling, diffAmount: 10 }));
+      assert.ok(badge, `${handling} 應該有徽章`);
+      assert.equal(badge?.label, "差額已處理");
+      assert.ok(badge?.bgClass && badge.textClass && badge.dotClass);
+    }
+  });
+
+  it("未處理過差額（diffHandling 空）→ null（卡片唔顯示，現有單零影響）", () => {
+    assert.equal(getDiffHandledBadge(order({ id: "d2", diffAmount: 10 })), null);
+    assert.equal(getDiffHandledBadge(order({ id: "d3" })), null);
   });
 });
 

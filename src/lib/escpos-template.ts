@@ -37,6 +37,7 @@ import {
   resolveExtraFee,
   roundMoney,
 } from "@/lib/receipt/subtotal-block";
+import { buildDiffNote } from "@/lib/pos/checkout-diff";
 
 export { buildSubtotalBlock, resolveExtraFee };
 
@@ -74,6 +75,7 @@ export const RECEIPT_SECTION_META: { id: ReceiptSectionId; label: string }[] = [
   // ── 零售新增（2026-09-13）── 全部係靜態文字區塊，加咗唔使改下游三端（見 ReceiptSectionId 註釋）
   { id: "split_payment", label: "拆分付款明細" },
   { id: "points_earned", label: "會員積分" },
+  { id: "diff_note", label: "差額處理註記" },
   { id: "exchange_of", label: "換貨原單號" },
   { id: "return_policy", label: "退換貨條款" },
   { id: "order_note", label: "全單備註" },
@@ -206,6 +208,9 @@ const RECEIPT_BLOCK_DEFAULTS: Record<ReceiptSectionId, EscPosBlockStyle> = {
   // 反而若預設 `false`，零售商戶要自己去設計頁逐個撳開，容易以為「功能冇做」。
   split_payment: block(true, "s", false, "left"),
   points_earned: block(true, "s", false, "left"),
+  // 差額處理註記（2026-10-19 線上單到店改價）：只有處理過差額嘅單先有內容，
+  // 其餘單內容空白 → renderer 略過 → 現有商戶零影響（同 split_payment 同理）。
+  diff_note: block(true, "s", false, "left"),
   exchange_of: block(true, "s", false, "left"),
   return_policy: block(true, "s", false, "left"),
   order_note: block(true, "s", false, "left"),
@@ -303,6 +308,8 @@ export const DEFAULT_RECEIPT_TEMPLATE: ReceiptTemplate = {
     // 零售：多筆付款逐行印（1 筆時 `payment_method` 已經講晒，所以零售多數會熄 `payment_method`）
     "split_payment",
     "points_earned",
+    // 差額處理註記跟住付款相關區塊（充值返回／現金退款憑證；無差額單自動略過）
+    "diff_note",
     "order_note",
     // 退換貨條款擺喺二維碼之前（收尾條款，睇完金額先睇條款）
     "return_policy",
@@ -1033,6 +1040,17 @@ export function buildReceiptContent(order: PosOrder, opts: ReceiptContentOpts): 
     ...buildRetailReceiptBlocks(order, {
       formatAmount: (amount) => formatMoney(amount, opts.currency),
       returnPolicyText: opts.returnPolicyText,
+    }),
+    // 差額處理註記（2026-10-19 線上單到店改價）：只有 `diffHandling` 有值先印，
+    // 否則空字串 → renderer 略過（舊單／非差額單零影響）。
+    // 純函式（`lib/pos/checkout-diff.ts`，有單測）—— 同零售區塊同一手法。
+    diff_note: buildDiffNote({
+      handling: order.diffHandling,
+      amount: order.diffAmount,
+      txnId: order.diffTxnId,
+      reason: order.diffReason,
+      phoneMask: order.diffPhoneMask,
+      formatAmount: (amount) => formatMoney(amount, opts.currency),
     }),
     order_note: order.orderNote ?? "",
     footer: opts.footerText,
