@@ -115,20 +115,46 @@ export function normalizeSpecGroups(raw: unknown): MenuSpecGroup[] | undefined {
   return groups.length > 0 ? groups : undefined;
 }
 
+/**
+ * 由 bootstrap `rules` 抽出全店會員折扣百分比。
+ *
+ * 只認 1–99：`100` = 冇折扣（等同唔設）、`<= 0` = 資料異常 → 一律當冇（`undefined`）。
+ * 咁樣「設定被清空」同「從未設定」都會自然 fallback 去「冇會員折扣」，
+ * 唔會因為一個 0 而令全店變免費。
+ */
+function resolveMemberDiscountRate(rules: UnknownRecord): number | undefined {
+  const raw = rules.memberDiscountRate ?? rules.member_discount_rate;
+  if (raw == null || raw === "") return undefined;
+  const rate = Number(raw);
+  if (!Number.isFinite(rate) || rate <= 0 || rate >= 100) return undefined;
+  return Math.round(rate * 100) / 100;
+}
+
 function normalizeMenuItem(item: MenuItem | UnknownRecord): MenuItem {
   const record = item as UnknownRecord;
   const imageRaw =
     record.image ?? record.image_url ?? record.photo ?? record.img ?? record.thumbnail ?? record.picture;
+  // 會員價：只接受「> 0 且 < price」嘅有效值，其餘一律當冇設。
+  // ⚠️ 呢個係 whitelist —— 漏咗就會被靜靜剷走，客人端永遠見唔到會員價
+  //    （同 normalizePosLocalSettings 漏 whitelist 係同一個坑）。
+  const price = Number(record.price ?? 0);
+  const memberPriceRaw = record.memberPrice ?? record.member_price;
+  const memberPriceNum = memberPriceRaw != null && memberPriceRaw !== "" ? Number(memberPriceRaw) : NaN;
+  const memberPrice =
+    Number.isFinite(memberPriceNum) && memberPriceNum > 0 && memberPriceNum < price
+      ? Math.round(memberPriceNum * 100) / 100
+      : undefined;
   return {
     id: String(record.id),
     categoryId: String(record.categoryId ?? record.category_id ?? ""),
     name: String(record.name ?? ""),
-    price: Number(record.price ?? 0),
+    price,
     printerGroup: String(record.printerGroup ?? record.printer_group ?? "kitchen") as MenuItem["printerGroup"],
     specGroups: normalizeSpecGroups(record.specGroups ?? record.spec_groups),
     isMarketPrice: Boolean(record.isMarketPrice ?? record.is_market_price),
     customerOrderable: Boolean(record.customerOrderable ?? record.customer_orderable ?? true),
     image: imageRaw ? String(imageRaw) : undefined,
+    ...(memberPrice !== undefined ? { memberPrice } : {}),
   };
 }
 
@@ -172,6 +198,9 @@ export function normalizeBootstrapPayload(raw: PosBootstrap | UnknownRecord): Po
       allowMemberLookup: Boolean(rulesRecord.allowMemberLookup ?? rulesRecord.allow_member_lookup ?? false),
       taxRate: Number(rulesRecord.taxRate ?? rulesRecord.tax_rate ?? 0),
       serviceChargeRate: Number(rulesRecord.serviceChargeRate ?? rulesRecord.service_charge_rate ?? 0),
+      // 全店會員折扣百分比：同樣係 whitelist，漏咗客人端就永遠用唔到會員折扣。
+      // 只認 1-99（100 = 冇折扣，等同唔設；0 或負數＝資料異常，一律當冇）。
+      memberDiscountRate: resolveMemberDiscountRate(rulesRecord),
       paymentMethods: Array.isArray(rulesRecord.paymentMethods ?? rulesRecord.payment_methods)
         ? ((rulesRecord.paymentMethods ?? rulesRecord.payment_methods) as string[])
         : [],

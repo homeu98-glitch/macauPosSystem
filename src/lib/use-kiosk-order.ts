@@ -24,6 +24,7 @@ import {
   mergeCartLine,
   type CartLine,
 } from "@/lib/kiosk-cart";
+import { memberUnitPrice } from "@/lib/pos/member-price";
 import {
   buildKioskOrder,
   clearKioskDeviceBinding,
@@ -117,6 +118,37 @@ export type OrderingMember = {
   pinWindowToken?: string;
 };
 
+/**
+ * 為購物車每一行算出「實際會收錢嘅單價」，交俾 `computeOrderTotals`。
+ *
+ * 2026-10-20 會員價。三個要點：
+ * ① **唔會改 `CartLine`**：價錢係每次 render 即時計，唔會鎖死。
+ *    因為客人流程係「先點餐 → 埋單先登入」，加菜時未登入 + 之後登入，
+ *    如果價錢喺加菜一刻就寫死，嗰幾行就會永遠收原價。
+ * ② 未識別會員（`enabled === false`）→ **原封不動**回原價，行為同以前一模一樣
+ *    （Kiosk 平板、未登入掃碼都行呢條）。
+ * ③ 只有**真係平過原價**先寫 `memberPrice`；等於原價唔寫，避免「會員價 = 原價」嘅無意義寫法。
+ */
+function priceCartLinesForMember(
+  lines: readonly CartLine[],
+  menuItemById: ReadonlyMap<string, MenuItem>,
+  enabled: boolean,
+  memberDiscountRate: number | undefined,
+): Array<{ price: number; quantity: number; memberPrice?: number }> {
+  return lines.map((line) => {
+    if (!enabled) return { price: line.price, quantity: line.quantity };
+    const item = menuItemById.get(line.menuItemId);
+    if (!item) return { price: line.price, quantity: line.quantity };
+    const specDelta = (line.selectedSpecs ?? []).reduce((sum, spec) => sum + spec.priceDelta, 0);
+    const unit = memberUnitPrice(item.price, item.memberPrice, memberDiscountRate, specDelta);
+    return {
+      price: line.price,
+      quantity: line.quantity,
+      ...(unit < line.price ? { memberPrice: unit } : {}),
+    };
+  });
+}
+
 // ─────────────────────────────────────────────────────────────
 // 多語（kiosk 與手機介面共用同一套詞庫；手機額外補咗 viewCart/specs 等 key）
 // ─────────────────────────────────────────────────────────────
@@ -153,6 +185,18 @@ export const KIOSK_I18N: Record<KioskLanguage, Record<string, string>> = {
     soldout: "售罄",
     marketPrice: "時價",
     marketPriceHint: "請聯絡職員",
+    // 會員價（2026-10-20）：餐牌「原價 MOP X　會員 MOP Y」。
+    // ⚠️ 用「原價」而唔係劃線 —— 客人要求保留原價可讀性，劃線會令人以為原價作廢。
+    originalPriceLabel: "原價",
+    memberPriceLabel: "會員",
+    memberPriceSaving: "會員共慳",
+    // Landing（2026-10-20 改版）：唔再問「你係會員嗎」，一顆掣直接入餐牌。
+    startOrder: "立即點餐",
+    memberDiscountAtCheckout: "會員折扣於埋單時自動計算，如需使用請於結帳時登入",
+    /** 購物車未登入時：「會員（登入後套用）」 */
+    loginToApply: "登入後套用",
+    /** 購物車未登入時嘅登入入口 */
+    loginForMemberPrice: "登入享會員價",
     needSpec: "請選規格",
     specConfirm: "確定",
     submitting: "落單中…",
@@ -740,12 +784,75 @@ export function useOrderingCore(variant: OrderingVariant = "kiosk") {
     [visibleItems, activeCategory],
   );
 
+  /** `menuItemId → MenuItem`：計會員價要攞菜品嘅 `memberPrice` / 原價。 */
+  const menuItemById = useMemo(
+    () => new Map(bootstrap.menuItems.map((item) => [item.id, item])),
+    [bootstrap.menuItems],
+  );
+
+  /**
+   * 會員價是否生效：**只限「掃碼手機端」+「已識別會員」**。
+   *
+   * - Kiosk（店內共用平板）J 拍板**唔改** ⇒ 一律唔套（`isScanLink` 為 false）。
+   * - 未登入亦唔套（唔可以收少錢）；但餐牌照樣顯示會員價做招徠。
+   */
+  const memberPricingEnabled = isScanLink && member != null;
+  const memberDiscountRate = bootstrap.rules.memberDiscountRate;
+
   /**
    * 金額真源（P1-3）：同 `buildKioskOrder()` 共用 `computeOrderTotals()`，
    * 保證客人所見 == 寫入訂單（含稅 / 服務費）。
+   *
+   * ⚠️ 2026-10-20 會員價：**小計保持原價**，會員折扣係另一行（`memberDiscountAmount`）。
+   * 唔可以喺呢度直接扣 —— 否則「明細加起 64.00、總計 54.70」對唔上，
+   * 收據小計亦會同 items 加總唔一致。
    */
   const totals = useMemo(() => computeOrderTotals(cart, bootstrap.rules), [cart, bootstrap.rules]);
-  const cartTotal = totals.subtotal;
+
+  /** 原價小計（未套會員價）—— 同 `totals.subtotal` 一致，保留做語義清晰。 */
+  const cartOriginalTotal = useMemo(
+    () => Math.round(cart.reduce((sum, line) => sum + line.price * line.quantity, 0) * 100) / 100,
+    [cart],
+  );
+
+  /**
+   * 會員價小計（**不論登入與否都計**）。
+   *
+   * 用途：① 未登入時購物車顯示「會員價 MOP 54.70（登入後套用）」做招徠；
+   *      ② 計出會員折扣金額。
+   * ⚠️ 呢個**唔係實付金額** —— 實付一律係 `payableTotal`。
+   */
+  const cartMemberPreviewTotal = useMemo(() => {
+    let sum = 0;
+    for (const line of cart) {
+      const item = menuItemById.get(line.menuItemId);
+      const specDelta = (line.selectedSpecs ?? []).reduce((acc, spec) => acc + spec.priceDelta, 0);
+      const unit = item
+        ? memberUnitPrice(item.price, item.memberPrice, memberDiscountRate, specDelta)
+        : line.price;
+      sum += unit * line.quantity;
+    }
+    return Math.round(sum * 100) / 100;
+  }, [cart, menuItemById, memberDiscountRate]);
+
+  /**
+   * 會員折扣金額（**只有已識別會員先 > 0**）。
+   *
+   * 行現成「全單折扣」通道 → 收據／報表／交班全部自動正確。
+   */
+  const memberDiscountAmount = useMemo(() => {
+    if (!memberPricingEnabled) return 0;
+    const saving = Math.round((cartOriginalTotal - cartMemberPreviewTotal) * 100) / 100;
+    return saving > 0 ? saving : 0;
+  }, [memberPricingEnabled, cartOriginalTotal, cartMemberPreviewTotal]);
+
+  /** 實際應付（＝小計 + 稅 + 服務費 − 會員折扣）。底部 bar / 落單都用呢個。 */
+  const payableTotal = useMemo(() => {
+    const value = Math.round((totals.total - memberDiscountAmount) * 100) / 100;
+    return value > 0 ? value : 0;
+  }, [totals.total, memberDiscountAmount]);
+
+  const cartTotal = payableTotal;
 
   function pushLine(base: Omit<CartLine, "lineId" | "quantity">) {
     // 實作喺 `@/lib/kiosk-cart`（純函式，有單元測試）；呢度只負責產生 lineId。
@@ -797,7 +904,14 @@ export function useOrderingCore(variant: OrderingVariant = "kiosk") {
     setError(null);
 
     try {
-      const items: KioskCartItem[] = cart.map((line) => ({
+      // 會員價：同畫面上「總計」用**同一個函式**計，保證客人所見 == 寫入 DB。
+      const pricedLines = priceCartLinesForMember(
+        cart,
+        menuItemById,
+        memberPricingEnabled,
+        memberDiscountRate,
+      );
+      const items: KioskCartItem[] = cart.map((line, index) => ({
         menuItemId: line.menuItemId,
         name: line.name,
         price: line.price,
@@ -805,6 +919,9 @@ export function useOrderingCore(variant: OrderingVariant = "kiosk") {
         printerGroup: line.printerGroup,
         selectedSpecs: line.selectedSpecs,
         note: line.note,
+        ...(pricedLines[index]?.memberPrice != null
+          ? { memberPrice: pricedLines[index].memberPrice }
+          : {}),
       }));
 
       // 今次事件類型：單已存在（resume / 加單）→ ORDER_UPDATED，否則 ORDER_CREATED。
@@ -895,6 +1012,8 @@ export function useOrderingCore(variant: OrderingVariant = "kiosk") {
         // 需求 2 / docs/115：只有**堂食**掃碼唔行「單號」邏輯（以台號作訂單標識）；
         // kiosk 同快餐掃碼一律用店內序號。
         orderNoSource: isScanLink && mode === "dine_in" ? "table" : "sequence",
+        // 會員折扣金額（2026-10-20）：行現成「全單折扣」通道，唔改 items 價錢。
+        memberDiscountAmount,
       });
 
       // ⚠️ 2026-09-10 加單修復：算出今次**新增**嘅菜品（舊單 items → 新單 items 嘅差額）。
@@ -1628,6 +1747,15 @@ export function useOrderingCore(variant: OrderingVariant = "kiosk") {
     cart,
     setCart,
     cartTotal,
+    cartOriginalTotal,
+    cartMemberPreviewTotal,
+    /** 會員折扣金額（已登入才 > 0；行「全單折扣」通道）。 */
+    memberDiscountAmount,
+    /** 實際應付＝小計 + 稅 + 服務費 − 會員折扣。 */
+    payableTotal,
+    memberPricingEnabled,
+    memberDiscountRate,
+    menuItemById,
     totals,
     orderNote,
     setOrderNote,

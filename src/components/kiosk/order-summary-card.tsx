@@ -59,6 +59,7 @@ export function OrderSummaryCard({
             </span>
             <span className="ml-2 shrink-0 text-stone-500">x{it.quantity}</span>
             <span className="ml-2 w-16 shrink-0 text-right text-stone-700">
+              {/* 一律顯示**原價**（items 加總要等於小計）；會員折扣喺下面獨立一行。 */}
               MOP {money2(it.price * it.quantity)}
             </span>
           </div>
@@ -66,6 +67,14 @@ export function OrderSummaryCard({
       </div>
       {order.orderNote ? (
         <div className="mt-2 break-words text-xs text-stone-500">備註：{order.orderNote}</div>
+      ) : null}
+      {/* 會員折扣（2026-10-20）：行「全單折扣」通道，同收據「小計→折扣→總計」一致。
+          冇折扣（未登入 / Kiosk / 舊單）就唔顯示，外觀完全不變。 */}
+      {(order.discountAmount ?? 0) > 0 ? (
+        <div className="mt-2 flex items-center justify-between text-sm">
+          <span className="text-emerald-700">{order.discountNote || "會員折扣"}</span>
+          <span className="font-semibold text-emerald-600">−MOP {money2(order.discountAmount)}</span>
+        </div>
       ) : null}
       <div className="mt-2 flex items-center justify-between border-t border-amber-200 pt-2 text-sm">
         <span className="font-medium text-amber-800">枱上總計</span>

@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { kioskT } from "@/lib/use-kiosk-order";
 import { useScanOrder } from "@/lib/use-scan-order";
 import { customerOrderStatusLabel } from "@/lib/pos/order-status-label";
+import { hasMemberBenefit, memberUnitPrice, memberUnitPriceForMenuItem } from "@/lib/pos/member-price";
 import { loadQuickScanLastOrder } from "@/lib/pos/quick-scan-remembered-order";
 import { MenuItem, PosOrder } from "@/lib/types";
 import { OrderSummaryCard, money2 } from "@/components/kiosk/order-summary-card";
@@ -57,6 +58,20 @@ export function ScanOrderPage({ link }: { link: ScanLinkKind }) {
     cart,
     setCart,
     totals,
+    /** 原價小計（未套會員價）—— 購物車「原價 / 會員價」對照用。 */
+    cartOriginalTotal,
+    /** 會員價小計（不論登入與否都計）—— 未登入時做「登入後可省」招徠。 */
+    cartMemberPreviewTotal,
+    /** 會員折扣金額（已登入才 > 0；行「全單折扣」通道，同收據一致）。 */
+    memberDiscountAmount,
+    /** 實際應付＝小計 + 稅 + 服務費 − 會員折扣。 */
+    payableTotal,
+    /** 會員價是否已生效（掃碼 + 已登入）。Kiosk 平板永遠 false。 */
+    memberPricingEnabled,
+    /** 全店會員折扣百分比（95 = 95 折）；undefined = 冇設。 */
+    memberDiscountRate,
+    /** `menuItemId → MenuItem`：計會員價要攞菜品嘅 memberPrice。 */
+    menuItemById,
     orderNote,
     setOrderNote,
     soldoutIds,
@@ -132,15 +147,24 @@ export function ScanOrderPage({ link }: { link: ScanLinkKind }) {
         variant="mobile"
         stage={payStage}
         lines={
+          // 2026-10-20 會員價：逐項要用**會員單價**，否則明細加起係原價（64.00），
+          // 但下面 totalMop 係折後（54.70），客人會以為扣多咗／計錯數。
           submittedOrder
             ? submittedOrder.items.map((it) => ({
                 name: it.name,
                 quantity: it.quantity,
-                amountMop: it.price * it.quantity,
+                amountMop: (it.memberPrice ?? it.price) * it.quantity,
               }))
-            : cart.map((l) => ({ name: l.name, quantity: l.quantity, amountMop: l.price * l.quantity }))
+            : cart.map((l) => {
+                const menuItem = menuItemById.get(l.menuItemId);
+                const specDelta = (l.selectedSpecs ?? []).reduce((sum, spec) => sum + spec.priceDelta, 0);
+                const unit = menuItem
+                  ? memberUnitPrice(menuItem.price, menuItem.memberPrice, memberDiscountRate, specDelta)
+                  : l.price;
+                return { name: l.name, quantity: l.quantity, amountMop: unit * l.quantity };
+              })
         }
-        totalMop={submittedOrder?.total ?? totals.total}
+        totalMop={submittedOrder?.total ?? payableTotal}
         // ⚠️ 只顯示 `displayName`（冇就「會員」）—— **唔可以**顯示電話號碼（§7.2）。
         memberDisplayName={member.displayName ?? "會員"}
         balanceMop={member.balanceAvos / 100}
@@ -376,49 +400,33 @@ export function ScanOrderPage({ link }: { link: ScanLinkKind }) {
   // ⚠️ 但本枱已經有單（DB 為準）就**唔應該**停喺 landing —— 客人掃 QR 嘅預期係即刻
   // 見到「呢張枱點咗咩」（需求 1）。呢個 gate 由 resume effect 設 `started=true`
   // 之外，喺呢度再加一重保險。
+  //
+  // 🔴 2026-10-20 J 拍板：**唔再問「你係會員嗎？」** —— landing 保留（品牌 + 枱號確認），
+  // 但只有一顆「立即點餐」。「係咪會員」延到**埋單**先問，客人一掃碼就入餐牌。
+  // 平板（Kiosk）唔經呢個元件，所以唔受影響。
   if (!started && !activeTableOrder) {
     return (
       <>
         <main className="mx-auto flex min-h-[100dvh] max-w-md flex-col items-center justify-center bg-stone-50 p-6 text-center">
           <div className="mb-5 text-7xl">{quick ? "🥡" : "🍽️"}</div>
-          <h1 className="mb-2 text-2xl font-bold text-stone-900">{t("memberAskTitle")}</h1>
-          <p className="mb-3 text-sm text-stone-500">{t("memberAskSubtitle")}</p>
+          <h1 className="mb-2 text-2xl font-bold text-stone-900">{displayStoreName}</h1>
 
-          {/* 一眼分清「邊間店 + 堂食枱號 / 快餐自取」（確認稿 S1 要求） */}
+          {/* 一眼確認「堂食枱號 / 快餐自取」——枱號由 QR 帶入，客人唔使自己揀 */}
           <div className="mb-8 inline-flex items-center gap-2 rounded-full bg-white px-3.5 py-1.5 text-xs text-stone-600 ring-1 ring-stone-200">
             <span className="font-semibold">{displayStoreName}</span>
             <span className="text-stone-300">·</span>
             <span>{quick ? t("pickup") : `${t("dineIn")} ${tableName}`}</span>
           </div>
 
-          {/* ⚠️ 兩顆掣**同等份量**（確認稿已拍板）：避免「非會員」被當成次要路徑。 */}
-          <button
-            onClick={openMemberLogin}
-            className="mb-3 w-full rounded-2xl bg-orange-500 py-4 text-lg font-semibold text-white active:scale-[0.98]"
-          >
-            👤 {t("memberYes")}
-          </button>
           <button
             onClick={skipMemberLogin}
-            className="w-full rounded-2xl bg-white py-4 text-lg font-semibold text-stone-700 ring-2 ring-stone-200 active:scale-[0.98]"
+            className="w-full rounded-2xl bg-orange-500 py-4 text-lg font-semibold text-white active:scale-[0.98]"
           >
-            🙋 {t("memberNo")}
+            {t("startOrder")}
           </button>
 
-          <p className="mt-5 text-xs text-stone-400">{t("memberForgotPin")}</p>
+          <p className="mt-5 text-xs text-stone-400">{t("memberDiscountAtCheckout")}</p>
         </main>
-
-        <MemberLoginSheet
-          t={t}
-          variant="mobile"
-          submitting={memberLoginSubmitting}
-          errorMessage={memberLoginError}
-          remainingAttempts={memberLoginRemaining}
-          lockedRetryAt={memberLoginLockedRetryAt}
-          onClose={closeMemberLogin}
-          onSkip={skipMemberLogin}
-          onSubmit={(phone, pin) => void submitMemberCredentials(phone, pin, "login")}
-        />
       </>
     );
   }
@@ -574,6 +582,12 @@ export function ScanOrderPage({ link }: { link: ScanLinkKind }) {
           const blocked = sold || marketPrice;
           const qty = cartCountByItem(item.id);
           const lineId = firstLineId(item.id);
+          // 會員價（2026-10-20）：**未登入都顯示**，做招徠。
+          // 只有真係平過原價先顯示，避免「原價 38、會員 38」呢種假優惠寫法。
+          const showMemberPrice = !marketPrice && hasMemberBenefit(item, memberDiscountRate);
+          const memberUnit = showMemberPrice
+            ? memberUnitPriceForMenuItem(item, memberDiscountRate)
+            : null;
           return (
             <div
               key={item.id}
@@ -595,9 +609,24 @@ export function ScanOrderPage({ link }: { link: ScanLinkKind }) {
               ) : null}
               <div className="min-w-0 flex-1">
                 <div className="truncate text-[15px] font-semibold text-stone-900">{item.name}</div>
-                <div className="mt-1 text-sm font-semibold text-orange-600">
-                  {marketPrice ? `${t("marketPrice")} · ${t("marketPriceHint")}` : `MOP ${money2(item.price)}`}
-                </div>
+                {marketPrice ? (
+                  <div className="mt-1 text-sm font-semibold text-orange-600">
+                    {`${t("marketPrice")} · ${t("marketPriceHint")}`}
+                  </div>
+                ) : showMemberPrice && memberUnit !== null ? (
+                  // 「原價 MOP 38.00　會員 MOP 30.00」——原價**唔劃線**（客人明確要求：
+                  // 劃線會令人以為原價作廢），只係用淺色＋前面標明「原價」。
+                  <div className="mt-1 flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                    <span className="text-xs font-medium text-stone-400">
+                      {t("originalPriceLabel")} MOP {money2(item.price)}
+                    </span>
+                    <span className="text-sm font-bold text-emerald-600">
+                      {t("memberPriceLabel")} MOP {money2(memberUnit)}
+                    </span>
+                  </div>
+                ) : (
+                  <div className="mt-1 text-sm font-semibold text-orange-600">MOP {money2(item.price)}</div>
+                )}
               </div>
 
               {blocked ? (
@@ -694,7 +723,16 @@ export function ScanOrderPage({ link }: { link: ScanLinkKind }) {
             />
 
             <div className="mb-3 max-h-64 space-y-2.5 overflow-y-auto">
-              {cart.map((line) => (
+              {cart.map((line) => {
+                // 會員價（2026-10-20）：每行獨立計 —— 有單品會員價用單品價，
+                // 冇就跟全店百分比；規格加價唔打折（同落單時同一個函式）。
+                const menuItem = menuItemById.get(line.menuItemId);
+                const specDelta = (line.selectedSpecs ?? []).reduce((sum, spec) => sum + spec.priceDelta, 0);
+                const memberUnit =
+                  menuItem && hasMemberBenefit(menuItem, memberDiscountRate)
+                    ? memberUnitPrice(menuItem.price, menuItem.memberPrice, memberDiscountRate, specDelta)
+                    : null;
+                return (
                 <div key={line.lineId} className="flex items-center gap-3 rounded-xl bg-stone-50 p-2.5">
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-sm font-semibold text-stone-900">{line.name}</div>
@@ -705,6 +743,11 @@ export function ScanOrderPage({ link }: { link: ScanLinkKind }) {
                     )}
                     {/* P2-3：統一 2 位小數（舊版 `line.price * line.quantity` 冇 toFixed） */}
                     <div className="mt-0.5 text-xs text-orange-600">MOP {money2(line.price * line.quantity)}</div>
+                    {memberUnit !== null && (
+                      <div className="text-xs font-semibold text-emerald-600">
+                        {`${t("memberPriceLabel")} MOP ${money2(memberUnit * line.quantity)}`}
+                      </div>
+                    )}
                   </div>
                   <div className="flex shrink-0 items-center gap-2">
                     <button
@@ -724,7 +767,8 @@ export function ScanOrderPage({ link }: { link: ScanLinkKind }) {
                     </button>
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
 
             {/* P1-3：小計 + 稅 / 服務費明細，同寫入訂單嘅金額同源 */}
@@ -732,6 +776,17 @@ export function ScanOrderPage({ link }: { link: ScanLinkKind }) {
               <span>{t("subtotal")}</span>
               <span>MOP {money2(totals.subtotal)}</span>
             </div>
+
+            {/* 會員折扣（2026-10-20）：已登入時，折扣行現成「全單折扣」通道。
+                同收據一致 —— 收據一樣係「小計 → 折扣 → 總計」，唔會出現
+                「明細加起 64.00 但總計 54.70」嘅對唔上。 */}
+            {memberDiscountAmount > 0 && (
+              <div className="mb-1 flex items-center justify-between text-sm">
+                <span className="text-emerald-700">{t("memberPriceLabel")}</span>
+                <span className="font-semibold text-emerald-600">−MOP {money2(memberDiscountAmount)}</span>
+              </div>
+            )}
+
             {totals.serviceChargeAmount > 0 && (
               <div className="mb-1 flex items-center justify-between text-sm text-stone-600">
                 <span>{t("service")}</span>
@@ -744,10 +799,34 @@ export function ScanOrderPage({ link }: { link: ScanLinkKind }) {
                 <span>MOP {money2(totals.taxAmount)}</span>
               </div>
             )}
-            <div className="mb-3 flex items-center justify-between text-base font-bold text-stone-900">
+            <div className="mb-1 flex items-center justify-between text-base font-bold text-stone-900">
               <span>{t("total")}</span>
-              <span>MOP {money2(totals.total)}</span>
+              <span>MOP {money2(payableTotal)}</span>
             </div>
+
+            {/* 未登入優惠預覽（2026-10-20）：
+                「總計」照標**原價實付**，會員價**另外單列**，唔直接畫成總計。
+                否則客人以為付 54.70、到前台被收 64.00 會爭執。
+                呢個落差係**刻意**嘅，唔好「順手優化」掉。 */}
+            {!memberPricingEnabled && cartMemberPreviewTotal < cartOriginalTotal - 0.005 && (
+              <div className="mb-2 flex items-center justify-between rounded-lg bg-emerald-50 px-2.5 py-1.5 text-xs">
+                <span className="text-emerald-700">
+                  {`${t("memberPriceLabel")}（${t("loginToApply")}）`}
+                </span>
+                <span className="font-bold text-emerald-700">MOP {money2(cartMemberPreviewTotal)}</span>
+              </div>
+            )}
+
+            {/* 登入享會員價（2026-10-20）：未登入 + 真係有得平時才顯示。
+                撳完即刻打開登入 sheet，登入成功後上面會多一行「會員 −MOP X」。 */}
+            {!memberPricingEnabled && cartMemberPreviewTotal < cartOriginalTotal - 0.005 && (
+              <button
+                onClick={() => openMemberLogin()}
+                className="mb-2 w-full rounded-2xl bg-emerald-50 py-3 text-sm font-semibold text-emerald-700 ring-1 ring-emerald-200 active:scale-[0.99]"
+              >
+                {t("loginForMemberPrice")}
+              </button>
+            )}
 
             {/* P0-1：錯誤必須喺 sheet **仍然打開** 嘅時候顯示，並且用 aria-live 播報 */}
             <div aria-live="assertive" role="alert">
@@ -792,6 +871,23 @@ export function ScanOrderPage({ link }: { link: ScanLinkKind }) {
             }
             setSpecDraft(null);
           }}
+        />
+      )}
+      {/* 會員登入 sheet（2026-10-20）：landing 已經唔再問會員，
+          所以**點餐頁本身**一定要有入口 —— 否則購物車嗰個「登入享會員價」
+          撳完乜都唔會發生（呢個係最易漏嘅一環）。
+          ⚠️ 必須有 `memberLoginOpen` gate：元件本身冇 open prop，無條件渲染會長開。 */}
+      {memberLoginOpen && (
+        <MemberLoginSheet
+          t={t}
+          variant="mobile"
+          submitting={memberLoginSubmitting}
+          errorMessage={memberLoginError}
+          remainingAttempts={memberLoginRemaining}
+          lockedRetryAt={memberLoginLockedRetryAt}
+          onClose={closeMemberLogin}
+          onSkip={closeMemberLogin}
+          onSubmit={(phone, pin) => void submitMemberCredentials(phone, pin, "login")}
         />
       )}
           {/* 會員付款（v3.5 掃碼自助扣餘額）—— 三個分支都要掛 */}

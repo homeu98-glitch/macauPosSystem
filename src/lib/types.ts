@@ -171,6 +171,19 @@ export interface MenuItem {
    *   `MenuItem.discountRate` 係菜品層嘅默認折扣（Ledger / 店家設定）。
    */
   discountRate?: number;
+  /**
+   * 會員價（單品）：**絕對金額**，只有已識別會員先享。`undefined` = 冇設，跟全店「會員折扣」百分比。
+   *
+   * 🔴 唔可以同上面嘅 {@link discountRate} 混淆，兩者係**唔同嘅嘢**：
+   * - `discountRate`（0-100）= 菜品自身促銷，**所有顧客都享**（對齊 Ledger `promo_rate_permille`），
+   *   落單時會自動 pre-fill 去 `OrderItem.discountRate`。
+   * - `memberPrice` = **會員專享價**，非會員完全唔會見到呢個價。有值就 **override**
+   *   全店會員折扣百分比（逐項計：有 memberPrice 用 memberPrice，冇就 × 全店率）。
+   *
+   * 約束：必須 `> 0` 且 `< price`（軟件層驗證；等於或大於原價冇意義，會被忽略）。
+   * 規格加價（`specGroups`）唔受影響 —— 規格加錢屬菜品本身，照加落去唔再打折。
+   */
+  memberPrice?: number;
 }
 
 export interface MenuCategory {
@@ -212,6 +225,16 @@ export interface PosRules {
    * 舊字串由 `normalizeRetailPaymentMethods()` 兼容轉換（id = `legacy:<label>`，穩定）。
    */
   retailPaymentMethods?: RetailPaymentMethod[];
+  /**
+   * 全店「會員折扣」百分比（0-100）。`95` = 95 折（收原價 95%）；`undefined` / `100` = 冇折扣。
+   *
+   * 逐項計算規則：菜單項有 `MenuItem.memberPrice` 就用該絕對金額（override）；
+   * 冇就用 `原價 × memberDiscountRate / 100`。
+   *
+   * ⚠️ 同 `PosLocalSettings.discounts`（人手揀嘅折扣預設）**完全兩件事**：
+   * 呢個係「認到會員就自動套」，唔使店員揀，亦**唔可以**同手動折扣疊加。
+   */
+  memberDiscountRate?: number;
 }
 
 export interface PosBootstrap {
@@ -1225,6 +1248,18 @@ export interface OrderItem {
    * 菜單自帶折扣（MenuItem.discountRate 自動帶落嚟）冇經人手 → 唔強制填原因。
    */
   discountNote?: string;
+  /**
+   * 落單時嘅**會員單價**（含規格加價，已四捨五入到分）。`undefined` = 該行冇套會員價。
+   *
+   * 為何要**快照**落訂單而唔係結帳時再查菜單：
+   * ① 菜單價 / 會員價之後改咗唔應該追溯舊單；
+   * ② 離線落單時客人手機根本查唔到最新菜單；
+   * ③ 收銀端 / 報表唔使再查一次菜單即可對帳。
+   *
+   * ⚠️ 只有**已識別會員**落單先會寫；未登入落單一律 `undefined`（＝收原價），
+   *    前台之後認到會員亦唔會補套（避免「手機見原價、前台收會員價」反過來嘅落差）。
+   */
+  memberPrice?: number;
   /** 已退菜標記（訂單明細保留記錄用，不計費、不可再操作） */
   voided?: boolean;
   /** 退菜時間（ISO） */

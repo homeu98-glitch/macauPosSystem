@@ -165,6 +165,12 @@ export type KioskCartItem = {
   printerGroup: PrinterGroup;
   selectedSpecs?: OrderItem["selectedSpecs"];
   note?: string;
+  /**
+   * 會員單價（已含規格加價）。只有**已識別會員**嘅掃碼落單先會帶；
+   * `undefined` = 收原價（未登入 / Kiosk 平板）。
+   * 落 DB 後成為 {@link OrderItem.memberPrice} 快照。
+   */
+  memberPrice?: number;
 };
 
 export type KioskOrderMode = "dine_in" | "quick";
@@ -215,6 +221,19 @@ export type BuildKioskOrderInput = {
    * 收窄成 NULL → 收銀端顯示 `#null`），一律填台名 / 序號。
    */
   orderNoSource?: "sequence" | "table";
+  /**
+   * 會員折扣金額（MOP）。`undefined` / 0 = 冇會員折扣。
+   *
+   * 🔴 2026-10-20 J 拍板嘅做法：**唔改 items 價錢，用「全單折扣」通道**。
+   * - `items[].price` 保持原價（明細印得到原價，對帳有據）
+   * - `order.subtotal` = 原價合計
+   * - `order.discountAmount` = 呢個值
+   * - `order.total` = subtotal + 稅 + 服務費 − 呢個值
+   *
+   * 咁樣收據（小計→折扣→總計）、報表淨額（`totalRevenueNetMop`）、
+   * 交班「應收 vs 實收」全部自動正確 —— 因為佢哋本來就識得處理 `discountAmount`。
+   */
+  memberDiscountAmount?: number;
 };
 
 /**
@@ -232,6 +251,19 @@ export type { KioskOrderTotals } from "@/lib/kiosk-cart";
 // 實作喺 `@/lib/pos/quick-scan-remembered-order`（零 runtime 依賴 → 可以 `node --test`）。
 // 呢度唔 re-export，避免又多一條 import 路徑：call site 直接由該模組 import。
 
+/**
+ * 會員折扣金額：夾喺 `0 ≤ x ≤ 應收`，並四捨五入到分。
+ *
+ * `undefined` / 負數 / NaN → 0（＝冇折扣，行為同舊版一模一樣）。
+ * 大過應收 → 收到應收（總額最少 0，唔會變負數；亦防止有人改 request 傳 99999）。
+ */
+function clampMemberDiscount(raw: number | undefined, max: number): number {
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value <= 0) return 0;
+  const cap = Math.max(0, Math.round(Number(max) * 100) / 100);
+  return Math.min(Math.round(value * 100) / 100, cap);
+}
+
 /** 建構 Kiosk 落單嘅 `PosOrder`（唔落本地 localStorage，推去 Supabase）。 */
 export function buildKioskOrder(input: BuildKioskOrderInput): PosOrder {
   const timestamp = new Date().toISOString();
@@ -241,6 +273,9 @@ export function buildKioskOrder(input: BuildKioskOrderInput): PosOrder {
     serviceChargeRate: input.serviceRate,
   });
 
+  // 會員折扣金額：**一定要 clamp**（0 ≤ x ≤ 應收），否則一個異常值可以令總額變負數。
+  const memberDiscountAmount = clampMemberDiscount(input.memberDiscountAmount, total);
+
   const orderItems: OrderItem[] = input.items.map((it) => ({
     menuItemId: it.menuItemId,
     name: it.name,
@@ -249,6 +284,10 @@ export function buildKioskOrder(input: BuildKioskOrderInput): PosOrder {
     printerGroup: it.printerGroup,
     selectedSpecs: it.selectedSpecs,
     note: it.note,
+    // 會員價快照：只有已識別會員先有值。冇就唔寫 key（保持舊單 / 未登入單一模一樣）。
+    ...(it.memberPrice != null && it.memberPrice > 0 && it.memberPrice < it.price
+      ? { memberPrice: it.memberPrice }
+      : {}),
   }));
 
   let localOrderNo: string;
@@ -322,8 +361,15 @@ export function buildKioskOrder(input: BuildKioskOrderInput): PosOrder {
     subtotal,
     taxAmount,
     serviceChargeAmount,
-    discountAmount: 0,
-    total,
+    // 會員價（2026-10-20）：**唔改 items 價錢**，改行現成「全單折扣」通道。
+    // 好處：收據（小計→折扣→總計）、報表淨額、交班應收／實收全部自動正確，
+    //      下游唔使逐個地方學「memberPrice」。
+    discountAmount: memberDiscountAmount,
+    // 原因必填（POS 結帳頁 `discountAmount > 0 && !discountNote` 係硬閘）。
+    // 掃碼單冇店員填原因，所以自動寫「會員價」，否則收銀端會見到空白原因。
+    discountNote: memberDiscountAmount > 0 ? "會員價" : undefined,
+    // 應收 = 小計 + 稅 + 服務費 − 會員折扣（四捨五入到分；clamp 已保證 ≥ 0）
+    total: Math.round((total - memberDiscountAmount) * 100) / 100,
     prepaidAmount: 0,
     source: input.source,
     createdAt: timestamp,

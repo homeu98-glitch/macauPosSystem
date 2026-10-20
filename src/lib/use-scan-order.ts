@@ -67,6 +67,21 @@ export function useScanOrder() {
     cart: core.cart,
     setCart: core.setCart,
     totals: core.totals,
+    /**
+     * 會員價（2026-10-20）：
+     * - `cartOriginalTotal` = 原價小計
+     * - `cartMemberPreviewTotal` = 會員價小計（**不論登入與否都計**，未登入時做招徠）
+     * - `memberPricingEnabled` = 會員價是否真正生效（掃碼 + 已登入）
+     * - `memberDiscountRate` = 全店會員折扣百分比（95 = 95 折）
+     * - `menuItemById` = 計單品會員價要攞 `MenuItem.memberPrice`
+     */
+    cartOriginalTotal: core.cartOriginalTotal,
+    cartMemberPreviewTotal: core.cartMemberPreviewTotal,
+    memberDiscountAmount: core.memberDiscountAmount,
+    payableTotal: core.payableTotal,
+    memberPricingEnabled: core.memberPricingEnabled,
+    memberDiscountRate: core.memberDiscountRate,
+    menuItemById: core.menuItemById,
     orderNote: core.orderNote,
     setOrderNote: core.setOrderNote,
     specDraft: core.specDraft,
