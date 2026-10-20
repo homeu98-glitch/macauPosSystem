@@ -140,9 +140,26 @@ function normalizeMenuItem(item: MenuItem | UnknownRecord): MenuItem {
   const price = Number(record.price ?? 0);
   const memberPriceRaw = record.memberPrice ?? record.member_price;
   const memberPriceNum = memberPriceRaw != null && memberPriceRaw !== "" ? Number(memberPriceRaw) : NaN;
+  // 時價菜（price 0 或未填）冇「原價」可比 ⇒ 唔可以因為 price <= 0 就剷走會員價，
+  // 否則商家填咗嘅會員價會喺 reload 之後靜靜消失（同一個 whitelist 坑）。
   const memberPrice =
-    Number.isFinite(memberPriceNum) && memberPriceNum > 0 && memberPriceNum < price
+    Number.isFinite(memberPriceNum) && memberPriceNum > 0 && (price <= 0 || memberPriceNum < price)
       ? Math.round(memberPriceNum * 100) / 100
+      : undefined;
+  // 折扣（%）／原價（2026-10-20 補 whitelist）：呢兩欄一直都喺 `MenuItem` 同「編輯菜品」表單入面，
+  // 但呢個 whitelist 從來冇放行 ⇒ 一 reload 就被剷走，之後任何一次「保存菜單」都會把
+  // 全店菜品嘅折扣／原價**永久寫成冇**（靜默資料丟失）。補返，並沿用同一套有效性規則。
+  const discountRateRaw = record.discountRate ?? record.discount_rate;
+  const discountRateNum = discountRateRaw != null && discountRateRaw !== "" ? Number(discountRateRaw) : NaN;
+  const discountRate =
+    Number.isFinite(discountRateNum) && discountRateNum > 0 && discountRateNum < 100
+      ? Math.round(discountRateNum * 100) / 100
+      : undefined;
+  const originalPriceRaw = record.originalPrice ?? record.original_price;
+  const originalPriceNum = originalPriceRaw != null && originalPriceRaw !== "" ? Number(originalPriceRaw) : NaN;
+  const originalPrice =
+    Number.isFinite(originalPriceNum) && originalPriceNum > 0
+      ? Math.round(originalPriceNum * 100) / 100
       : undefined;
   return {
     id: String(record.id),
@@ -155,6 +172,8 @@ function normalizeMenuItem(item: MenuItem | UnknownRecord): MenuItem {
     customerOrderable: Boolean(record.customerOrderable ?? record.customer_orderable ?? true),
     image: imageRaw ? String(imageRaw) : undefined,
     ...(memberPrice !== undefined ? { memberPrice } : {}),
+    ...(discountRate !== undefined ? { discountRate } : {}),
+    ...(originalPrice !== undefined ? { originalPrice } : {}),
   };
 }
 

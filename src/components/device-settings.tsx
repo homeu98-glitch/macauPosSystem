@@ -34,6 +34,7 @@ import { enqueueEvents, isOutboxV2Enabled } from "@/lib/pos/queue-outbox";
 import { withStoreScope } from "@/lib/pos/sync-flush";
 import { newDiscountId } from "@/lib/pos/discount";
 import { memberUnitPriceForMenuItem } from "@/lib/pos/member-price";
+import { resolveMenuItemPriceInput } from "@/lib/pos/menu-item-price";
 import { normalizeBootstrapPayload } from "@/lib/bootstrap-normalizer";
 import { filterReopenTempTables, isReopenTempTable, stripReopenTempTables } from "@/lib/pos/table-scope";
 import { fetchLedgerOrderMenu, LedgerOrderMenu } from "@/lib/ledger/menu";
@@ -869,7 +870,8 @@ export function DeviceSettings() {
       editingId: item.id,
       name: item.name,
       categoryId: item.categoryId,
-      price: String(item.price ?? ""),
+      // 時價菜冇參考價時顯示空白（唔好顯示 "0"，商家會以為價錢被清零）
+      price: item.isMarketPrice && !(Number(item.price) > 0) ? "" : String(item.price ?? ""),
       printerGroup: item.printerGroup || localSettings.printZones[0]?.id || "kitchen",
       isMarketPrice: Boolean(item.isMarketPrice),
       customerOrderable: item.customerOrderable !== false,
@@ -1023,19 +1025,17 @@ export function DeviceSettings() {
       setMenuItemError("請揀選分類（可先喺「菜品分類」新增）。");
       return;
     }
-    const trimmedPrice = menuItemModal.price.trim();
-    let price = 0;
-    if (!menuItemModal.isMarketPrice) {
-      if (!trimmedPrice) {
-        setMenuItemError("請填寫價格（時價菜可留空價格）。");
-        return;
-      }
-      price = Number(trimmedPrice);
-      if (!Number.isFinite(price) || price < 0) {
-        setMenuItemError("價格格式唔正確，請填 0 或以上嘅數字。");
-        return;
-      }
+    // 價格（2026-10-20 修靜默資料丟失）：舊版寫法係 `if (!isMarketPrice) { 解析價格 }`，
+    // 即係**只要「時價菜」勾住，price 就無條件變 0** —— 商家明明打咗 70 都會靜靜存成 0.00，
+    // 列表事後顯示「MOP 0.00」，冇任何提示（實測 DB：price=0、isMarketPrice=true）。
+    // 而家交由純函式 `resolveMenuItemPriceInput()`（有單測）：
+    // 填咗就照存（時價菜當「參考價」，落單照舊由店員輸入當次價錢）；冇填就只有時價菜可留空。
+    const resolvedPrice = resolveMenuItemPriceInput(menuItemModal.price, menuItemModal.isMarketPrice);
+    if (!resolvedPrice.ok) {
+      setMenuItemError(resolvedPrice.error);
+      return;
     }
+    const price = resolvedPrice.price;
     const rateRaw = menuItemModal.discountRate.trim();
     let discountRate: number | undefined;
     if (rateRaw) {
@@ -2865,7 +2865,9 @@ export function DeviceSettings() {
                       // 會員價預覽（2026-10-20）：有單品會員價就用該價；冇就跟全店率計出嚟做參考。
                       // 列表唯讀之後，呢度係商家「一眼睇晒邊個有單品會員價」嘅唯一位置。
                       const memberUnit = memberUnitPriceForMenuItem(item, menuDraft.rules.memberDiscountRate);
-                      const showMember = memberUnit < item.price;
+                      // 時價菜唔顯示會員價：價錢落單時才由店員輸入，會員折扣唔會套落去，
+                      // 顯示「會員 MOP X」只會令商家以為時價菜都食折扣。
+                      const showMember = !item.isMarketPrice && memberUnit < item.price;
                       return (
                         <div key={item.id} className="rounded-2xl border border-slate-200 bg-white p-2.5">
                           <div className="flex flex-wrap items-center gap-3">
@@ -2899,8 +2901,18 @@ export function DeviceSettings() {
                                 ) : null}
                               </div>
                               <div className="mt-1.5 text-sm font-bold text-slate-900">
-                                <span className="text-[11px] font-medium text-slate-400">{t("價格")} </span>
-                                MOP {item.price.toFixed(2)}
+                                {/* 時價菜（2026-10-20）：價錢落單時才由店員輸入，所以 0 唔係「$0」，
+                                    以前一律顯示「價格 MOP 0.00」，商家以為價錢被清零（實際係時價菜）。 */}
+                                <span className="text-[11px] font-medium text-slate-400">
+                                  {item.isMarketPrice ? t("參考價") : t("價格")}{" "}
+                                </span>
+                                {item.isMarketPrice && item.price <= 0 ? (
+                                  <span className="text-sm font-semibold text-slate-400">
+                                    {t("未設定（落單時輸入）")}
+                                  </span>
+                                ) : (
+                                  <>MOP {item.price.toFixed(2)}</>
+                                )}
                                 {showMember ? (
                                   <span className="ml-3 font-bold text-emerald-600">
                                     <span className="text-[11px] font-medium text-slate-400">{t("會員")} </span>
@@ -3890,8 +3902,8 @@ export function DeviceSettings() {
               <div className="grid gap-4 sm:grid-cols-2">
                 <label className="grid gap-1.5">
                   <span className="text-sm font-semibold text-slate-700">
-                    價格（MOP）
-                    {menuItemModal.isMarketPrice ? <span className="ml-1 text-xs text-slate-400">{t("（時價菜可留空）")}</span> : <span className="text-red-500">*</span>}
+                    {menuItemModal.isMarketPrice ? t("參考價（MOP）") : "價格（MOP）"}
+                    {menuItemModal.isMarketPrice ? <span className="ml-1 text-xs text-slate-400">{t("（可留空）")}</span> : <span className="text-red-500">*</span>}
                   </span>
                   <input
                     className="min-h-12 w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-base outline-none transition focus:border-orange-400 focus:ring-2 focus:ring-orange-100"
@@ -3902,6 +3914,11 @@ export function DeviceSettings() {
                     placeholder="0"
                     value={menuItemModal.price}
                   />
+                  {menuItemModal.isMarketPrice ? (
+                    <span className="text-xs text-amber-600">
+                      {t("時價菜落單時由店員輸入當次價錢；呢度填嘅只係參考價，會顯示喺菜品列表。")}
+                    </span>
+                  ) : null}
                 </label>
                 <label className="grid gap-1.5">
                   <span className="text-sm font-semibold text-slate-700">

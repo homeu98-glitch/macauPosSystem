@@ -1914,6 +1914,11 @@ export const EN_DICT: Record<string, string> = {
   "規格組統一喺呢度定義同管理：模板（成套套用）或獨立規格（單一規格組、菜品自由剔選）；再到「菜品」撳「編輯」入去組合套用。": "Define and manage spec groups here: templates (applied as a set) or standalone groups (a single group that items can pick). Then open Edit on an item to combine them.",
   "唔使開模板，直接建立單一規格組（例如「辣度」「走蔥」）；菜品「編輯」彈窗內可自由剔選加入／移除。": "Create a single spec group directly (e.g. Spice level, No spring onion) without a template; items can add or remove it freely inside the Edit dialog.",
   "列表只供查看：撳「編輯」入去改價格／分類／規格／會員價，保存即時寫入 server。": "The list is read-only: open Edit to change price, category, specs or member price; saving writes to the server immediately.",
+  "參考價（MOP）": "Reference price (MOP)",
+  "（可留空）": "(optional)",
+  "參考價": "Reference",
+  "未設定（落單時輸入）": "Not set (entered at order time)",
+  "時價菜落單時由店員輸入當次價錢；呢度填嘅只係參考價，會顯示喺菜品列表。": "Staff enter the actual price when ordering; the value here is only a reference price shown in the item list.",
 };
 
 /**
