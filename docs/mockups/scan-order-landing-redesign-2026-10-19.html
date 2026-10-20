@@ -1,0 +1,530 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8" />
+<title>掃碼點餐 Landing 頁設計確認稿 — 會員／非會員兩大按鈕（2026-10-19）</title>
+<style>
+:root{
+  --o-50:#fff7ed; --o-100:#ffedd5; --o-200:#fed7aa; --o-500:#f97316; --o-600:#ea580c; --o-700:#c2410c;
+  --s-50:#fafaf9; --s-100:#f5f5f4; --s-200:#e7e5e4; --s-300:#d6d3d1; --s-400:#a8a29e;
+  --s-500:#78716c; --s-600:#57534e; --s-700:#44403c; --s-800:#292524; --s-900:#1c1917;
+  --em-50:#ecfdf5; --em-600:#059669;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{
+  background:#e9ebef;color:var(--s-900);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang TC","Microsoft JhengHei","Microsoft YaHei",sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+
+/* ─────────── 審稿工具列（深色區唔屬產品介面） ─────────── */
+.chrome{max-width:1360px;margin:0 auto;padding:22px 24px 12px}
+.chrome-h{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.chrome-title{font-size:16px;font-weight:800;color:#0f172a}
+.chrome-note{font-size:11px;font-weight:600;color:#475569;background:#fff;border:1px solid #dbe3ec;border-radius:9999px;padding:4px 11px}
+.chrome-note.orange{color:var(--o-700);border-color:var(--o-200);background:var(--o-50)}
+.chrome-sub{margin-top:8px;font-size:12px;color:#475569;line-height:1.8;max-width:1120px}
+.chrome-sub b{color:#0f172a}
+
+/* ─────────── 固定畫布 + 等比縮放（全檔零 @media） ─────────── */
+.stage{max-width:1360px;margin:0 auto;position:relative;overflow:hidden;border-radius:22px;
+  box-shadow:0 18px 44px rgba(15,23,42,.16);background:var(--s-100)}
+.canvas{width:1360px;height:1628px;position:absolute;top:0;left:0;transform-origin:top left;
+  display:flex;flex-direction:column;padding:24px 40px 32px;gap:26px;overflow:hidden;background:var(--s-100)}
+.grid3{display:grid;grid-template-columns:repeat(3,368px);gap:28px;justify-content:center}
+.cell{display:flex;flex-direction:column;gap:8px;min-width:0}
+.cellhead{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.cellnum{font-size:12px;font-weight:800;color:var(--o-600)}
+.celltitle{font-size:13px;font-weight:700;color:var(--s-800)}
+.cellsub{font-size:11px;color:var(--s-500)}
+.phone{width:368px;height:744px;flex:none;background:#fff;border:1px solid var(--s-200);
+  border-radius:26px;overflow:hidden;display:flex;flex-direction:column;position:relative;
+  box-shadow:0 10px 26px rgba(28,25,23,.10)}
+.pstatus{flex:none;height:26px;display:flex;align-items:center;justify-content:space-between;
+  padding:0 20px;font-size:11px;font-weight:700;color:var(--s-800);background:#fff}
+.pstatus .sic{display:flex;align-items:center;gap:5px}
+.scr{flex:1;min-height:0;display:flex;flex-direction:column;position:relative;overflow:hidden}
+
+/* 提示 toast（稿內互動） */
+.toast{position:absolute;left:50%;bottom:84px;transform:translateX(-50%);background:var(--s-900);color:#fff;
+  font-size:11px;font-weight:600;border-radius:9999px;padding:8px 14px;opacity:0;pointer-events:none;
+  transition:opacity .18s;white-space:nowrap;z-index:20}
+.toast.on{opacity:1}
+
+/* ════════ ⓿ 而家（對照） ════════ */
+.cur{flex:1;min-height:0;background:var(--s-50);display:flex;flex-direction:column;align-items:center;
+  justify-content:center;padding:24px 22px;text-align:center}
+.cur-emoji{font-size:58px;line-height:1;margin-bottom:16px}
+.cur-title{font-size:22px;font-weight:700;color:var(--s-900)}
+.cur-sub{font-size:13px;color:var(--s-500);margin-top:8px}
+.cur-pill{display:inline-flex;align-items:center;gap:6px;margin-top:14px;background:#fff;border-radius:9999px;
+  padding:5px 12px;font-size:11px;color:var(--s-600);box-shadow:inset 0 0 0 1px var(--s-200)}
+.cur-btn{width:100%;border-radius:16px;padding:15px;font-size:17px;font-weight:600;font-family:inherit;
+  cursor:pointer;border:0;margin-top:10px}
+.cur-btn.p{background:var(--o-500);color:#fff}
+.cur-btn.g{background:#fff;color:var(--s-700);box-shadow:inset 0 0 0 2px var(--s-200)}
+.cur-hint{font-size:11px;color:var(--s-400);margin-top:16px}
+
+/* ════════ 共用：大按鈕（會員／非會員） ════════ */
+.lnbtns{display:flex;flex-direction:column;gap:12px;width:100%}
+.lnbtn{width:100%;display:grid;grid-template-columns:40px minmax(0,1fr) 16px;gap:12px;align-items:center;
+  border-radius:20px;padding:17px 16px;font-family:inherit;cursor:pointer;text-align:left;border:0}
+.lnbtn .ic{width:40px;height:40px;border-radius:13px;display:flex;align-items:center;justify-content:center;flex:none}
+.lnbtn .tx{min-width:0}
+.lnbtn .tx .t{display:block;font-size:17px;font-weight:700;white-space:nowrap}
+.lnbtn .tx .s{display:block;font-size:11px;margin-top:3px;white-space:nowrap}
+.lnbtn .arr{justify-self:end;display:flex}
+.lnbtn .arr svg{width:13px;height:13px}
+.lnbtn.pri{background:linear-gradient(135deg,#fb923c,#ea580c);color:#fff;box-shadow:0 10px 22px rgba(234,88,12,.28)}
+.lnbtn.pri .ic{background:rgba(255,255,255,.22)}
+.lnbtn.pri .tx .s{color:rgba(255,255,255,.85)}
+.lnbtn.gst{background:#fff;color:var(--s-800);box-shadow:inset 0 0 0 2px var(--s-200)}
+.lnbtn.gst .ic{background:var(--o-50);color:var(--o-600)}
+.lnbtn.gst .tx .s{color:var(--s-400)}
+.lnbtn.white{background:#fff;color:var(--o-700);box-shadow:0 10px 22px rgba(120,53,15,.18)}
+.lnbtn.white .ic{background:var(--o-50);color:var(--o-600)}
+.lnbtn.white .tx .s{color:var(--o-600);opacity:.75}
+.lnbtn.frost{background:rgba(255,255,255,.16);color:#fff;box-shadow:inset 0 0 0 1.5px rgba(255,255,255,.55)}
+.lnbtn.frost .ic{background:rgba(255,255,255,.2)}
+.lnbtn.frost .tx .s{color:rgba(255,255,255,.85)}
+
+/* ════════ ① 會員卡式 ════════ */
+.ld1{background:var(--s-50);padding:16px 16px 20px;display:flex;flex-direction:column}
+.hero{position:relative;overflow:hidden;border-radius:22px;padding:16px;color:#fff;
+  background:linear-gradient(135deg,#fb923c 0%,#ea580c 100%);box-shadow:0 10px 24px rgba(234,88,12,.25)}
+.hero::after{content:"";position:absolute;right:-34px;top:-34px;width:120px;height:120px;border-radius:50%;background:rgba(255,255,255,.12)}
+.hero-r{position:relative;display:grid;grid-template-columns:46px minmax(0,1fr) auto;gap:12px;align-items:center}
+.hero-logo{width:46px;height:46px;border-radius:15px;background:rgba(255,255,255,.22);display:flex;align-items:center;justify-content:center}
+.hero-name{font-size:15px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hero-table{display:inline-flex;align-items:center;gap:4px;margin-top:5px;background:rgba(255,255,255,.2);
+  font-size:10px;font-weight:600;border-radius:9999px;padding:3px 9px}
+.hero-bowl{display:flex;align-items:center}
+.wel{margin-top:26px;text-align:center}
+.wel .t{font-size:21px;font-weight:800;color:var(--s-900)}
+.wel .s{font-size:12px;color:var(--s-500);margin-top:7px;line-height:1.6}
+.ld1 .lnbtns{margin-top:26px}
+.ld1 .foot{margin-top:auto;padding-top:16px;text-align:center;font-size:11px;color:var(--s-400);line-height:1.7}
+
+/* ════════ ② 品牌漸變全屏 ════════ */
+.full{position:absolute;inset:0;display:flex;flex-direction:column;padding:22px 20px 24px;overflow:hidden;
+  background:linear-gradient(165deg,#fdba74 0%,#f97316 52%,#ea580c 100%)}
+.full .d1,.full .d2{position:absolute;border-radius:50%;background:rgba(255,255,255,.12);pointer-events:none}
+.full .d1{width:230px;height:230px;top:-80px;right:-70px}
+.full .d2{width:160px;height:160px;bottom:36px;left:-70px}
+.full .d3{position:absolute;width:70px;height:70px;border-radius:50%;right:44px;bottom:170px;
+  background:rgba(255,255,255,.10);pointer-events:none}
+.full-top{position:relative;display:flex;flex-direction:column;align-items:center;gap:11px}
+.full-logo{width:64px;height:64px;border-radius:22px;background:rgba(255,255,255,.22);display:flex;align-items:center;justify-content:center}
+.full-store{font-size:16px;font-weight:700;color:#fff;text-align:center}
+.full-table{font-size:11px;color:#fff;background:rgba(255,255,255,.18);border-radius:9999px;padding:4px 11px}
+.full-mid{position:relative;margin-top:auto;margin-bottom:auto;width:100%;display:flex;flex-direction:column;gap:12px}
+.full .midline{text-align:center;color:#fff;font-size:19px;font-weight:800;margin-bottom:4px}
+.full .midsub{text-align:center;color:rgba(255,255,255,.85);font-size:11.5px;margin-bottom:12px}
+.full-hint{position:relative;text-align:center;font-size:11px;color:rgba(255,255,255,.85);line-height:1.7}
+
+/* ════════ ③ 美團式 ════════ */
+.mt-head{flex:none;background:#fff;padding:6px 14px 8px}
+.mt-row1{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center}
+.mt-name{font-size:15px;font-weight:700;color:var(--s-900);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mt-table{display:inline-flex;align-items:center;gap:4px;margin-top:4px;background:var(--o-50);color:var(--o-700);
+  font-size:10px;font-weight:600;border-radius:9999px;padding:3px 9px}
+.mt-hicons{display:flex;align-items:center;gap:7px}
+.iconbtn{width:30px;height:30px;border-radius:50%;background:var(--s-100);border:0;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;color:var(--s-600);flex:none}
+.iconbtn svg{width:15px;height:15px}
+.ld3{flex:1;min-height:0;overflow-y:auto;background:var(--s-50);padding:14px 16px 18px;
+  display:flex;flex-direction:column}
+.start-card{background:#fff;border-radius:18px;padding:17px 16px;box-shadow:0 1px 2px rgba(28,25,23,.04)}
+.start-card .t{font-size:19px;font-weight:800;color:var(--s-900)}
+.start-card .s{font-size:11.5px;color:var(--s-500);margin-top:5px;line-height:1.6}
+.pnums-label{font-size:11px;font-weight:600;color:var(--s-500);margin-top:14px}
+.pnums{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:7px;margin-top:7px}
+.pnum{border:0;background:var(--s-100);color:var(--s-600);font-size:12px;font-weight:600;border-radius:10px;
+  padding:9px 0;font-family:inherit;cursor:pointer}
+.pnum.on{background:var(--o-50);color:var(--o-600);box-shadow:inset 0 0 0 1.5px var(--o-200)}
+.pnum-note{font-size:10px;color:var(--s-400);margin-top:7px}
+.ld3 .lnbtns{margin-top:18px}
+.ld3 .foot{margin-top:auto;padding-top:16px;text-align:center;font-size:11px;color:var(--s-400);line-height:1.7}
+
+/* ════════ 流程卡（兩顆掣背後） ════════ */
+.flow{width:368px;height:744px;flex:none;background:#fff;border:1px solid var(--s-200);border-radius:26px;
+  padding:15px 16px 13px;display:flex;flex-direction:column;gap:9px;overflow:hidden;min-height:0;
+  box-shadow:0 10px 26px rgba(28,25,23,.10)}
+.flow .h1{font-size:14px;font-weight:800;color:var(--s-900)}
+.flow .h2{font-size:10.5px;color:var(--s-500);line-height:1.6}
+.fsec{border-radius:14px;padding:10px 12px}
+.fsec.m{background:var(--o-50)}
+.fsec.g{background:var(--s-50);box-shadow:inset 0 0 0 1px var(--s-200)}
+.fsec .ft{display:flex;align-items:center;gap:7px;font-size:12px;font-weight:700;color:var(--s-800)}
+.fsec .ft .dot{width:18px;height:18px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+  font-size:10px;font-weight:800;color:#fff;flex:none}
+.fsec.m .ft .dot{background:var(--o-500)}
+.fsec.g .ft .dot{background:var(--s-400)}
+.fstep{display:grid;grid-template-columns:14px minmax(0,1fr);gap:8px;margin-top:8px;align-items:start}
+.fstep .n{width:14px;height:14px;border-radius:50%;font-size:8.5px;font-weight:800;display:flex;
+  align-items:center;justify-content:center;flex:none;margin-top:1px}
+.fsec.m .fstep .n{background:#fff;color:var(--o-600)}
+.fsec.g .fstep .n{background:#fff;color:var(--s-500)}
+.fstep .d{font-size:10px;line-height:1.55;color:var(--s-600)}
+.fstep .d b{color:var(--s-900);font-weight:700}
+.keep{display:flex;flex-direction:column;gap:5px}
+.kitem{position:relative;font-size:10px;line-height:1.55;color:var(--s-600);padding-left:14px}
+.kitem::before{content:"";position:absolute;left:3px;top:5.5px;width:4px;height:4px;border-radius:50%;background:var(--em-600)}
+.kitem b{color:var(--s-900);font-weight:700}
+
+/* ════════ 說明卡 ════════ */
+.notes{width:368px;height:744px;flex:none;background:#fff;border:1px solid var(--s-200);border-radius:26px;
+  padding:14px 16px 12px;display:flex;flex-direction:column;gap:8px;overflow:hidden;min-height:0;
+  box-shadow:0 10px 26px rgba(28,25,23,.10)}
+.notes .h1{font-size:14px;font-weight:800;color:var(--s-900)}
+.notes .h2{font-size:10.5px;color:var(--s-500);line-height:1.6}
+.nsec{display:flex;flex-direction:column;gap:4px}
+.nsec-h{display:flex;align-items:center;gap:7px;font-size:12px;font-weight:700;color:var(--s-800)}
+.nsec-h i{width:4px;height:12px;border-radius:2px}
+.nsec-h i.o{background:var(--o-500)} .nsec-h i.g{background:var(--em-600)} .nsec-h i.s{background:var(--s-400)}
+.nitem{position:relative;font-size:10px;line-height:1.56;color:var(--s-600);padding-left:15px}
+.nitem::before{content:"";position:absolute;left:4px;top:6px;width:4px;height:4px;border-radius:50%;background:var(--s-300)}
+.nitem b{color:var(--s-900);font-weight:700}
+</style>
+</head>
+<body>
+
+<div class="chrome">
+  <div class="chrome-h">
+    <span class="chrome-title">掃碼點餐 Landing 頁設計 — 會員／非會員兩大按鈕</span>
+    <span class="chrome-note">深色／此區為審稿工具列，唔屬產品介面</span>
+    <span class="chrome-note orange">橙色 = 我哋現有主色 orange-500</span>
+  </div>
+  <div class="chrome-sub">
+    <b>核心規格</b>：每頁都係兩顆大按鈕（會員點餐＝主掣橙色漸變＋投影；非會員點餐＝次掣白底灰圈），高度 64px 起、icon＋主標＋副標＋箭嘴；
+    會員線打開現有 <b>MemberLoginSheet</b>、非會員線直接入菜單，背後流程零改動。掣係真嘅，撳下有 toast 提示行去邊。
+  </div>
+</div>
+
+<div class="stage" id="stage">
+  <div class="canvas" id="canvas">
+
+    <!-- ════════ 第一行 ════════ -->
+    <div class="grid3">
+
+      <!-- ⓿ 而家 -->
+      <div class="cell">
+        <div class="cellhead">
+          <span class="cellnum">⓿</span><span class="celltitle">而家・Landing（對照）</span>
+          <span class="cellsub">emoji＋細字、主次唔分明</span>
+        </div>
+        <div class="phone" id="ph0">
+          <div class="pstatus"><span>13:24</span><span class="sic">
+            <svg width="16" height="11" viewBox="0 0 16 11" fill="currentColor"><rect x="0" y="7" width="3" height="4" rx="1"/><rect x="4.5" y="4.5" width="3" height="6.5" rx="1"/><rect x="9" y="2" width="3" height="9" rx="1"/><rect x="13.5" y="0" width="2.5" height="11" rx="1"/></svg>
+            <svg width="14" height="11" viewBox="0 0 14 11" fill="currentColor"><rect x="0" y="1.5" width="12" height="8" rx="2" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="2" y="3.5" width="7" height="4" rx="1"/><rect x="12.5" y="4" width="1.5" height="3" rx="0.8"/></svg>
+          </span></div>
+          <div class="cur">
+            <div class="cur-emoji">🍽️</div>
+            <div class="cur-title">你是會員嗎？</div>
+            <div class="cur-sub">使用會員儲值餘額付款，結帳更快</div>
+            <div class="cur-pill"><b>常安南越南粉（金嘉店）</b><span style="color:var(--s-300)">·</span><span>堂食 枱號 1</span></div>
+            <div style="width:100%;margin-top:26px">
+              <button class="cur-btn p" data-k="go" data-dest="→ 會員登入（MemberLoginSheet）">👤 是，我是會員</button>
+              <button class="cur-btn g" data-k="go" data-dest="→ 直接進入菜單">🙋 不是，直接點餐</button>
+            </div>
+            <div class="cur-hint">忘記 PIN？請到前台由店員協助</div>
+          </div>
+          <div class="toast" data-role="toast"></div>
+        </div>
+      </div>
+
+      <!-- ① 會員卡式（推薦） -->
+      <div class="cell">
+        <div class="cellhead">
+          <span class="cellnum">①</span><span class="celltitle">會員卡式（推薦）</span>
+          <span class="cellsub">門店漸變 hero 卡置頂認店 · 兩大按鈕主次分明</span>
+        </div>
+        <div class="phone" id="ph1">
+          <div class="pstatus"><span>13:24</span><span class="sic">
+            <svg width="16" height="11" viewBox="0 0 16 11" fill="currentColor"><rect x="0" y="7" width="3" height="4" rx="1"/><rect x="4.5" y="4.5" width="3" height="6.5" rx="1"/><rect x="9" y="2" width="3" height="9" rx="1"/><rect x="13.5" y="0" width="2.5" height="11" rx="1"/></svg>
+            <svg width="14" height="11" viewBox="0 0 14 11" fill="currentColor"><rect x="0" y="1.5" width="12" height="8" rx="2" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="2" y="3.5" width="7" height="4" rx="1"/><rect x="12.5" y="4" width="1.5" height="3" rx="0.8"/></svg>
+          </span></div>
+          <div class="scr ld1">
+            <div class="hero">
+              <div class="hero-r">
+                <span class="hero-logo">
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 11h16c0 5-3.6 9-8 9s-8-4-8-9z"/><path d="M2 11h20M9 7c0-1.5 1.3-1.8 1.3-3.2M13.5 7c0-1.5 1.3-1.8 1.3-3.2"/></svg>
+                </span>
+                <div style="min-width:0">
+                  <div class="hero-name">常安南越南粉（金嘉店）</div>
+                  <span class="hero-table">
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
+                    堂食 · 枱號 1
+                  </span>
+                </div>
+                <span class="hero-bowl">
+                  <svg width="52" height="52" viewBox="0 0 48 48" fill="none"><path d="M8 22h32c0 10-7.2 17-16 17S8 32 8 22z" fill="rgba(255,255,255,.92)"/><rect x="5" y="19" width="38" height="4" rx="2" fill="#fff"/><path d="M14 15c0-2 1.6-2.4 1.6-4.4M24 15c0-2 1.6-2.4 1.6-4.4M34 15c0-2 1.6-2.4 1.6-4.4" stroke="rgba(255,255,255,.75)" stroke-width="2" stroke-linecap="round"/></svg>
+                </span>
+              </div>
+            </div>
+
+            <div class="wel">
+              <div class="t">歡迎光臨</div>
+              <div class="s">揀一種方式開始點餐<br/>兩條路都係去同一張菜單</div>
+            </div>
+
+            <div class="lnbtns">
+              <button class="lnbtn pri" data-k="go" data-dest="→ 會員登入（電話＋PIN）">
+                <span class="ic">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M3 10h18M7 15h4"/></svg>
+                </span>
+                <span class="tx"><span class="t">會員點餐</span><span class="s">儲值餘額即扣 · 結帳更快</span></span>
+                <span class="arr"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg></span>
+              </button>
+              <button class="lnbtn gst" data-k="go" data-dest="→ 直接進入菜單（唔使登入）">
+                <span class="ic">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="8" r="4"/><path d="M4.5 21c0-4 3.4-6.5 7.5-6.5s7.5 2.5 7.5 6.5"/></svg>
+                </span>
+                <span class="tx"><span class="t">非會員點餐</span><span class="s">直接點餐 · 到前台付款</span></span>
+                <span class="arr"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg></span>
+              </button>
+            </div>
+
+            <div class="foot">忘記 PIN？請到前台由店員協助<br/>非會員都可以直接點餐</div>
+          </div>
+          <div class="toast" data-role="toast"></div>
+        </div>
+      </div>
+
+      <!-- ② 品牌漸變全屏 -->
+      <div class="cell">
+        <div class="cellhead">
+          <span class="cellnum">②</span><span class="celltitle">品牌漸變式</span>
+          <span class="cellsub">全屏橙漸變＋白掣 · 適合想賣品牌嘅店</span>
+        </div>
+        <div class="phone" id="ph2">
+          <div class="pstatus" style="background:transparent;color:#fff;position:absolute;top:0;left:0;right:0;z-index:10"><span>13:24</span><span class="sic">
+            <svg width="16" height="11" viewBox="0 0 16 11" fill="currentColor"><rect x="0" y="7" width="3" height="4" rx="1"/><rect x="4.5" y="4.5" width="3" height="6.5" rx="1"/><rect x="9" y="2" width="3" height="9" rx="1"/><rect x="13.5" y="0" width="2.5" height="11" rx="1"/></svg>
+            <svg width="14" height="11" viewBox="0 0 14 11" fill="currentColor"><rect x="0" y="1.5" width="12" height="8" rx="2" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="2" y="3.5" width="7" height="4" rx="1"/><rect x="12.5" y="4" width="1.5" height="3" rx="0.8"/></svg>
+          </span></div>
+          <div class="scr">
+            <div class="full">
+              <span class="d1"></span><span class="d2"></span><span class="d3"></span>
+              <div class="full-top">
+                <span class="full-logo">
+                  <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 11h16c0 5-3.6 9-8 9s-8-4-8-9z"/><path d="M2 11h20M9 7c0-1.5 1.3-1.8 1.3-3.2M13.5 7c0-1.5 1.3-1.8 1.3-3.2"/></svg>
+                </span>
+                <div class="full-store">常安南越南粉（金嘉店）</div>
+                <span class="full-table">堂食 · 枱號 1</span>
+              </div>
+              <div class="full-mid">
+                <div class="midline">開始點餐</div>
+                <div class="midsub">會員用儲值餘額，結帳快人一步</div>
+                <button class="lnbtn white" data-k="go" data-dest="→ 會員登入（電話＋PIN）">
+                  <span class="ic">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M3 10h18M7 15h4"/></svg>
+                  </span>
+                  <span class="tx"><span class="t">會員點餐</span><span class="s">儲值餘額即扣 · 結帳更快</span></span>
+                  <span class="arr"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg></span>
+                </button>
+                <button class="lnbtn frost" data-k="go" data-dest="→ 直接進入菜單（唔使登入）">
+                  <span class="ic">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="8" r="4"/><path d="M4.5 21c0-4 3.4-6.5 7.5-6.5s7.5 2.5 7.5 6.5"/></svg>
+                  </span>
+                  <span class="tx"><span class="t">非會員點餐</span><span class="s">直接點餐 · 到前台付款</span></span>
+                  <span class="arr"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg></span>
+                </button>
+              </div>
+              <div class="full-hint">忘記 PIN？請到前台由店員協助</div>
+            </div>
+          </div>
+          <div class="toast" data-role="toast" style="background:#fff;color:var(--s-900)"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ════════ 第二行 ════════ -->
+    <div class="grid3">
+
+      <!-- ③ 美團式 -->
+      <div class="cell">
+        <div class="cellhead">
+          <span class="cellnum">③</span><span class="celltitle">美團式</span>
+          <span class="cellsub">門店頭欄＋「開始點餐」卡＋人數 chips（選填）</span>
+        </div>
+        <div class="phone" id="ph3">
+          <div class="pstatus"><span>13:24</span><span class="sic">
+            <svg width="16" height="11" viewBox="0 0 16 11" fill="currentColor"><rect x="0" y="7" width="3" height="4" rx="1"/><rect x="4.5" y="4.5" width="3" height="6.5" rx="1"/><rect x="9" y="2" width="3" height="9" rx="1"/><rect x="13.5" y="0" width="2.5" height="11" rx="1"/></svg>
+            <svg width="14" height="11" viewBox="0 0 14 11" fill="currentColor"><rect x="0" y="1.5" width="12" height="8" rx="2" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="2" y="3.5" width="7" height="4" rx="1"/><rect x="12.5" y="4" width="1.5" height="3" rx="0.8"/></svg>
+          </span></div>
+          <div class="mt-head">
+            <div class="mt-row1">
+              <div>
+                <div class="mt-name">常安南越南粉（金嘉店）</div>
+                <span class="mt-table">
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
+                  堂食 · 枱號 1
+                </span>
+              </div>
+              <div class="mt-hicons">
+                <button class="iconbtn" data-k="noop" aria-label="搜尋">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M16.5 16.5 21 21"/></svg>
+                </button>
+                <button class="iconbtn" data-k="noop" aria-label="更多">
+                  <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>
+                </button>
+              </div>
+            </div>
+          </div>
+          <div class="scr ld3">
+            <div class="start-card">
+              <div class="t">開始點餐</div>
+              <div class="s">請揀就餐人數（選填，方便廚房預備）</div>
+              <div class="pnums-label">就餐人數</div>
+              <div class="pnums">
+                <button class="pnum" data-k="pnum">1</button>
+                <button class="pnum on" data-k="pnum">2</button>
+                <button class="pnum on" data-k="pnum">3</button>
+                <button class="pnum" data-k="pnum">4</button>
+                <button class="pnum" data-k="pnum">5+</button>
+              </div>
+              <div class="pnum-note">＊人數未接後端，揀咗都會入訂單備註（暫不傳送）</div>
+            </div>
+            <div class="lnbtns">
+              <button class="lnbtn pri" data-k="go" data-dest="→ 會員登入（電話＋PIN）">
+                <span class="ic">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M3 10h18M7 15h4"/></svg>
+                </span>
+                <span class="tx"><span class="t">會員點餐</span><span class="s">儲值餘額即扣 · 結帳更快</span></span>
+                <span class="arr"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg></span>
+              </button>
+              <button class="lnbtn gst" data-k="go" data-dest="→ 直接進入菜單（唔使登入）">
+                <span class="ic">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="8" r="4"/><path d="M4.5 21c0-4 3.4-6.5 7.5-6.5s7.5 2.5 7.5 6.5"/></svg>
+                </span>
+                <span class="tx"><span class="t">非會員點餐</span><span class="s">直接點餐 · 到前台付款</span></span>
+                <span class="arr"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg></span>
+              </button>
+            </div>
+            <div class="foot">忘記 PIN？請到前台由店員協助</div>
+          </div>
+          <div class="toast" data-role="toast"></div>
+        </div>
+      </div>
+
+      <!-- 流程卡 -->
+      <div class="cell">
+        <div class="cellhead">
+          <span class="cellnum">⑤</span><span class="celltitle">兩顆掣背後嘅流程</span>
+          <span class="cellsub">同一套 hook、零改動</span>
+        </div>
+        <div class="flow">
+          <div class="h1">撳落去會行去邊？</div>
+          <div class="h2">兩顆掣只係入口：會員＝打開現有登入；非會員＝略過登入。落單、加單、付款全部流程不變。</div>
+
+          <div class="fsec m">
+            <div class="ft"><span class="dot">會</span>會員點餐</div>
+            <div class="fstep"><span class="n">1</span><span class="d"><b>MemberLoginSheet</b>（電話＋4 位 PIN）由底部彈出</span></div>
+            <div class="fstep"><span class="n">2</span><span class="d">登入成功 → 頂部會員條顯示<b>儲值餘額</b></span></div>
+            <div class="fstep"><span class="n">3</span><span class="d">入菜單點餐；購物車「去結帳」＝<b>扣餘額／到前台</b>（現有 MemberPaySheet）</span></div>
+          </div>
+
+          <div class="fsec g">
+            <div class="ft"><span class="dot">非</span>非會員點餐</div>
+            <div class="fstep"><span class="n">1</span><span class="d"><b>直接入菜單</b>，跳過登入（`skipMemberLogin()`）</span></div>
+            <div class="fstep"><span class="n">2</span><span class="d">落單後<b>到前台付款</b>；想做會員隨時喺會員條登入</span></div>
+          </div>
+
+          <div class="keep">
+            <div class="kitem"><b>保持不變</b>：連錯 5 次 PIN 鎖 15 分鐘（解鎖後仍可點餐）</div>
+            <div class="kitem">忘記 PIN →「請到前台由店員協助」文案沿用</div>
+            <div class="kitem">電話號碼只做驗證、<b>唔渲染</b>（個資紅線 §7.2）</div>
+            <div class="kitem">堂食／自取（快餐）判定同「請掃描枱上 QR」閘門不變</div>
+            <div class="kitem">登入後再掃同碼 → 「本枱已落單」＋加單 resume</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 說明卡 -->
+      <div class="cell">
+        <div class="cellhead">
+          <span class="cellnum">⑥</span><span class="celltitle">設計說明</span>
+          <span class="cellsub">按鈕規格／三款取捨／縮細問題</span>
+        </div>
+        <div class="notes">
+          <div class="h1">點解咁畫？</div>
+          <div class="h2">兩顆大按鈕規格統一：高 64px、圓角 20px、icon＋主標（17px 粗）＋副標（11px）＋右箭嘴；會員用主色漸變＋投影，非會員白底灰圈——主次一目了然，又唔會令非會員覺得自己被歧視。</div>
+
+          <div class="nsec">
+            <div class="nsec-h"><i class="o"></i>三款點揀？</div>
+            <div class="nitem"><b>① 會員卡式（推薦）</b>：頂部漸變 hero 卡放店名＋枱號，認店最快；下面白底兩大掣，對比度最好。開發量細（純版面）。</div>
+            <div class="nitem"><b>② 品牌漸變式</b>：全屏橙色，識別度最高；但深底要確保文字對比（深色字/白字分區），日後加其他元素要想清楚。</div>
+            <div class="nitem"><b>③ 美團式</b>：最似美團——頭欄＋「開始點餐」卡；人數 chips 係選填，未接後端前先齋畫。</div>
+          </div>
+
+          <div class="nsec">
+            <div class="nsec-h"><i class="g"></i>修咗而家嘅咩問題</div>
+            <div class="nitem">⓿ 問題：emoji 當主角、兩顆掣**等量等大**、文案細位、個店名 pill 太弱。</div>
+            <div class="nitem">新版：店名上 hero 卡（大字＋漸變）、會員掣有<b>利益點副標</b>（儲值即扣·結帳更快）、非會員掣都有出路（到前台付款）。</div>
+          </div>
+
+          <div class="nsec">
+            <div class="nsec-h"><i class="s"></i>實作留意</div>
+            <div class="nitem">版塊對應 `scan-order-page.tsx` 嘅 `!started` landing 區塊（堂食／快餐共用），<b>只換皮唔換流程</b>。</div>
+            <div class="nitem">文案走 `kioskT`（i18n 三層規則）；會員／非會員掣沿用 `openMemberLogin()`／`skipMemberLogin()`。</div>
+            <div class="nitem">若之後要人數：要新欄位＋寫入訂單（未上之前 ③ 齋畫唔做）。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+function fit(){
+  if (typeof window === "undefined" || typeof document === "undefined") return;
+  var stage = document.getElementById("stage");
+  var canvas = document.getElementById("canvas");
+  if (!stage || !canvas) return;
+  var w = stage.clientWidth || 1360;
+  var s = Math.min(1, Math.max(w / 1360, 0.42));
+  canvas.style.transform = "scale(" + s + ")";
+  stage.style.height = Math.round(1628 * s) + "px";
+  stage.style.overflowX = (1360 * s > w) ? "auto" : "hidden";
+}
+if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+  window.addEventListener("resize", fit);
+  fit();
+}
+
+(function(){
+  function showToast(phone, text){
+    var t = phone.querySelector('[data-role="toast"]');
+    if (!t) return;
+    t.textContent = text;
+    t.classList.add("on");
+    if (typeof setTimeout === "function"){
+      setTimeout(function(){ t.classList.remove("on"); }, 1400);
+    }
+  }
+  var handlers = {
+    "go": function(el){
+      var phone = el.closest ? el.closest(".phone") : null;
+      var dest = el.getAttribute("data-dest") || "";
+      if (phone) showToast(phone, dest);
+    },
+    "pnum": function(el){
+      var bar = el.parentNode;
+      if (!bar) return;
+      var bs = bar.querySelectorAll(".pnum");
+      for (var i = 0; i < bs.length; i++){ bs[i].classList.toggle("on", bs[i] === el); }
+    },
+    "noop": function(el){ if (typeof el.blur === "function") el.blur(); }
+  };
+  var els = document.querySelectorAll("[data-k]");
+  for (var i = 0; i < els.length; i++){
+    (function(el){
+      el.onclick = function(){ var h = handlers[el.getAttribute("data-k")]; if (h) h(el); };
+    })(els[i]);
+  }
+})();
+</script>
+</body>
+</html>

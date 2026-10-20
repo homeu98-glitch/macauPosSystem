@@ -1,0 +1,764 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8" />
+<title>macau-pos — 會員折扣 ＋ 菜品列表唯讀化 ＋ 編輯彈窗 · 2026-10-20</title>
+<style>
+:root{
+  --bg:#f1f3f5; --card:#fff; --line:#e6e8eb; --line2:#eef0f2;
+  --tx:#1f2328; --tx2:#5b6470; --tx3:#8a95a1;
+  --orange:#f97316; --orange-d:#ea580c; --orange-l:#fff4ea;
+  --green:#10b981; --green-d:#059669; --green-l:#ecfdf5;
+  --side:#282c33; --side-it:#383d45;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{
+  background:#e9ebef;color:var(--tx);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang TC","Microsoft JhengHei","Microsoft YaHei",sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+.chrome{max-width:1240px;margin:0 auto;padding:20px 24px 10px}
+.chrome-h{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+.chrome-title{font-size:15px;font-weight:800;color:#0f172a}
+.chrome-note{font-size:10.5px;font-weight:600;color:#475569;background:#fff;border:1px solid #dbe3ec;border-radius:9999px;padding:3px 10px}
+.chrome-note.o{color:var(--orange-d);border-color:#fed7aa;background:#fff7ed}
+.chrome-note.g{color:#047857;border-color:#a7f3d0;background:var(--green-l)}
+.chrome-sub{margin-top:7px;font-size:11.5px;color:#475569;line-height:1.75;max-width:1160px}
+.chrome-sub b{color:#0f172a}
+
+.stage{max-width:1240px;margin:0 auto;position:relative;overflow:hidden;border-radius:18px;
+  box-shadow:0 16px 40px rgba(15,23,42,.15);background:var(--bg)}
+.canvas{width:1120px;position:absolute;top:0;left:0;transform-origin:top left;
+  display:flex;flex-direction:column;gap:26px;padding:22px 20px 30px;background:var(--bg);overflow:hidden}
+
+.sec{display:flex;flex-direction:column;gap:7px}
+.sec-h{display:flex;align-items:baseline;gap:9px;flex-wrap:wrap}
+.sec-n{font-size:11px;font-weight:800;color:var(--orange-d)}
+.sec-t{font-size:13.5px;font-weight:800;color:#151a20}
+.sec-s{font-size:10.5px;color:var(--tx2)}
+
+/* ════════ 實機畫面外框 ════════ */
+.app{width:1080px;height:590px;display:flex;background:var(--bg);border-radius:12px;overflow:hidden;
+  border:1px solid #d9dde2;box-shadow:0 2px 8px rgba(15,23,42,.06);position:relative}
+
+/* ── 左側欄 ── */
+.side{width:50px;flex:none;background:var(--side);display:flex;flex-direction:column;align-items:center;
+  padding:7px 0 7px;gap:3px}
+.si{width:36px;height:33px;border-radius:9px;background:var(--side-it);display:flex;flex-direction:column;
+  align-items:center;justify-content:center;gap:1px;color:#e8ebef;flex:none}
+.si svg{width:13px;height:13px;stroke:#dfe3e8;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.si .lb{font-size:5.6px;font-weight:600;color:#c8ced6;letter-spacing:.2px}
+.si.on{background:var(--orange)}
+.si.on svg{stroke:#fff}
+.si.on .lb{color:#fff}
+.si.store{height:40px;background:#3f444c}
+.si.store .lb{font-size:5.2px;line-height:1.25;text-align:center;padding:0 1px}
+.si.online{background:#12a150}
+.si.online .lb{color:#fff}
+.side-gap{height:2px;flex:none}
+
+/* ── 主區 ── */
+.main{flex:1;min-width:0;display:flex;flex-direction:column;overflow:hidden;position:relative}
+.topbar{flex:none;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:14px;align-items:start;
+  padding:13px 18px 0}
+.ttl{font-size:17px;font-weight:800;color:#11161c;letter-spacing:.2px}
+.sub{font-size:10px;color:var(--tx2);margin-top:3px}
+.acts{display:flex;gap:7px;align-items:center;padding-top:2px}
+.pillbtn{border:0;border-radius:9999px;padding:6px 14px;font-family:inherit;font-size:10.5px;font-weight:700;
+  color:#fff;cursor:pointer;white-space:nowrap}
+.pillbtn.o{background:var(--orange)}
+.pillbtn.g{background:#7c5cf0}
+.pillbtn.ghost{background:#fff;color:var(--tx2);box-shadow:inset 0 0 0 1px var(--line)}
+
+.tabs{flex:none;display:flex;gap:6px;padding:11px 18px 0;overflow:hidden}
+.tab{border:0;background:#fff;color:#3d4550;font-family:inherit;font-size:10.5px;font-weight:600;
+  border-radius:9999px;padding:5.5px 13px;cursor:pointer;white-space:nowrap;box-shadow:inset 0 0 0 1px var(--line)}
+.tab.on{background:var(--orange);color:#fff;box-shadow:none}
+
+.strip{flex:none;margin:9px 18px 0;background:#f7f8fa;border:1px solid var(--line);border-radius:8px;
+  padding:6px 11px;font-size:9.5px;color:var(--tx2)}
+.strip.y{background:#fffdf2;border-color:#f3e7bd;display:flex;align-items:center;justify-content:space-between}
+.strip.y .lnk{color:var(--orange-d);font-weight:700}
+.strip .mini{border:0;background:#fff;box-shadow:inset 0 0 0 1px var(--line);border-radius:7px;
+  font-family:inherit;font-size:9px;font-weight:600;color:var(--tx2);padding:3.5px 9px;cursor:pointer}
+
+.body{flex:1;min-height:0;overflow:hidden;padding:8px 18px 11px;display:flex;gap:11px;align-items:flex-start}
+.col{min-width:0;display:flex;flex-direction:column;gap:8px}
+.col.l{flex:1.42}
+.col.r{flex:1}
+
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px}
+.card-h{font-size:12.5px;font-weight:800;color:#151a20}
+.card-d{font-size:9.5px;color:var(--tx2);line-height:1.7;margin-top:4px}
+.card-d b{color:#2b323a}
+
+/* 會員折扣卡（新增） */
+.mcard{background:#fff;border:1.5px solid #fcd6b4;border-radius:12px;padding:12px 14px;position:relative}
+.mcard .flag{position:absolute;top:-8px;left:12px;background:var(--orange);color:#fff;font-size:8px;
+  font-weight:800;border-radius:9999px;padding:2px 8px;letter-spacing:.4px}
+.mrow{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.sw{width:38px;height:21px;border-radius:9999px;background:var(--orange);position:relative;flex:none;cursor:pointer;margin-top:2px}
+.sw i{position:absolute;top:2.5px;left:19px;width:16px;height:16px;border-radius:50%;background:#fff}
+.sw.off{background:#d5d9de}
+.sw.off i{left:3px}
+.mrates{display:flex;gap:6px;margin-top:10px}
+.rc{border:0;background:#f4f5f7;color:#4b535d;font-family:inherit;font-size:10px;font-weight:700;
+  border-radius:8px;padding:6px 0;flex:1;cursor:pointer}
+.rc.on{background:var(--orange-l);color:var(--orange-d);box-shadow:inset 0 0 0 1.5px var(--orange)}
+.mhint{margin-top:9px;background:#f7f8fa;border-radius:8px;padding:7px 9px;font-size:9px;line-height:1.65;color:var(--tx2)}
+.mhint b{color:#2b323a}
+.mhint .go{color:var(--orange-d);font-weight:700}
+
+/* 折扣項目列表（原樣） */
+.dlist{display:flex;flex-direction:column;gap:7px;margin-top:9px}
+.ditem{display:flex;align-items:center;justify-content:space-between;gap:9px;border:1px solid var(--line);
+  border-radius:9px;padding:7px 10px}
+.ditem .l{min-width:0}
+.ditem .n{font-size:10.5px;font-weight:700;color:#1a1f26}
+.ditem .m{font-size:8.5px;color:var(--tx3);margin-top:2px}
+.ditem .del{border:0;background:#fff;box-shadow:inset 0 0 0 1px var(--line);border-radius:7px;
+  font-family:inherit;font-size:9px;font-weight:600;color:#5b6470;padding:4px 10px;cursor:pointer;white-space:nowrap}
+.dnew{margin-top:8px;border:1px solid var(--line);border-radius:8px;padding:7px 10px;font-size:9.5px;color:#aeb6c0}
+
+/* 說明卡 */
+.bul{display:flex;flex-direction:column;gap:5px;margin-top:8px}
+.bli{position:relative;font-size:9.5px;line-height:1.65;color:var(--tx2);padding-left:11px}
+.bli::before{content:"•";position:absolute;left:2px;top:0;color:#aeb6c0;font-weight:700}
+.bli b{color:#2b323a}
+
+/* ════════ 菜品列表（唯讀） ════════ */
+.itembar{flex:none;display:flex;gap:7px;align-items:center;padding:10px 18px 0}
+.srch{flex:1;min-width:0;border:1px solid var(--line);background:#fff;border-radius:9px;padding:7px 11px;
+  font-size:9.5px;color:#aeb6c0;display:flex;align-items:center;justify-content:space-between}
+.sel{border:1px solid var(--line);background:#fff;border-radius:9px;padding:7px 11px;font-size:10px;
+  color:#3d4550;font-weight:600;white-space:nowrap;display:flex;align-items:center;gap:8px}
+.pagebar{flex:none;display:flex;align-items:center;justify-content:space-between;padding:8px 18px 0;
+  font-size:9px;color:var(--tx3)}
+.pgbtn{border:1px solid var(--line);background:#fff;border-radius:7px;padding:4px 10px;font-size:9px;color:#8a95a1}
+
+.rows{flex:1;min-height:0;overflow:hidden;padding:8px 18px 14px;display:flex;flex-direction:column;gap:6px}
+.irow{background:#fff;border:1px solid var(--line);border-radius:11px;padding:7px 12px;
+  display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center}
+.irow .nm{font-size:11.5px;font-weight:700;color:#151a20}
+.irow .meta{display:flex;align-items:center;gap:7px;margin-top:4px;flex-wrap:wrap}
+.chip{font-size:8.5px;font-weight:600;color:#5b6470;background:#f4f5f7;border-radius:5px;padding:2.5px 7px}
+.chip.plain{background:none;padding:0;color:#5b6470}
+.chip.mem{background:var(--green-l);color:var(--green-d);font-weight:800}
+.chip.spec{background:#f4f5f7;color:#7b8490}
+.chip.on{background:#fff4ea;color:var(--orange-d)}
+.irow .price{font-size:11.5px;font-weight:800;color:#151a20;margin-top:3px}
+.irow .price .mem{color:var(--green-d);font-weight:800;margin-left:7px}
+.irow .price .lbl{font-size:8.5px;font-weight:600;color:var(--tx3);margin-right:3px}
+.rowacts{display:flex;gap:6px;align-items:center}
+.rbtn{border:0;border-radius:8px;padding:6px 14px;font-family:inherit;font-size:9.5px;font-weight:700;cursor:pointer;white-space:nowrap}
+.rbtn.edit{background:var(--orange);color:#fff}
+.rbtn.del{background:#fff;box-shadow:inset 0 0 0 1px var(--line);color:#5b6470}
+
+/* ════════ 彈窗 ════════ */
+.modalwrap{position:absolute;inset:0;background:rgba(23,28,34,.42);display:flex;align-items:center;
+  justify-content:center;z-index:20}
+.modal{width:620px;max-height:552px;background:#fff;border-radius:14px;display:flex;flex-direction:column;
+  overflow:hidden;box-shadow:0 18px 44px rgba(15,23,42,.34)}
+.mhead{flex:none;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:start;
+  padding:14px 18px 11px;border-bottom:1px solid var(--line2)}
+.mhead .t{font-size:14px;font-weight:800;color:#11161c}
+.mhead .d{font-size:9px;color:var(--tx2);margin-top:3px}
+.xbtn{border:0;background:#fff;box-shadow:inset 0 0 0 1px var(--line);border-radius:8px;
+  font-family:inherit;font-size:9.5px;font-weight:600;color:#5b6470;padding:5px 11px;cursor:pointer}
+.mbody{flex:1;min-height:0;overflow:hidden;padding:12px 18px;display:flex;flex-direction:column;gap:10px}
+.fld{min-width:0;display:flex;flex-direction:column;gap:4px}
+.fld .lb{font-size:9.5px;font-weight:700;color:#2b323a;display:flex;align-items:center;gap:4px}
+.fld .lb .req{color:#ef4444}
+.fld .lb .opt{font-size:8.5px;font-weight:500;color:#a3abb5}
+.inp{border:1px solid var(--line);border-radius:9px;padding:8px 11px;font-size:10.5px;color:#1a1f26;
+  background:#fff;min-height:34px;display:flex;align-items:center}
+.inp.focus{border-color:var(--orange);box-shadow:0 0 0 2.5px #ffedd5}
+.inp.mem{border-color:var(--green);background:#f6fefb;color:var(--green-d);font-weight:700}
+.inp.ph{color:#b4bcc6}
+.inp.dim{color:#b4bcc6}
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.hint{font-size:8.5px;color:#a3abb5;margin-top:1px;line-height:1.5}
+.hint b{color:var(--green-d)}
+.hint.warn b{color:#b45309}
+
+.cbs{display:flex;align-items:center;gap:18px;margin-top:2px}
+.cb{display:flex;align-items:center;gap:6px;font-size:9.5px;color:#2b323a}
+.box{width:13px;height:13px;border-radius:3.5px;border:1.5px solid #c9d0d8;flex:none}
+.box.on{background:var(--orange);border-color:var(--orange);position:relative}
+.box.on::after{content:"";position:absolute;left:3.2px;top:0.8px;width:4px;height:7px;
+  border-right:2px solid #fff;border-bottom:2px solid #fff;transform:rotate(42deg)}
+
+.specband{background:#f7f8fa;border-radius:9px;padding:9px 11px;display:flex;align-items:center;
+  justify-content:space-between;gap:10px}
+.specband .l{font-size:9.5px;color:var(--tx2);min-width:0}
+.specband .l b{color:#2b323a}
+.addspec{border:0;background:#fff;box-shadow:inset 0 0 0 1px var(--line);border-radius:8px;
+  font-family:inherit;font-size:9.5px;font-weight:700;color:var(--orange-d);padding:6px 12px;cursor:pointer;white-space:nowrap}
+
+.mfoot{flex:none;border-top:1px solid var(--line2);padding:11px 18px;display:flex;justify-content:flex-end;gap:8px}
+.fbtn{border:0;border-radius:9px;padding:9px 20px;font-family:inherit;font-size:11px;font-weight:700;cursor:pointer}
+.fbtn.cancel{background:#fff;box-shadow:inset 0 0 0 1px var(--line);color:#5b6470}
+.fbtn.save{background:var(--orange);color:#fff}
+.scrollbar{position:absolute;right:3px;top:120px;bottom:80px;width:5px;border-radius:9999px;background:#d6dae0}
+
+/* toast */
+.toast{position:absolute;left:50%;bottom:28px;transform:translateX(-50%);background:#11161c;color:#fff;
+  font-size:10px;font-weight:600;border-radius:9999px;padding:7px 14px;opacity:0;pointer-events:none;
+  transition:opacity .18s;white-space:nowrap;z-index:60;box-shadow:0 8px 20px rgba(15,23,42,.3)}
+.toast.on{opacity:1}
+
+/* 對照小注 */
+.note{background:#fff;border:1px solid var(--line);border-radius:10px;padding:9px 12px;font-size:10px;
+  line-height:1.7;color:var(--tx2)}
+.note b{color:#151a20}
+.note .tag{display:inline-block;background:#fef2f2;color:#b91c1c;font-weight:700;border-radius:5px;
+  padding:1px 6px;font-size:8.5px;margin-right:5px}
+.note .tag.g{background:var(--green-l);color:var(--green-d)}
+</style>
+</head>
+<body>
+
+<div class="chrome">
+  <div class="chrome-h">
+    <span class="chrome-title">macau-pos 實機稿 — 會員折扣 ＋ 菜品列表唯讀化 ＋ 編輯彈窗</span>
+    <span class="chrome-note">照你 3 張實機截圖嘅版式畫（左深色側欄 · pill tab · 白卡）</span>
+    <span class="chrome-note o">橙 = 你現有主色</span>
+    <span class="chrome-note g">綠 = 新增會員價</span>
+  </div>
+  <div class="chrome-sub">
+    <b>①</b> 設置 → 折扣：喺「折扣項目」上面新增一張<b>「會員折扣」</b>卡（開關 ＋ 折扣率 ＋ 唔可疊加提示）。
+    <b>②</b> 設置 → 菜單 → 菜品：列表改為<b>唯讀</b>（分類／打印位置／價格／時價菜／客人可點全部變成純文字），右邊只剩<b>「編輯」「刪除」</b>。
+    <b>③</b> 撳「編輯」彈出同「新增菜品」同一個彈窗，入面多一個<b>「會員價 (MOP)」</b>欄位。
+    <span style="color:#b91c1c">「編輯規格」同「套用模板」由列表移入彈窗</span>（有咗編輯就唔需要列表直接改規格）。
+  </div>
+</div>
+
+<div class="stage" id="stage">
+  <div class="canvas" id="canvas">
+
+    <!-- ══════════ ① 折扣設定 ══════════ -->
+    <div class="sec">
+      <div class="sec-h">
+        <span class="sec-n">①</span>
+        <span class="sec-t">設置 → 折扣（新增「會員折扣」卡）</span>
+        <span class="sec-s">位置：喺「折扣項目」上面 · 唔會改動你原有嘅折扣</span>
+      </div>
+      <div class="app" id="s1">
+        <div class="side">
+          <div class="si"><svg viewBox="0 0 24 24"><path d="M4 8h16M4 8l2-3h12l2 3M6 8v11h12V8"/></svg><span class="lb">貼餐</span></div>
+          <div class="si"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 9h8M8 13h5"/></svg><span class="lb">單</span></div>
+          <div class="si"><svg viewBox="0 0 24 24"><path d="M6 4h12v16l-6-3-6 3z"/></svg><span class="lb">訂單</span></div>
+          <div class="si"><svg viewBox="0 0 24 24"><circle cx="12" cy="9" r="3.2"/><path d="M5 20c0-3.4 3.1-5.5 7-5.5s7 2.1 7 5.5"/></svg><span class="lb">會員</span></div>
+          <div class="si"><svg viewBox="0 0 24 24"><path d="M7 8V5h10v3M6 8h12v6H6z"/><path d="M8 14h8v5H8z"/></svg><span class="lb">印</span></div>
+          <div class="si"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 8h8v8H8z"/></svg><span class="lb">打印</span></div>
+          <div class="si"><svg viewBox="0 0 24 24"><path d="M5 19V9M10 19V5M15 19v-7M20 19v-4"/></svg><span class="lb">報</span></div>
+          <div class="si"><svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M4 10h16M9 10v9"/></svg><span class="lb">報表</span></div>
+          <div class="si"><svg viewBox="0 0 24 24"><path d="M12 3l2.4 5.4 5.6.7-4.1 3.9 1 5.6L12 15.8 7.1 18.6l1-5.6L4 9.1l5.6-.7z"/></svg><span class="lb">洁</span></div>
+          <div class="si"><svg viewBox="0 0 24 24"><path d="M7 4h10l-1 16H8z"/><path d="M9 8h6"/></svg><span class="lb">清潔</span></div>
+          <div class="side-gap"></div>
+          <div class="si store"><svg viewBox="0 0 24 24"><path d="M4 9h16v11H4z"/><path d="M4 9l2-5h12l2 5"/></svg><span class="lb">金雞牛肉麵<br/>(新橋店)</span></div>
+          <div class="side-gap"></div>
+          <div class="si online"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/></svg><span class="lb">在線</span></div>
+          <div class="si"><svg viewBox="0 0 24 24"><path d="M14 4H7v16h10V8z"/><path d="M11 12h4M11 16h4"/></svg><span class="lb">登出</span></div>
+          <div class="side-gap"></div>
+          <div class="si on"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/></svg><span class="lb">設置</span></div>
+        </div>
+
+        <div class="main">
+          <div class="topbar">
+            <div>
+              <div class="ttl">設置</div>
+              <div class="sub">打印機、菜品打印、樓層桌台、支付方式、線上接單都集中在這裡。</div>
+            </div>
+            <div class="acts">
+              <button class="pillbtn o" data-k="go" data-dest="返回工作台">工作台</button>
+              <button class="pillbtn g" data-k="go" data-dest="返回收銀台">返回收銀台</button>
+            </div>
+          </div>
+
+          <div class="tabs">
+            <button class="tab">打印機</button>
+            <button class="tab">菜品打印設置</button>
+            <button class="tab">菜單</button>
+            <button class="tab">樓層與桌台</button>
+            <button class="tab">支付方式</button>
+            <button class="tab">線上接單</button>
+            <button class="tab">備註</button>
+            <button class="tab on">折扣</button>
+            <button class="tab">掃碼點餐</button>
+            <button class="tab">語言設置</button>
+          </div>
+
+          <div class="strip">已載入本機設定。</div>
+          <div class="strip">版本 <b style="color:#3d4550">9d367c1</b>（2026-10-19 23:04 · 正式）　線上最新: 9d367c1</div>
+          <div class="strip y">
+            <span><b style="color:#8a6d1f">顯示尺寸（診斷）</b>　<span class="lnk">展開 ▸</span></span>
+            <button class="mini" data-k="go" data-dest="複製診斷">複製診斷</button>
+          </div>
+
+          <div class="body">
+            <div class="col l">
+              <div class="mcard">
+                <span class="flag">新增</span>
+                <div class="mrow">
+                  <div style="min-width:0">
+                    <div class="card-h">會員折扣</div>
+                    <div class="card-d">認到會員就<b>自動計算</b>，唔需要店員揀、亦唔會同下面「折扣項目」疊加。</div>
+                  </div>
+                  <span class="sw" data-k="sw"><i></i></span>
+                </div>
+                <div style="font-size:10px;font-weight:700;color:#2b323a;margin-top:11px">折扣率</div>
+                <div class="mrates">
+                  <button class="rc" data-k="rc">9 折</button>
+                  <button class="rc" data-k="rc">88 折</button>
+                  <button class="rc on" data-k="rc">95 折</button>
+                  <button class="rc" data-k="rc">自訂</button>
+                </div>
+                <div class="mhint">
+                  <b>單品會員價優先</b>：如果某個菜品喺「菜品」度另設咗會員價，就用該價錢，唔再乘呢個折扣率。<br/>
+                  <span class="go">→ 去「菜單 → 菜品」逐個設定單品會員價</span>
+                </div>
+              </div>
+
+              <div class="card">
+                <div class="card-h">折扣項目</div>
+                <div class="card-d">用於結帳頁「全單折扣」下拉及單品折扣彈窗。每個折扣填名稱與百分比（例如「8折」+「80」），介面唔顯示「%」號。</div>
+                <div class="dlist">
+                  <div class="ditem"><div class="l"><div class="n">9折</div><div class="m">90%（即收 90 元 / 原價 100）</div></div>
+                    <button class="del" data-k="go" data-dest="刪除折扣「9折」">刪除</button></div>
+                  <div class="ditem"><div class="l"><div class="n">85折</div><div class="m">85%（即收 85 元 / 原價 100）</div></div>
+                    <button class="del" data-k="go" data-dest="刪除折扣「85折」">刪除</button></div>
+                </div>
+                <div class="dnew">折扣名稱，例如「8折」</div>
+              </div>
+            </div>
+
+            <div class="col r">
+              <div class="card">
+                <div class="card-h">說明</div>
+                <div class="bul">
+                  <div class="bli">百分比 = 實收比例。80 = 8 折（收 80 元）；50 = 5 折；100 = 冇折扣。</div>
+                  <div class="bli">單品折扣只影響該菜品，會喺結帳頁該菜品旁顯示原價（刪除線）+ 折後價。</div>
+                  <div class="bli">全單折扣套用整張單，折扣金額會喺結帳摘要「折扣」一欄顯示。</div>
+                  <div class="bli"><b>會員折扣</b>係自動嘅：認到會員就套，客人唔需要自己揀。</div>
+                  <div class="bli">會員折扣同「折扣項目」<b>唔可以同時用</b>（避免疊到超賤）。</div>
+                  <div class="bli">改完請撳下方「保存折扣」同步到本機同伺服器。</div>
+                </div>
+              </div>
+              <div class="note">
+                <b>要唔要即刻保存？</b><br/>
+                會員折扣改完之後，同其他設定一樣要撳「保存折扣」先會同步。<br/>
+                <span class="tag g">建議</span>保存後用客人手機掃一次碼，確認餐牌顯示嘅會員價正確。
+              </div>
+            </div>
+          </div>
+          <div class="scrollbar"></div>
+          <div class="toast" data-role="toast"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══════════ ② 菜品列表唯讀 ══════════ -->
+    <div class="sec">
+      <div class="sec-h">
+        <span class="sec-n">②</span>
+        <span class="sec-t">設置 → 菜單 → 菜品（列表改唯讀 ＋ 只留「編輯」「刪除」）</span>
+        <span class="sec-s">分類／打印位置／價格／checkbox 全部變純文字；規格操作收入彈窗</span>
+      </div>
+      <div class="app" id="s2">
+        <div class="side">
+          <div class="si"><svg viewBox="0 0 24 24"><path d="M4 8h16M4 8l2-3h12l2 3M6 8v11h12V8"/></svg><span class="lb">貼餐</span></div>
+          <div class="si"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 9h8M8 13h5"/></svg><span class="lb">單</span></div>
+          <div class="si"><svg viewBox="0 0 24 24"><path d="M6 4h12v16l-6-3-6 3z"/></svg><span class="lb">訂單</span></div>
+          <div class="si"><svg viewBox="0 0 24 24"><circle cx="12" cy="9" r="3.2"/><path d="M5 20c0-3.4 3.1-5.5 7-5.5s7 2.1 7 5.5"/></svg><span class="lb">會員</span></div>
+          <div class="si"><svg viewBox="0 0 24 24"><path d="M7 8V5h10v3M6 8h12v6H6z"/><path d="M8 14h8v5H8z"/></svg><span class="lb">印</span></div>
+          <div class="si"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 8h8v8H8z"/></svg><span class="lb">打印</span></div>
+          <div class="si"><svg viewBox="0 0 24 24"><path d="M5 19V9M10 19V5M15 19v-7M20 19v-4"/></svg><span class="lb">報</span></div>
+          <div class="si"><svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M4 10h16M9 10v9"/></svg><span class="lb">報表</span></div>
+          <div class="si"><svg viewBox="0 0 24 24"><path d="M12 3l2.4 5.4 5.6.7-4.1 3.9 1 5.6L12 15.8 7.1 18.6l1-5.6L4 9.1l5.6-.7z"/></svg><span class="lb">洁</span></div>
+          <div class="si"><svg viewBox="0 0 24 24"><path d="M7 4h10l-1 16H8z"/><path d="M9 8h6"/></svg><span class="lb">清潔</span></div>
+          <div class="side-gap"></div>
+          <div class="si store"><svg viewBox="0 0 24 24"><path d="M4 9h16v11H4z"/><path d="M4 9l2-5h12l2 5"/></svg><span class="lb">金雞牛肉麵<br/>(新橋店)</span></div>
+          <div class="side-gap"></div>
+          <div class="si online"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/></svg><span class="lb">在線</span></div>
+          <div class="si"><svg viewBox="0 0 24 24"><path d="M14 4H7v16h10V8z"/><path d="M11 12h4M11 16h4"/></svg><span class="lb">登出</span></div>
+          <div class="side-gap"></div>
+          <div class="si on"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/></svg><span class="lb">設置</span></div>
+        </div>
+
+        <div class="main">
+          <div class="topbar">
+            <div>
+              <div class="ttl">設置</div>
+              <div class="sub">打印機、菜品打印、樓層桌台、支付方式、線上接單都集中在這裡。</div>
+            </div>
+            <div class="acts">
+              <button class="pillbtn o" data-k="go" data-dest="返回工作台">工作台</button>
+              <button class="pillbtn g" data-k="go" data-dest="返回收銀台">返回收銀台</button>
+            </div>
+          </div>
+
+          <div class="tabs">
+            <button class="tab">打印機</button>
+            <button class="tab">菜品打印設置</button>
+            <button class="tab on">菜單</button>
+            <button class="tab">樓層與桌台</button>
+            <button class="tab">支付方式</button>
+            <button class="tab">線上接單</button>
+            <button class="tab">備註</button>
+            <button class="tab">折扣</button>
+            <button class="tab">掃碼點餐</button>
+            <button class="tab">語言設置</button>
+          </div>
+
+          <div class="strip">菜品規格統一由模板套用：按「編輯」入去改規格，保存時即時寫入 server；想自訂規格組請去「規格管理」建立模板。</div>
+
+          <div class="itembar">
+            <div class="srch"><span>搜尋菜品名稱，例如「雞」 ...</span><span style="color:#8a95a1">⌕</span></div>
+            <div class="sel">全部類別 <span style="color:#a3abb5">▾</span></div>
+            <button class="pillbtn o" data-k="go" data-dest="新增菜品彈窗">新增菜品</button>
+          </div>
+
+          <div class="pagebar">
+            <span>共 28 個菜品 · 第 1/1 頁（每頁 50）</span>
+            <span style="display:flex;gap:6px">
+              <span class="pgbtn">上一頁</span><span class="pgbtn">下一頁</span>
+            </span>
+          </div>
+
+          <div class="rows">
+            <div class="irow">
+              <div style="min-width:0">
+                <div class="nm">大麥克牛肉麵</div>
+                <div class="meta">
+                  <span class="chip plain">牛肉麵系列</span>
+                  <span class="chip plain">·</span>
+                  <span class="chip plain">廚房</span>
+                  <span class="chip spec">規格 隨機 4 項 · 必選</span>
+                  <span class="chip spec">加購 6 項</span>
+                  <span class="chip on">時價菜</span>
+                  <span class="chip on">客人可點</span>
+                </div>
+                <div class="price"><span class="lbl">價格</span>MOP 76.00<span class="mem"><span class="lbl">會員</span>MOP 68.00</span></div>
+              </div>
+              <div class="rowacts">
+                <button class="rbtn edit" data-k="go" data-dest="→ 彈出「編輯菜品」（同新增同一個彈窗）">編輯</button>
+                <button class="rbtn del" data-k="go" data-dest="刪除菜品「大麥克牛肉麵」">刪除</button>
+              </div>
+            </div>
+
+            <div class="irow">
+              <div style="min-width:0">
+                <div class="nm">酸白菜牛肉麵</div>
+                <div class="meta">
+                  <span class="chip plain">牛肉麵系列</span>
+                  <span class="chip plain">·</span>
+                  <span class="chip plain">廚房</span>
+                  <span class="chip spec">規格 隨機 4 項 · 必選</span>
+                  <span class="chip spec">加購 6 項</span>
+                  <span class="chip on">客人可點</span>
+                </div>
+                <div class="price"><span class="lbl">價格</span>MOP 75.00<span class="mem"><span class="lbl">會員</span>MOP 71.25（95 折）</span></div>
+              </div>
+              <div class="rowacts">
+                <button class="rbtn edit" data-k="go" data-dest="→ 彈出「編輯菜品」">編輯</button>
+                <button class="rbtn del" data-k="go" data-dest="刪除菜品「酸白菜牛肉麵」">刪除</button>
+              </div>
+            </div>
+
+            <div class="irow">
+              <div style="min-width:0">
+                <div class="nm">人氣半筋半肉麵</div>
+                <div class="meta">
+                  <span class="chip plain">牛肉麵系列</span>
+                  <span class="chip plain">·</span>
+                  <span class="chip plain">廚房</span>
+                  <span class="chip spec">規格 隨機 4 項 · 必選</span>
+                  <span class="chip spec">加購 6 項</span>
+                  <span class="chip on">客人可點</span>
+                </div>
+                <div class="price"><span class="lbl">價格</span>MOP 85.00<span class="mem"><span class="lbl">會員</span>MOP 80.75（95 折）</span></div>
+              </div>
+              <div class="rowacts">
+                <button class="rbtn edit" data-k="go" data-dest="→ 彈出「編輯菜品」">編輯</button>
+                <button class="rbtn del" data-k="go" data-dest="刪除菜品「人氣半筋半肉麵」">刪除</button>
+              </div>
+            </div>
+
+            <div class="irow">
+              <div style="min-width:0">
+                <div class="nm">招牌牛三寶</div>
+                <div class="meta">
+                  <span class="chip plain">牛肉麵系列</span>
+                  <span class="chip plain">·</span>
+                  <span class="chip plain">廚房</span>
+                  <span class="chip spec">規格 隨機 4 項 · 必選</span>
+                  <span class="chip spec">加購 6 項</span>
+                  <span class="chip on">客人可點</span>
+                </div>
+                <div class="price"><span class="lbl">價格</span>MOP 95.00<span class="mem"><span class="lbl">會員</span>MOP 90.25（95 折）</span></div>
+              </div>
+              <div class="rowacts">
+                <button class="rbtn edit" data-k="go" data-dest="→ 彈出「編輯菜品」">編輯</button>
+                <button class="rbtn del" data-k="go" data-dest="刪除菜品「招牌牛三寶」">刪除</button>
+              </div>
+            </div>
+
+            <div class="irow">
+              <div style="min-width:0">
+                <div class="nm">牛肋條麵</div>
+                <div class="meta">
+                  <span class="chip plain">牛肉麵系列</span>
+                  <span class="chip plain">·</span>
+                  <span class="chip plain">廚房</span>
+                  <span class="chip spec">規格 隨機 4 項 · 必選</span>
+                  <span class="chip spec">加購 6 項</span>
+                  <span class="chip on">客人可點</span>
+                </div>
+                <div class="price"><span class="lbl">價格</span>MOP 65.00<span class="mem"><span class="lbl">會員</span>MOP 61.75（95 折）</span></div>
+              </div>
+              <div class="rowacts">
+                <button class="rbtn edit" data-k="go" data-dest="→ 彈出「編輯菜品」">編輯</button>
+                <button class="rbtn del" data-k="go" data-dest="刪除菜品「牛肋條麵」">刪除</button>
+              </div>
+            </div>
+          </div>
+          <div class="scrollbar"></div>
+          <div class="toast" data-role="toast"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══════════ ③ 編輯／新增菜品彈窗 ══════════ -->
+    <div class="sec">
+      <div class="sec-h">
+        <span class="sec-n">③</span>
+        <span class="sec-t">「編輯菜品」彈窗（同「新增菜品」同一個，多咗「會員價」）</span>
+        <span class="sec-s">規格／套用模板都收入呢個彈窗 → 列表就唔使再有「編輯規格」</span>
+      </div>
+      <div class="app" id="s3">
+        <div class="side">
+          <div class="si"><svg viewBox="0 0 24 24"><path d="M4 8h16M4 8l2-3h12l2 3M6 8v11h12V8"/></svg><span class="lb">貼餐</span></div>
+          <div class="si"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M8 9h8M8 13h5"/></svg><span class="lb">單</span></div>
+          <div class="si"><svg viewBox="0 0 24 24"><path d="M6 4h12v16l-6-3-6 3z"/></svg><span class="lb">訂單</span></div>
+          <div class="si"><svg viewBox="0 0 24 24"><circle cx="12" cy="9" r="3.2"/><path d="M5 20c0-3.4 3.1-5.5 7-5.5s7 2.1 7 5.5"/></svg><span class="lb">會員</span></div>
+          <div class="si"><svg viewBox="0 0 24 24"><path d="M7 8V5h10v3M6 8h12v6H6z"/><path d="M8 14h8v5H8z"/></svg><span class="lb">印</span></div>
+          <div class="si"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 8h8v8H8z"/></svg><span class="lb">打印</span></div>
+          <div class="si"><svg viewBox="0 0 24 24"><path d="M5 19V9M10 19V5M15 19v-7M20 19v-4"/></svg><span class="lb">報</span></div>
+          <div class="si"><svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M4 10h16M9 10v9"/></svg><span class="lb">報表</span></div>
+          <div class="si"><svg viewBox="0 0 24 24"><path d="M12 3l2.4 5.4 5.6.7-4.1 3.9 1 5.6L12 15.8 7.1 18.6l1-5.6L4 9.1l5.6-.7z"/></svg><span class="lb">洁</span></div>
+          <div class="si"><svg viewBox="0 0 24 24"><path d="M7 4h10l-1 16H8z"/><path d="M9 8h6"/></svg><span class="lb">清潔</span></div>
+          <div class="side-gap"></div>
+          <div class="si store"><svg viewBox="0 0 24 24"><path d="M4 9h16v11H4z"/><path d="M4 9l2-5h12l2 5"/></svg><span class="lb">金雞牛肉麵<br/>(新橋店)</span></div>
+          <div class="side-gap"></div>
+          <div class="si online"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/></svg><span class="lb">在線</span></div>
+          <div class="si"><svg viewBox="0 0 24 24"><path d="M14 4H7v16h10V8z"/><path d="M11 12h4M11 16h4"/></svg><span class="lb">登出</span></div>
+          <div class="side-gap"></div>
+          <div class="si on"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/></svg><span class="lb">設置</span></div>
+        </div>
+
+        <div class="main">
+          <div class="topbar">
+            <div>
+              <div class="ttl">設置</div>
+              <div class="sub">打印機、菜品打印、樓層桌台、支付方式、線上接單都集中在這裡。</div>
+            </div>
+            <div class="acts">
+              <button class="pillbtn o" data-k="go" data-dest="返回工作台">工作台</button>
+              <button class="pillbtn g" data-k="go" data-dest="返回收銀台">返回收銀台</button>
+            </div>
+          </div>
+          <div class="tabs">
+            <button class="tab">打印機</button>
+            <button class="tab">菜品打印設置</button>
+            <button class="tab on">菜單</button>
+            <button class="tab">樓層與桌台</button>
+            <button class="tab">支付方式</button>
+            <button class="tab">線上接單</button>
+            <button class="tab">備註</button>
+            <button class="tab">折扣</button>
+            <button class="tab">掃碼點餐</button>
+            <button class="tab">語言設置</button>
+          </div>
+          <div class="strip">菜品規格統一由模板套用：按「編輯」入去改規格，保存時即時寫入 server。</div>
+
+          <div class="rows" style="opacity:.5;filter:blur(.4px)">
+            <div class="irow">
+              <div style="min-width:0">
+                <div class="nm">大麥克牛肉麵</div>
+                <div class="meta"><span class="chip plain">牛肉麵系列</span><span class="chip plain">·</span><span class="chip plain">廚房</span></div>
+                <div class="price"><span class="lbl">價格</span>MOP 76.00<span class="mem"><span class="lbl">會員</span>MOP 68.00</span></div>
+              </div>
+              <div class="rowacts"><button class="rbtn edit">編輯</button><button class="rbtn del">刪除</button></div>
+            </div>
+            <div class="irow">
+              <div style="min-width:0">
+                <div class="nm">酸白菜牛肉麵</div>
+                <div class="meta"><span class="chip plain">牛肉麵系列</span><span class="chip plain">·</span><span class="chip plain">廚房</span></div>
+                <div class="price"><span class="lbl">價格</span>MOP 75.00<span class="mem"><span class="lbl">會員</span>MOP 71.25（95 折）</span></div>
+              </div>
+              <div class="rowacts"><button class="rbtn edit">編輯</button><button class="rbtn del">刪除</button></div>
+            </div>
+          </div>
+
+          <div class="modalwrap">
+            <div class="modal">
+              <div class="mhead">
+                <div>
+                  <div class="t">編輯菜品</div>
+                  <div class="d">修改菜品資料，保存後即時寫入後台並更新菜單列表。</div>
+                </div>
+                <button class="xbtn" data-k="go" data-dest="關閉彈窗（未保存改動會提示）">關閉</button>
+              </div>
+              <div class="mbody">
+                <div class="fld">
+                  <span class="lb">菜品名稱 <span class="req">*</span></span>
+                  <div class="inp focus">大麥克牛肉麵</div>
+                </div>
+
+                <div class="g2">
+                  <div class="fld">
+                    <span class="lb">分類 <span class="req">*</span></span>
+                    <div class="inp">牛肉麵系列 <span style="color:#a3abb5;margin-left:auto">▾</span></div>
+                  </div>
+                  <div class="fld">
+                    <span class="lb">打印位置（分區）</span>
+                    <div class="inp">廚房 <span style="color:#a3abb5;margin-left:auto">▾</span></div>
+                    <div class="hint">廚房單會按分區印；分區喺「打印設置」維護。</div>
+                  </div>
+                </div>
+
+                <div class="g2">
+                  <div class="fld">
+                    <span class="lb">價格（MOP） <span class="req">*</span></span>
+                    <div class="inp">76.00</div>
+                  </div>
+                  <div class="fld">
+                    <span class="lb">會員價（MOP） <span class="opt">選填 · 新增</span></span>
+                    <div class="inp mem">68.00</div>
+                    <div class="hint"><b>留空 = 跟全店會員折扣率</b>（現時 95 折）；填咗就<b>覆蓋</b>該折扣率。</div>
+                  </div>
+                </div>
+
+                <div class="g2">
+                  <div class="fld">
+                    <span class="lb">原價（MOP） <span class="opt">選填 · 配合折扣用</span></span>
+                    <div class="inp dim">留空 = 價格即原價</div>
+                  </div>
+                  <div class="fld">
+                    <span class="lb">折扣（%） <span class="opt">選填</span></span>
+                    <div class="inp dim">80 = 8折</div>
+                    <div class="hint warn"><b>⚠ 注意</b>：呢個係「所有顧客都享」嘅促銷，唔係會員價。</div>
+                  </div>
+                </div>
+
+                <div class="fld">
+                  <span class="lb">圖片 URL <span class="opt">選填</span></span>
+                  <div class="inp ph">https://...</div>
+                </div>
+
+                <div class="cbs">
+                  <div class="cb"><span class="box"></span>時價菜（落單時輸入當次價錢）</div>
+                  <div class="cb"><span class="box on"></span>客人可點（掃碼點餐可見）</div>
+                </div>
+
+                <div class="specband">
+                  <div class="l"><b>規格</b>：隨機 4 項（必選）· 加購 6 項</div>
+                  <button class="addspec" data-k="go" data-dest="→ 喺彈窗內改規格／套用模板">編輯規格</button>
+                </div>
+              </div>
+              <div class="mfoot">
+                <button class="fbtn cancel" data-k="go" data-dest="取消編輯">取消</button>
+                <button class="fbtn save" data-k="go" data-dest="保存菜品 → 即時寫入後台">保存菜品</button>
+              </div>
+            </div>
+          </div>
+          <div class="toast" data-role="toast"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══════════ ④ 改動對照 ══════════ -->
+    <div class="sec">
+      <div class="sec-h"><span class="sec-n">④</span><span class="sec-t">改動對照（左：你現時嘅實機 · 右：改完之後）</span></div>
+      <div class="app" style="height:auto;display:block;padding:12px 14px;background:#fff">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+          <div>
+            <div style="font-size:11px;font-weight:800;color:#b91c1c;margin-bottom:6px">而家（列表可以直接改）</div>
+            <div style="font-size:9.5px;line-height:1.85;color:#5b6470">
+              · 分類／打印位置要喺列表逐個拉下拉<br/>
+              · 價格要喺列表逐個打字（容易誤觸改錯價）<br/>
+              · 時價菜／客人可點要喺列表逐個剔<br/>
+              · 每行有「編輯規格」「套用模板…」「清空」三個掣<br/>
+              · 冇會員價呢個概念
+            </div>
+          </div>
+          <div>
+            <div style="font-size:11px;font-weight:800;color:var(--green-d);margin-bottom:6px">改完之後（列表唯讀）</div>
+            <div style="font-size:9.5px;line-height:1.85;color:#5b6470">
+              · 列表只<b style="color:#151a20">顯示</b>，唔可以誤觸改價<br/>
+              · 每行只得兩個掣：<b style="color:#151a20">編輯</b>／<b style="color:#151a20">刪除</b><br/>
+              · 規格／套用模板／時價菜／客人可點全部收埋喺編輯彈窗<br/>
+              · 列表直接顯示「會員 MOP 68.00」，一眼睇到邊個有單品價<br/>
+              · 折扣頁多一張「會員折扣」卡（開關＋率）
+            </div>
+          </div>
+        </div>
+        <div class="note" style="margin-top:12px">
+          <span class="tag">要你拍板</span>
+          <b>「套用模板…」要唔要都收埋入彈窗？</b> 我嘅理解係：既然有咗「編輯」，規格相關嘅操作（編輯規格、套用模板）都應該入去同一個地方，列表唔應該再有。
+          如果你仍然想喺列表快速套模板，我可以喺「編輯」旁邊保留一個細嘅「套模板」掣。
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+function fit(){
+  if (typeof window === "undefined" || typeof document === "undefined") return;
+  var stage = document.getElementById("stage");
+  var canvas = document.getElementById("canvas");
+  if (!stage || !canvas) return;
+  var w = stage.clientWidth || 1120;
+  var s = Math.min(1, Math.max(w / 1120, 0.4));
+  canvas.style.transform = "scale(" + s + ")";
+  stage.style.height = Math.round(canvas.offsetHeight * s) + "px";
+  stage.style.overflowX = (1120 * s > w) ? "auto" : "hidden";
+}
+if (typeof window !== "undefined" && typeof document !== "undefined") {
+  var __rt;
+  fit();
+  if (window.addEventListener) {
+    window.addEventListener("resize", function(){ clearTimeout(__rt); __rt = setTimeout(fit, 120); });
+  }
+  setTimeout(fit, 80);
+}
+</script>
+<script>
+(function(){
+  if (typeof document === "undefined") return;
+  document.addEventListener("click", function(ev){
+    var el = ev.target && ev.target.closest ? ev.target.closest("[data-k]") : null;
+    if (!el) return;
+    var host = el.closest(".app") || el.closest(".sec");
+    if (!host) return;
+    var t = host.querySelector('[data-role="toast"]');
+    var dest = el.getAttribute("data-dest");
+    if (t && dest) {
+      t.textContent = dest;
+      t.classList.add("on");
+      setTimeout(function(){ t.classList.remove("on"); }, 1600);
+    }
+    if (el.classList.contains("sw")) el.classList.toggle("off");
+    if (el.classList.contains("rc")) {
+      Array.prototype.forEach.call(host.querySelectorAll(".rc"), function(n){ n.classList.remove("on"); });
+      el.classList.add("on");
+    }
+  });
+})();
+</script>
+</body>
+</html>

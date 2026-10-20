@@ -1,0 +1,610 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8" />
+<title>掃碼 Landing v3 — 座位 = 枱號（QR 帶入）＋ 有單即睇明細（2026-10-20）</title>
+<style>
+:root{
+  --o-50:#fff7ed; --o-100:#ffedd5; --o-200:#fed7aa; --o-500:#f97316; --o-600:#ea580c; --o-700:#c2410c;
+  --s-50:#fafaf9; --s-100:#f5f5f4; --s-200:#e7e5e4; --s-300:#d6d3d1; --s-400:#a8a29e;
+  --s-500:#78716c; --s-600:#57534e; --s-700:#44403c; --s-800:#292524; --s-900:#1c1917;
+  --em-50:#ecfdf5; --em-500:#10b981; --em-600:#059669; --red-500:#ef4444;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{
+  background:#e9ebef;color:var(--s-900);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang TC","Microsoft JhengHei","Microsoft YaHei",sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+.chrome{max-width:1360px;margin:0 auto;padding:22px 24px 12px}
+.chrome-h{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.chrome-title{font-size:16px;font-weight:800;color:#0f172a}
+.chrome-note{font-size:11px;font-weight:600;color:#475569;background:#fff;border:1px solid #dbe3ec;border-radius:9999px;padding:4px 11px}
+.chrome-note.orange{color:var(--o-700);border-color:var(--o-200);background:var(--o-50)}
+.chrome-note.green{color:#047857;border-color:#a7f3d0;background:var(--em-50)}
+.chrome-sub{margin-top:8px;font-size:12px;color:#475569;line-height:1.8;max-width:1120px}
+.chrome-sub b{color:#0f172a}
+
+.stage{max-width:1360px;margin:0 auto;position:relative;overflow:hidden;border-radius:22px;
+  box-shadow:0 18px 44px rgba(15,23,42,.16);background:var(--s-100)}
+.canvas{width:1360px;height:1628px;position:absolute;top:0;left:0;transform-origin:top left;
+  display:flex;flex-direction:column;padding:24px 40px 32px;gap:26px;overflow:hidden;background:var(--s-100)}
+.grid3{display:grid;grid-template-columns:repeat(3,368px);gap:28px;justify-content:center}
+.cell{display:flex;flex-direction:column;gap:8px;min-width:0}
+.cellhead{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.cellnum{font-size:12px;font-weight:800;color:var(--o-600)}
+.celltitle{font-size:13px;font-weight:700;color:var(--s-800)}
+.cellsub{font-size:11px;color:var(--s-500)}
+.phone{width:368px;height:744px;flex:none;background:#fff;border:1px solid var(--s-200);
+  border-radius:26px;overflow:hidden;display:flex;flex-direction:column;position:relative;
+  box-shadow:0 10px 26px rgba(28,25,23,.10)}
+.pstatus{position:absolute;top:0;left:0;right:0;height:26px;display:flex;align-items:center;justify-content:space-between;
+  padding:0 20px;font-size:11px;font-weight:700;color:#fff;z-index:10}
+.pstatus .sic{display:flex;align-items:center;gap:5px}
+.toast{position:absolute;left:50%;bottom:84px;transform:translateX(-50%);background:#fff;color:var(--s-900);
+  font-size:11px;font-weight:600;border-radius:9999px;padding:8px 14px;opacity:0;pointer-events:none;
+  transition:opacity .18s;white-space:nowrap;z-index:30;box-shadow:0 6px 16px rgba(28,25,23,.2)}
+.toast.on{opacity:1}
+
+.scr{flex:1;min-height:0;position:relative;overflow:hidden}
+.full{position:absolute;inset:0;display:flex;flex-direction:column;padding:26px 20px 22px;overflow:hidden;
+  background:linear-gradient(165deg,#fdba74 0%,#f97316 52%,#ea580c 100%)}
+.full .d1,.full .d2{position:absolute;border-radius:50%;background:rgba(255,255,255,.12);pointer-events:none}
+.full .d1{width:230px;height:230px;top:-80px;right:-70px}
+.full .d2{width:170px;height:170px;bottom:30px;left:-80px}
+.top{position:relative;display:flex;flex-direction:column;align-items:center;gap:10px}
+.logo{width:58px;height:58px;border-radius:20px;background:rgba(255,255,255,.22);display:flex;align-items:center;justify-content:center}
+.store{font-size:16px;font-weight:700;color:#fff;text-align:center}
+.pill{font-size:11px;color:#fff;background:rgba(255,255,255,.18);border-radius:9999px;padding:4px 11px;
+  display:inline-flex;align-items:center;gap:5px}
+.pill svg{width:10px;height:10px}
+.mid{position:relative;width:100%;margin-top:auto;margin-bottom:auto}
+.foot{position:relative;text-align:center;font-size:11px;color:rgba(255,255,255,.88);line-height:1.7;margin-top:auto;padding-top:14px}
+
+/* 枱號確認條 */
+.tbl-card{background:#fff;border-radius:18px;padding:12px 14px;display:grid;grid-template-columns:40px minmax(0,1fr) auto;
+  gap:11px;align-items:center;box-shadow:0 8px 20px rgba(120,53,15,.14)}
+.tbl-card .ic{width:40px;height:40px;border-radius:13px;background:var(--o-50);color:var(--o-600);
+  display:flex;align-items:center;justify-content:center;flex:none}
+.tbl-card .lab{font-size:10px;color:var(--s-400)}
+.tbl-card .val{font-size:15px;font-weight:700;color:var(--s-900);margin-top:2px}
+.tbl-card .chg{font-size:11px;font-weight:600;color:var(--o-600);background:var(--o-50);border:0;
+  border-radius:9999px;padding:7px 13px;font-family:inherit;cursor:pointer;white-space:nowrap}
+
+/* 大按鈕 */
+.lnbtns{display:flex;flex-direction:column;gap:11px;width:100%}
+.lnbtn{width:100%;display:grid;grid-template-columns:40px minmax(0,1fr) 16px;gap:12px;align-items:center;
+  border-radius:20px;padding:16px;border:0;font-family:inherit;cursor:pointer;text-align:left}
+.lnbtn .ic{width:40px;height:40px;border-radius:13px;display:flex;align-items:center;justify-content:center;flex:none}
+.lnbtn .tx{min-width:0}
+.lnbtn .tx .t{display:block;font-size:16px;font-weight:700;white-space:nowrap}
+.lnbtn .tx .s{display:block;font-size:10.5px;margin-top:3px;white-space:nowrap}
+.lnbtn .arr{justify-self:end;display:flex}
+.lnbtn .arr svg{width:13px;height:13px}
+.lnbtn.white{background:#fff;color:var(--o-700);box-shadow:0 10px 22px rgba(120,53,15,.18)}
+.lnbtn.white .ic{background:var(--o-50);color:var(--o-600)}
+.lnbtn.white .tx .s{color:var(--o-600);opacity:.75}
+.lnbtn.frost{background:rgba(255,255,255,.16);color:#fff;box-shadow:inset 0 0 0 1.5px rgba(255,255,255,.55)}
+.lnbtn.frost .ic{background:rgba(255,255,255,.2)}
+.lnbtn.frost .tx .s{color:rgba(255,255,255,.85)}
+.guest-link{background:none;border:0;font-family:inherit;cursor:pointer;color:rgba(255,255,255,.9);
+  font-size:11px;text-decoration:underline;padding:10px 0 0;text-align:center;width:100%}
+
+/* 改枱號 sheet */
+.ov{position:absolute;inset:0;background:rgba(28,25,23,.5)}
+.sheet{position:absolute;left:0;right:0;bottom:0;background:#fff;border-radius:22px 22px 0 0;padding:14px 16px 16px}
+.sheet .bar{width:38px;height:4px;border-radius:9999px;background:var(--s-200);margin:0 auto 12px}
+.sheet .sh{display:flex;align-items:center;justify-content:space-between}
+.sheet .sh .t{font-size:14px;font-weight:700;color:var(--s-900)}
+.sheet .sh .c{font-size:11px;color:var(--s-400);background:none;border:0;font-family:inherit;cursor:pointer}
+.sheet .hint{font-size:10px;color:var(--s-500);margin-top:5px;line-height:1.6}
+.tbgrid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:12px}
+.tb{display:flex;flex-direction:column;align-items:center;gap:3px;background:var(--s-50);border:1.5px solid transparent;
+  border-radius:12px;padding:9px 0;font-family:inherit;cursor:pointer}
+.tb .n{font-size:12px;font-weight:700;color:var(--s-700)}
+.tb .s{font-size:8.5px;color:var(--s-400)}
+.tb.busy .s{color:var(--o-600)}
+.tb.on{border-color:var(--o-500);background:var(--o-50)}
+.tb.on .n{color:var(--o-700)}
+.sheet .note{font-size:9.5px;color:var(--s-400);margin-top:11px;line-height:1.6}
+.sheet .done{width:100%;background:var(--o-500);color:#fff;font-size:13px;font-weight:700;border-radius:14px;
+  padding:12px;border:0;font-family:inherit;cursor:pointer;margin-top:12px}
+
+/* 本枱明細（④） */
+.od{position:absolute;inset:0;display:flex;flex-direction:column;overflow:hidden}
+.od-hero{flex:none;background:linear-gradient(165deg,#fdba74 0%,#f97316 52%,#ea580c 100%);
+  padding:34px 20px 22px;display:flex;flex-direction:column;align-items:center;color:#fff;position:relative;overflow:hidden}
+.od-hero .d1{position:absolute;width:200px;height:200px;border-radius:50%;background:rgba(255,255,255,.12);top:-70px;right:-60px}
+.od-tick{width:52px;height:52px;border-radius:50%;background:rgba(255,255,255,.22);display:flex;align-items:center;justify-content:center}
+.od-title{font-size:19px;font-weight:800;margin-top:11px}
+.od-sub{font-size:11px;color:rgba(255,255,255,.9);margin-top:5px;text-align:center;line-height:1.6}
+.od-body{flex:1;min-height:0;overflow-y:auto;background:var(--s-50);padding:12px;
+  display:flex;flex-direction:column;gap:10px}
+.od-card{background:#fff;border-radius:16px;padding:12px 13px;box-shadow:0 1px 2px rgba(28,25,23,.04)}
+.od-card .h{font-size:12px;font-weight:700;color:var(--s-900);margin-bottom:8px;display:flex;align-items:center;justify-content:space-between}
+.od-item{display:grid;grid-template-columns:44px minmax(0,1fr) auto;gap:10px;align-items:center;padding:8px 0}
+.od-item + .od-item{border-top:1px solid var(--s-100)}
+.od-item .th{width:44px;height:44px;border-radius:10px;display:flex;align-items:center;justify-content:center;
+  color:#fff;font-size:12px;font-weight:700}
+.od-item .nm{font-size:12px;font-weight:600;color:var(--s-900);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.od-item .qy{font-size:10px;color:var(--s-400);margin-top:3px}
+.od-item .pr{font-size:12px;font-weight:600;color:var(--s-900);text-align:right;white-space:nowrap}
+.od-sum{display:flex;align-items:center;justify-content:space-between;margin-top:8px;padding-top:8px;border-top:1px solid var(--s-100)}
+.od-sum .l{font-size:11px;color:var(--s-500)}
+.od-sum .r{font-size:14px;font-weight:700;color:var(--o-600)}
+.od-btns{flex:none;background:#fff;border-top:1px solid var(--s-200);padding:12px;display:flex;flex-direction:column;gap:8px}
+.od-add{width:100%;background:var(--o-500);color:#fff;font-size:14px;font-weight:700;border-radius:14px;
+  padding:13px;border:0;font-family:inherit;cursor:pointer}
+.od-tip{font-size:10px;color:var(--s-400);text-align:center}
+
+/* 會員記憶卡 */
+.back-card{background:#fff;border-radius:18px;padding:13px 14px;display:grid;grid-template-columns:42px minmax(0,1fr) auto;
+  gap:11px;align-items:center;box-shadow:0 8px 20px rgba(120,53,15,.14)}
+.back-card .av{width:42px;height:42px;border-radius:50%;background:linear-gradient(135deg,#fdba74,#f97316);
+  display:flex;align-items:center;justify-content:center;color:#fff}
+.back-card .nm{font-size:14px;font-weight:700;color:var(--s-900);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.back-card .bal{font-size:10.5px;color:var(--o-600);font-weight:600;margin-top:3px}
+.back-card .swap{font-size:10px;font-weight:600;color:var(--s-500);background:var(--s-100);border:0;
+  border-radius:9999px;padding:6px 10px;font-family:inherit;cursor:pointer;white-space:nowrap}
+
+/* ════════ 說明卡 ════════ */
+.panel{width:368px;height:744px;flex:none;background:#fff;border:1px solid var(--s-200);border-radius:26px;
+  padding:14px 16px 12px;display:flex;flex-direction:column;gap:8px;overflow:hidden;min-height:0;
+  box-shadow:0 10px 26px rgba(28,25,23,.10)}
+.panel .h1{font-size:14px;font-weight:800;color:var(--s-900)}
+.panel .h2{font-size:10.5px;color:var(--s-500);line-height:1.6}
+.nsec{display:flex;flex-direction:column;gap:4px}
+.nsec-h{display:flex;align-items:center;gap:7px;font-size:12px;font-weight:700;color:var(--s-800)}
+.nsec-h i{width:4px;height:12px;border-radius:2px}
+.nsec-h i.o{background:var(--o-500)} .nsec-h i.g{background:var(--em-600)} .nsec-h i.r{background:var(--red-500)} .nsec-h i.s{background:var(--s-400)}
+.nitem{position:relative;font-size:10px;line-height:1.56;color:var(--s-600);padding-left:15px}
+.nitem::before{content:"";position:absolute;left:4px;top:6px;width:4px;height:4px;border-radius:50%;background:var(--s-300)}
+.nitem b{color:var(--s-900);font-weight:700}
+.nitem code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:9.5px;background:var(--s-100);
+  border-radius:4px;padding:1px 4px;color:var(--s-700)}
+.qrow{border-radius:12px;padding:9px 11px;font-size:10px;line-height:1.6}
+.qrow.q1{background:var(--o-50);color:#7c2d12}
+.qrow.q2{background:var(--em-50);color:#065f46}
+.qrow.q3{background:var(--s-50);color:var(--s-600);box-shadow:inset 0 0 0 1px var(--s-200)}
+.qrow b{font-weight:700}
+.kv{display:grid;grid-template-columns:64px minmax(0,1fr);gap:8px;padding:4px 0;font-size:10px;align-items:start;
+  border-bottom:1px dashed var(--s-200)}
+.kv:last-child{border-bottom:0}
+.kv .k{color:var(--s-400)}
+.kv .v{color:var(--s-700)}
+.ok{background:var(--em-50);border-radius:12px;padding:9px 11px;font-size:10px;line-height:1.6;color:#065f46}
+.ok b{color:#047857}
+</style>
+</head>
+<body>
+
+<div class="chrome">
+  <div class="chrome-h">
+    <span class="chrome-title">掃碼 Landing v3 — 座位＝枱號（QR 帶入）· 有單即睇明細</span>
+    <span class="chrome-note">深色／此區為審稿工具列，唔屬產品介面</span>
+    <span class="chrome-note orange">橙色 = 我哋現有主色 orange-500</span>
+    <span class="chrome-note green">第 3 題：現有邏輯已經係咁做 ✔</span>
+  </div>
+  <div class="chrome-sub">
+    你答嘅三題：<b>① 座位 = 現有枱號 tableId</b>　<b>② 每張枱一個 QR</b>　<b>③ 張枱有人 → 掃碼直接睇嗰張單明細</b>。
+    核實結果：①② ⇒ 「揀座位」變成「確認／改枱號」，<b>欄位零改動</b>；③ ⇒ <b>程式碼已經係咁做</b>（<code>scan-order-page.tsx:379 / :434</code>），唔使新起佔用狀態。
+    開發量大幅度縮細，淨低 UI + 設備記憶票。
+  </div>
+</div>
+
+<div class="stage" id="stage">
+  <div class="canvas" id="canvas">
+
+    <!-- ════════ 第一行 ════════ -->
+    <div class="grid3">
+
+      <!-- ① 堂食 landing（QR 帶入枱號） -->
+      <div class="cell">
+        <div class="cellhead">
+          <span class="cellnum">①</span><span class="celltitle">堂食 Landing · 枱號由 QR 帶入</span>
+          <span class="cellsub">唔使自己揀 · 只畀確認／改</span>
+        </div>
+        <div class="phone" id="ph1">
+          <div class="pstatus"><span>13:24</span><span class="sic">
+            <svg width="16" height="11" viewBox="0 0 16 11" fill="currentColor"><rect x="0" y="7" width="3" height="4" rx="1"/><rect x="4.5" y="4.5" width="3" height="6.5" rx="1"/><rect x="9" y="2" width="3" height="9" rx="1"/><rect x="13.5" y="0" width="2.5" height="11" rx="1"/></svg>
+            <svg width="14" height="11" viewBox="0 0 14 11" fill="currentColor"><rect x="0" y="1.5" width="12" height="8" rx="2" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="2" y="3.5" width="7" height="4" rx="1"/><rect x="12.5" y="4" width="1.5" height="3" rx="0.8"/></svg>
+          </span></div>
+          <div class="scr">
+            <div class="full">
+              <span class="d1"></span><span class="d2"></span>
+              <div class="top">
+                <span class="logo">
+                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 11h16c0 5-3.6 9-8 9s-8-4-8-9z"/><path d="M2 11h20M9 7c0-1.5 1.3-1.8 1.3-3.2M13.5 7c0-1.5 1.3-1.8 1.3-3.2"/></svg>
+                </span>
+                <div class="store">常安南越南粉（金嘉店）</div>
+                <span class="pill">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M5 4v15M5 19h14M8 9h11M8 13h11"/></svg>
+                  堂食
+                </span>
+              </div>
+              <div class="mid">
+                <div class="tbl-card">
+                  <span class="ic">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4v15M5 19h14M8 9h11M8 13h11"/></svg>
+                  </span>
+                  <div style="min-width:0">
+                    <div class="lab">你而家坐緊</div>
+                    <div class="val" data-role="tblval">枱號 A3</div>
+                  </div>
+                  <button class="chg" data-k="open-sheet">改枱號</button>
+                </div>
+                <div class="lnbtns" style="margin-top:14px">
+                  <button class="lnbtn white" data-k="go" data-dest="→ 會員登入（電話＋PIN）">
+                    <span class="ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M3 10h18M7 15h4"/></svg></span>
+                    <span class="tx"><span class="t">會員點餐</span><span class="s">儲值餘額即扣 · 結帳更快</span></span>
+                    <span class="arr"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg></span>
+                  </button>
+                  <button class="lnbtn frost" data-k="go" data-dest="→ 直接進入菜單（唔使登入）">
+                    <span class="ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="8" r="4"/><path d="M4.5 21c0-4 3.4-6.5 7.5-6.5s7.5 2.5 7.5 6.5"/></svg></span>
+                    <span class="tx"><span class="t">非會員點餐</span><span class="s">直接點餐 · 到前台付款</span></span>
+                    <span class="arr"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg></span>
+                  </button>
+                </div>
+              </div>
+              <div class="foot">坐錯枱／拼枱？撳上面「改枱號」<br/>忘記 PIN？請到前台由店員協助</div>
+            </div>
+          </div>
+          <div class="toast" data-role="toast"></div>
+        </div>
+      </div>
+
+      <!-- ② 改枱號 sheet -->
+      <div class="cell">
+        <div class="cellhead">
+          <span class="cellnum">②</span><span class="celltitle">改枱號 sheet</span>
+          <span class="cellsub">有單嘅枱標「有單」· 揀咗直接睇明細</span>
+        </div>
+        <div class="phone" id="ph2">
+          <div class="pstatus"><span>13:24</span><span class="sic">
+            <svg width="16" height="11" viewBox="0 0 16 11" fill="currentColor"><rect x="0" y="7" width="3" height="4" rx="1"/><rect x="4.5" y="4.5" width="3" height="6.5" rx="1"/><rect x="9" y="2" width="3" height="9" rx="1"/><rect x="13.5" y="0" width="2.5" height="11" rx="1"/></svg>
+            <svg width="14" height="11" viewBox="0 0 14 11" fill="currentColor"><rect x="0" y="1.5" width="12" height="8" rx="2" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="2" y="3.5" width="7" height="4" rx="1"/><rect x="12.5" y="4" width="1.5" height="3" rx="0.8"/></svg>
+          </span></div>
+          <div class="scr">
+            <div class="full">
+              <span class="d1"></span><span class="d2"></span>
+              <div class="top">
+                <span class="logo">
+                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 11h16c0 5-3.6 9-8 9s-8-4-8-9z"/><path d="M2 11h20M9 7c0-1.5 1.3-1.8 1.3-3.2M13.5 7c0-1.5 1.3-1.8 1.3-3.2"/></svg>
+                </span>
+                <div class="store">常安南越南粉（金嘉店）</div>
+                <span class="pill">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M5 4v15M5 19h14M8 9h11M8 13h11"/></svg>
+                  堂食
+                </span>
+              </div>
+              <div class="mid">
+                <div class="tbl-card">
+                  <span class="ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4v15M5 19h14M8 9h11M8 13h11"/></svg></span>
+                  <div style="min-width:0"><div class="lab">你而家坐緊</div><div class="val">枱號 A3</div></div>
+                  <button class="chg" data-k="close-sheet">取消</button>
+                </div>
+              </div>
+              <div class="foot">改枱號只係換你落單嘅枱</div>
+            </div>
+            <div class="ov" data-role="ov"></div>
+            <div class="sheet">
+              <div class="bar"></div>
+              <div class="sh"><span class="t">改枱號</span><button class="c" data-k="close-sheet">取消</button></div>
+              <div class="hint">撳你要坐嘅枱。橙色「有單」嘅枱 = 呢張枱已經落過單，撳落去會直接睇嗰張單嘅明細。</div>
+              <div class="tbgrid">
+                <button class="tb" data-k="tb"><span class="n">A1</span><span class="s">空</span></button>
+                <button class="tb busy" data-k="tb"><span class="n">A2</span><span class="s">有單</span></button>
+                <button class="tb on" data-k="tb"><span class="n">A3</span><span class="s">而家</span></button>
+                <button class="tb" data-k="tb"><span class="n">A4</span><span class="s">空</span></button>
+                <button class="tb" data-k="tb"><span class="n">B1</span><span class="s">空</span></button>
+                <button class="tb busy" data-k="tb"><span class="n">B2</span><span class="s">有單</span></button>
+                <button class="tb" data-k="tb"><span class="n">B3</span><span class="s">空</span></button>
+                <button class="tb" data-k="tb"><span class="n">C1</span><span class="s">空</span></button>
+              </div>
+              <div class="note">「有單／空」唔使新欄位：系統用「呢張枱有冇未結帳嘅單」判斷（現有 <code>activeTableOrder</code>）。</div>
+              <button class="done" data-k="confirm-tb">確認枱號</button>
+            </div>
+          </div>
+          <div class="toast" data-role="toast"></div>
+        </div>
+      </div>
+
+      <!-- ③ 快餐 -->
+      <div class="cell">
+        <div class="cellhead">
+          <span class="cellnum">③</span><span class="celltitle">快餐 Landing</span>
+          <span class="cellsub">全店一碼 · 冇枱 · 兩大按鈕</span>
+        </div>
+        <div class="phone" id="ph3">
+          <div class="pstatus"><span>13:24</span><span class="sic">
+            <svg width="16" height="11" viewBox="0 0 16 11" fill="currentColor"><rect x="0" y="7" width="3" height="4" rx="1"/><rect x="4.5" y="4.5" width="3" height="6.5" rx="1"/><rect x="9" y="2" width="3" height="9" rx="1"/><rect x="13.5" y="0" width="2.5" height="11" rx="1"/></svg>
+            <svg width="14" height="11" viewBox="0 0 14 11" fill="currentColor"><rect x="0" y="1.5" width="12" height="8" rx="2" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="2" y="3.5" width="7" height="4" rx="1"/><rect x="12.5" y="4" width="1.5" height="3" rx="0.8"/></svg>
+          </span></div>
+          <div class="scr">
+            <div class="full">
+              <span class="d1"></span><span class="d2"></span>
+              <div class="top">
+                <span class="logo">
+                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 11h16c0 5-3.6 9-8 9s-8-4-8-9z"/><path d="M2 11h20M9 7c0-1.5 1.3-1.8 1.3-3.2M13.5 7c0-1.5 1.3-1.8 1.3-3.2"/></svg>
+                </span>
+                <div class="store">常安南越南粉（金嘉店）</div>
+                <span class="pill">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M3 7h13l3 4v8H3z"/><circle cx="7" cy="19" r="1.8"/><circle cx="16" cy="19" r="1.8"/></svg>
+                  自取
+                </span>
+              </div>
+              <div class="mid">
+                <div class="tbl-card">
+                  <span class="ic">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8h12l-1.2 10.5a2 2 0 0 1-2 1.5H9.2a2 2 0 0 1-2-1.5z"/><path d="M9.5 8V6.5a2.5 2.5 0 0 1 5 0V8"/></svg>
+                  </span>
+                  <div style="min-width:0">
+                    <div class="lab">取餐方式</div>
+                    <div class="val">落單後攞取餐號</div>
+                  </div>
+                  <span style="font-size:10px;color:var(--s-400)">冇枱</span>
+                </div>
+                <div class="lnbtns" style="margin-top:14px">
+                  <button class="lnbtn white" data-k="go" data-dest="→ 會員登入（電話＋PIN）">
+                    <span class="ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M3 10h18M7 15h4"/></svg></span>
+                    <span class="tx"><span class="t">會員點餐</span><span class="s">儲值餘額即扣 · 結帳更快</span></span>
+                    <span class="arr"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg></span>
+                  </button>
+                  <button class="lnbtn frost" data-k="go" data-dest="→ 直接進入菜單（唔使登入）">
+                    <span class="ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="8" r="4"/><path d="M4.5 21c0-4 3.4-6.5 7.5-6.5s7.5 2.5 7.5 6.5"/></svg></span>
+                    <span class="tx"><span class="t">非會員點餐</span><span class="s">直接點餐 · 到前台付款</span></span>
+                    <span class="arr"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg></span>
+                  </button>
+                </div>
+              </div>
+              <div class="foot">去到櫃檯報號碼就得<br/>忘記 PIN？請到前台由店員協助</div>
+            </div>
+          </div>
+          <div class="toast" data-role="toast"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ════════ 第二行 ════════ -->
+    <div class="grid3">
+
+      <!-- ④ 枱有單 → 直接睇明細 -->
+      <div class="cell">
+        <div class="cellhead">
+          <span class="cellnum">④</span><span class="celltitle">張枱已有單 → 直接睇明細</span>
+          <span class="cellsub">唔出 Landing · 現有邏輯（你答嘅第 3 題）</span>
+        </div>
+        <div class="phone" id="ph4">
+          <div class="pstatus"><span>13:24</span><span class="sic">
+            <svg width="16" height="11" viewBox="0 0 16 11" fill="currentColor"><rect x="0" y="7" width="3" height="4" rx="1"/><rect x="4.5" y="4.5" width="3" height="6.5" rx="1"/><rect x="9" y="2" width="3" height="9" rx="1"/><rect x="13.5" y="0" width="2.5" height="11" rx="1"/></svg>
+            <svg width="14" height="11" viewBox="0 0 14 11" fill="currentColor"><rect x="0" y="1.5" width="12" height="8" rx="2" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="2" y="3.5" width="7" height="4" rx="1"/><rect x="12.5" y="4" width="1.5" height="3" rx="0.8"/></svg>
+          </span></div>
+          <div class="scr">
+            <div class="od">
+              <div class="od-hero">
+                <span class="d1"></span>
+                <span class="od-tick">
+                  <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l5.5 5.5L20 6"/></svg>
+                </span>
+                <div class="od-title">本枱已落單</div>
+                <div class="od-sub">枱號 A3 · 製作中<br/>如需加點，請按下面「加單」</div>
+              </div>
+              <div class="od-body">
+                <div class="od-card">
+                  <div class="h"><span>本枱訂單</span><span style="font-size:10px;color:var(--o-600)">製作中</span></div>
+                  <div class="od-item">
+                    <span class="th" style="background:linear-gradient(135deg,#fdba74,#f97316)">火</span>
+                    <div style="min-width:0"><div class="nm">越經典火車頭</div><div class="qy">x1 份 · 會員價</div></div>
+                    <div class="pr">MOP 31.90</div>
+                  </div>
+                  <div class="od-item">
+                    <span class="th" style="background:linear-gradient(135deg,#fca5a5,#ef4444)">河</span>
+                    <div style="min-width:0"><div class="nm">越南特別生牛肉湯河粉</div><div class="qy">x1 份 · 會員價</div></div>
+                    <div class="pr">MOP 22.90</div>
+                  </div>
+                  <div class="od-sum"><span class="l">共 2 份</span><span class="r">總計 MOP 54.80</span></div>
+                </div>
+                <div class="od-card">
+                  <div class="h" style="margin-bottom:4px"><span style="font-size:11px;color:var(--s-500);font-weight:600">落單時間 13:47 · 落單方式：掃碼</span></div>
+                </div>
+              </div>
+              <div class="od-btns">
+                <button class="od-add" data-k="go" data-dest="→ 進入菜單加單（同一張單）">加單</button>
+                <div class="od-tip">結帳請到前台 · 會員可扣儲值餘額</div>
+              </div>
+            </div>
+          </div>
+          <div class="toast" data-role="toast"></div>
+        </div>
+      </div>
+
+      <!-- ⑤ 第二次掃碼 -->
+      <div class="cell">
+        <div class="cellhead">
+          <span class="cellnum">⑤</span><span class="celltitle">第二次掃碼 · 已記住會員</span>
+          <span class="cellsub">要起設備記憶票先做到</span>
+        </div>
+        <div class="phone" id="ph5">
+          <div class="pstatus"><span>13:24</span><span class="sic">
+            <svg width="16" height="11" viewBox="0 0 16 11" fill="currentColor"><rect x="0" y="7" width="3" height="4" rx="1"/><rect x="4.5" y="4.5" width="3" height="6.5" rx="1"/><rect x="9" y="2" width="3" height="9" rx="1"/><rect x="13.5" y="0" width="2.5" height="11" rx="1"/></svg>
+            <svg width="14" height="11" viewBox="0 0 14 11" fill="currentColor"><rect x="0" y="1.5" width="12" height="8" rx="2" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="2" y="3.5" width="7" height="4" rx="1"/><rect x="12.5" y="4" width="1.5" height="3" rx="0.8"/></svg>
+          </span></div>
+          <div class="scr">
+            <div class="full">
+              <span class="d1"></span><span class="d2"></span>
+              <div class="top">
+                <span class="logo">
+                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 11h16c0 5-3.6 9-8 9s-8-4-8-9z"/><path d="M2 11h20M9 7c0-1.5 1.3-1.8 1.3-3.2M13.5 7c0-1.5 1.3-1.8 1.3-3.2"/></svg>
+                </span>
+                <div class="store">歡迎返嚟</div>
+                <span class="pill">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M5 4v15M5 19h14M8 9h11M8 13h11"/></svg>
+                  堂食 · 枱號 A3
+                </span>
+              </div>
+              <div class="mid">
+                <div class="back-card">
+                  <span class="av">
+                    <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="8" r="4"/><path d="M4.5 21c0-4 3.4-6.5 7.5-6.5s7.5 2.5 7.5 6.5"/></svg>
+                  </span>
+                  <div style="min-width:0">
+                    <div class="nm">阿傑</div>
+                    <div class="bal">儲值餘額 MOP 128.00</div>
+                  </div>
+                  <button class="swap" data-k="logout">唔係我</button>
+                </div>
+                <div class="lnbtns" style="margin-top:14px">
+                  <button class="lnbtn white" data-k="go" data-dest="→ 直接入菜單（身份已記住 · 扣款時先要 PIN）">
+                    <span class="ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M3 10h18M7 15h4"/></svg></span>
+                    <span class="tx"><span class="t">繼續以阿傑點餐</span><span class="s">上次登入：3 日前 · 結帳時先入 PIN</span></span>
+                    <span class="arr"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg></span>
+                  </button>
+                  <button class="lnbtn frost" data-k="go" data-dest="→ 直接進入菜單（唔使登入）">
+                    <span class="ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="8" r="4"/><path d="M4.5 21c0-4 3.4-6.5 7.5-6.5s7.5 2.5 7.5 6.5"/></svg></span>
+                    <span class="tx"><span class="t">非會員點餐</span><span class="s">今次唔用會員 · 到前台付款</span></span>
+                    <span class="arr"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg></span>
+                  </button>
+                </div>
+              </div>
+              <div class="foot">換人用手機？撳「唔係我」清除記憶<br/>記住身份 ≠ 記住錢包：扣款仍然要 PIN</div>
+            </div>
+          </div>
+          <div class="toast" data-role="toast"></div>
+        </div>
+      </div>
+
+      <!-- ⑥ 三題確認 -->
+      <div class="cell">
+        <div class="cellhead">
+          <span class="cellnum">⑥</span><span class="celltitle">你三題答案 → 系統點做</span>
+          <span class="cellsub">開發量縮到淨低 UI</span>
+        </div>
+        <div class="panel">
+          <div class="h1">逐題對返程式碼</div>
+
+          <div class="qrow q1">
+            <b>① 座位 = 現有枱號（tableId）</b><br/>
+            ⇒ 唔使新欄位。而家落單本身就係帶 <code>tableId</code>（<code>/menu?tableId=</code>），訂單、出紙、桌台總覽全部照舊。「揀座位」降級成<b>「確認／改枱號」</b>（①+② 號版面）。
+          </div>
+
+          <div class="qrow q2">
+            <b>② 每張枱一個 QR</b><br/>
+            ⇒ 枱號由 QR 帶入，客人<b>唔使自己揀</b>；「改枱號」只係防坐錯枱／拼枱。<code>/quick</code> 快餐繼續全店一碼、冇枱（③ 號）。
+          </div>
+
+          <div class="qrow q3">
+            <b>③ 張枱有人 → 直接睇張單明細</b><br/>
+            ⇒ <b>呢個已經係現有邏輯</b>：<code>scan-order-page.tsx:379</code> landing 閘係 <code>!started && !activeTableOrder</code> —— 有單就<b>唔出 landing</b>，直接跳 <code>:434</code>「本枱已落單」（明細＋加單）。所以<b>「有人」唔使新起佔用狀態</b>：有人 = 有未結帳單 = 現有 <code>activeTableOrder</code>。
+          </div>
+
+          <div class="nsec">
+            <div class="nsec-h"><i class="g"></i>開發量（大幅縮細）</div>
+            <div class="kv"><span class="k">座位主檔</span><span class="v">唔使（用返枱號）</span></div>
+            <div class="kv"><span class="k">佔用狀態 API</span><span class="v">唔使（用 activeTableOrder）</span></div>
+            <div class="kv"><span class="k">新訂單欄位</span><span class="v">唔使</span></div>
+            <div class="kv"><span class="k">出紙模板</span><span class="v">唔使改（繼續印枱號）</span></div>
+            <div class="kv"><span class="k">Landing UI</span><span class="v">換皮＋枱號條＋改枱號 sheet</span></div>
+            <div class="kv"><span class="k">改枱號</span><span class="v">換 URL 嘅 tableId，重新載入訂單</span></div>
+          </div>
+
+          <div class="ok">
+            <b>仲要起嘅</b>：設備記憶票（⑤ 號：第二次唔使再揀會員）—— 簽發／換取／到期 30 日／「唔係我」撤銷；機上只存 token 或 customerId，扣款仍然要 PIN。
+          </div>
+
+          <div class="nsec">
+            <div class="nsec-h"><i class="r"></i>唔建議做</div>
+            <div class="nitem">喺客人端顯示「邊張枱有人」嘅平面圖 —— 要佔用狀態 API，而客人其實唔需要知（佢坐低嗰張就係佢嘅）。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+function fit(){
+  if (typeof window === "undefined" || typeof document === "undefined") return;
+  var stage = document.getElementById("stage");
+  var canvas = document.getElementById("canvas");
+  if (!stage || !canvas) return;
+  var w = stage.clientWidth || 1360;
+  var s = Math.min(1, Math.max(w / 1360, 0.42));
+  canvas.style.transform = "scale(" + s + ")";
+  stage.style.height = Math.round(1628 * s) + "px";
+  stage.style.overflowX = (1360 * s > w) ? "auto" : "hidden";
+}
+if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+  window.addEventListener("resize", fit);
+  fit();
+}
+
+(function(){
+  function toast(phone, text){
+    var t = phone.querySelector('[data-role="toast"]');
+    if (!t) return;
+    t.textContent = text;
+    t.classList.add("on");
+    if (typeof setTimeout === "function"){ setTimeout(function(){ t.classList.remove("on"); }, 1500); }
+  }
+  function closest(el, sel){
+    if (el.closest) return el.closest(sel);
+    var n = el;
+    while (n && n.nodeType === 1){
+      var list = n.parentNode ? n.parentNode.querySelectorAll(sel) : [];
+      for (var i = 0; i < list.length; i++){ if (list[i] === n) return n; }
+      n = n.parentNode;
+    }
+    return null;
+  }
+  function setSheet(phone, open){
+    var ov = phone.querySelector('[data-role="ov"]');
+    var sh = phone.querySelector(".sheet");
+    if (ov) ov.style.display = open ? "block" : "none";
+    if (sh) sh.style.display = open ? "block" : "none";
+  }
+  function pickTable(el){
+    var grid = el.parentNode;
+    var all = grid.querySelectorAll(".tb");
+    for (var i = 0; i < all.length; i++){
+      all[i].classList.toggle("on", all[i] === el);
+    }
+    return { name: el.querySelector(".n").textContent, busy: el.classList.contains("busy") };
+  }
+  var handlers = {
+    "open-sheet": function(el){ var p = closest(el, ".phone"); if (p) setSheet(p, true); },
+    "close-sheet": function(el){ var p = closest(el, ".phone"); if (p) setSheet(p, false); },
+    "tb": function(el){
+      var r = pickTable(el);
+      var p = closest(el, ".phone");
+      if (p) toast(p, r.busy ? "→ 直接睇 " + r.name + " 嘅訂單明細" : "→ 已揀 " + r.name + "（空枱）");
+    },
+    "confirm-tb": function(el){
+      var p = closest(el, ".phone");
+      if (!p) return;
+      var on = p.querySelector(".tb.on");
+      var name = on ? on.querySelector(".n").textContent : "A3";
+      var val = p.querySelector('[data-role="tblval"]');
+      if (val) val.textContent = "枱號 " + name;
+      setSheet(p, false);
+      toast(p, on && on.classList.contains("busy") ? "→ " + name + " 有單，直接睇明細" : "→ 已改去 " + name);
+    },
+    "logout": function(el){ var p = closest(el, ".phone"); if (p) toast(p, "→ 清除記憶，回到「揀會員／非會員」"); },
+    "go": function(el){ var p = closest(el, ".phone"); if (p) toast(p, el.getAttribute("data-dest") || ""); }
+  };
+  var els = document.querySelectorAll("[data-k]");
+  for (var i = 0; i < els.length; i++){
+    (function(el){
+      el.onclick = function(){ var h = handlers[el.getAttribute("data-k")]; if (h) h(el); };
+    })(els[i]);
+  }
+  // ① 號版面：sheet 預設閂（佢冇 sheet 元素，冇影響）
+  var p1 = document.getElementById("ph1");
+  if (p1) setSheet(p1, false);
+  var p2 = document.getElementById("ph2");
+  if (p2) setSheet(p2, true);
+})();
+</script>
+</body>
+</html>

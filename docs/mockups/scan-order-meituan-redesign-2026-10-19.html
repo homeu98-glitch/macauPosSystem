@@ -1,0 +1,896 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8" />
+<title>掃碼點餐 UI 優化確認稿 — 參考美團結構 · 保留我哋風格（2026-10-19）</title>
+<style>
+:root{
+  --o-50:#fff7ed; --o-100:#ffedd5; --o-200:#fed7aa; --o-500:#f97316; --o-600:#ea580c; --o-700:#c2410c;
+  --s-50:#fafaf9; --s-100:#f5f5f4; --s-200:#e7e5e4; --s-300:#d6d3d1; --s-400:#a8a29e;
+  --s-500:#78716c; --s-600:#57534e; --s-700:#44403c; --s-800:#292524; --s-900:#1c1917;
+  --em-50:#ecfdf5; --em-500:#10b981; --em-600:#059669; --em-700:#047857;
+  --red-500:#ef4444;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{
+  background:#e9ebef;color:var(--s-900);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang TC","Microsoft JhengHei","Microsoft YaHei",sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+
+/* ─────────── 審稿工具列（深色區唔屬產品介面） ─────────── */
+.chrome{max-width:1360px;margin:0 auto;padding:22px 24px 12px}
+.chrome-h{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.chrome-title{font-size:16px;font-weight:800;color:#0f172a}
+.chrome-note{font-size:11px;font-weight:600;color:#475569;background:#fff;border:1px solid #dbe3ec;border-radius:9999px;padding:4px 11px}
+.chrome-note.orange{color:var(--o-700);border-color:var(--o-200);background:var(--o-50)}
+.chrome-note.gray{color:var(--s-500);border-color:var(--s-300)}
+.chrome-sub{margin-top:8px;font-size:12px;color:#475569;line-height:1.8;max-width:1100px}
+.chrome-sub b{color:#0f172a}
+
+/* ─────────── 固定畫布 + 等比縮放（全檔零 @media） ─────────── */
+.stage{max-width:1360px;margin:0 auto;position:relative;overflow:hidden;border-radius:22px;
+  box-shadow:0 18px 44px rgba(15,23,42,.16);background:var(--s-100)}
+.canvas{width:1360px;height:1628px;position:absolute;top:0;left:0;transform-origin:top left;
+  display:flex;flex-direction:column;padding:24px 40px 32px;gap:26px;overflow:hidden;background:var(--s-100)}
+.grid3{display:grid;grid-template-columns:repeat(3,368px);gap:28px;justify-content:center}
+
+/* 每格：標題 + 手機/面板 */
+.cell{display:flex;flex-direction:column;gap:8px;min-width:0}
+.cellhead{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.cellnum{font-size:12px;font-weight:800;color:var(--o-600)}
+.celltitle{font-size:13px;font-weight:700;color:var(--s-800)}
+.cellsub{font-size:11px;color:var(--s-500)}
+
+.phone{width:368px;height:744px;flex:none;background:#fff;border:1px solid var(--s-200);
+  border-radius:26px;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 10px 26px rgba(28,25,23,.10)}
+
+/* 手機狀態列 */
+.pstatus{flex:none;height:26px;display:flex;align-items:center;justify-content:space-between;
+  padding:0 20px;font-size:11px;font-weight:700;color:var(--s-800);background:#fff}
+.pstatus .sic{display:flex;align-items:center;gap:5px}
+.pstatus svg{display:block}
+
+/* 通用：底部分頁 tab bar */
+.tabbar{flex:none;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));background:#fff;
+  border-top:1px solid var(--s-100);padding:5px 0 7px}
+.tab{display:flex;flex-direction:column;align-items:center;gap:2px;color:var(--s-400);
+  font-size:9px;font-weight:600;cursor:pointer;background:none;border:0;font-family:inherit;padding:0}
+.tab svg{width:20px;height:20px}
+.tab.on{color:var(--o-500)}
+
+/* 通用：頭欄（返回 / 標題 / 更多） */
+.navhead{flex:none;background:#fff;display:grid;grid-template-columns:32px minmax(0,1fr) 32px;
+  align-items:center;padding:4px 12px 8px;gap:4px}
+.navhead .nt{font-size:15px;font-weight:700;color:var(--s-900);text-align:center}
+.iconbtn{width:30px;height:30px;border-radius:50%;background:var(--s-100);border:0;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;color:var(--s-600)}
+.iconbtn svg{width:15px;height:15px}
+
+/* ═══════════ ① 而家嘅掃碼點餐 ═══════════ */
+.p1-head{flex:none;background:#fff;padding:8px 14px;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:start}
+.p1-name{font-size:15px;font-weight:700;color:var(--s-900);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.p1-sub{margin-top:4px;display:flex;align-items:center;gap:6px}
+.p1-dine{display:inline-flex;align-items:center;background:var(--o-50);color:var(--o-700);
+  font-size:10px;font-weight:600;border-radius:9999px;padding:3px 8px}
+.p1-mem{display:flex;flex-direction:column;align-items:flex-end;background:var(--em-50);
+  border-radius:10px;padding:5px 8px}
+.p1-mem .n{font-size:10px;font-weight:700;color:var(--em-700);max-width:76px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.p1-mem .b{font-size:9px;color:var(--em-600);margin-top:1px}
+.p1-chips{flex:none;display:flex;gap:6px;padding:9px 14px;overflow-x:auto;background:#fff;border-bottom:1px solid var(--s-100)}
+.p1-chip{flex:none;white-space:nowrap;font-size:11px;font-weight:600;border-radius:9999px;padding:5px 12px;
+  background:var(--s-100);color:var(--s-600);border:0;font-family:inherit;cursor:pointer}
+.p1-chip.on{background:var(--s-900);color:#fff}
+.p1-list{flex:1;min-height:0;overflow-y:auto;padding:10px 14px;display:flex;flex-direction:column;gap:8px;background:var(--s-50)}
+.p1-dish{flex:none;display:grid;grid-template-columns:56px minmax(0,1fr) auto;gap:10px;align-items:center;
+  background:#fff;border-radius:14px;padding:9px 10px;box-shadow:0 1px 2px rgba(28,25,23,.04)}
+.p1-dish .nm{font-size:13px;font-weight:600;color:var(--s-900);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.p1-dish .pr{font-size:12px;font-weight:600;color:var(--o-600);margin-top:3px}
+.p1-add{width:30px;height:30px;border-radius:50%;background:var(--o-500);color:#fff;border:0;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:600;line-height:1}
+.p1-cartbar{flex:none;background:#fff;border-top:1px solid var(--s-200);padding:9px 12px}
+.p1-cart{display:flex;align-items:center;justify-content:space-between;background:var(--o-500);
+  border-radius:14px;padding:11px 14px;color:#fff}
+.p1-cart .l{display:flex;align-items:center;gap:8px;min-width:0}
+.p1-cart .badge{position:relative;display:flex;align-items:center;justify-content:center;width:26px;height:26px;
+  border-radius:50%;background:rgba(255,255,255,.22)}
+.p1-cart .badge i{position:absolute;top:-4px;right:-5px;width:15px;height:15px;border-radius:50%;
+  background:var(--s-900);color:#fff;font-size:9px;font-style:normal;font-weight:700;display:flex;align-items:center;justify-content:center}
+.p1-cart .sum{font-size:12px;font-weight:600}
+.p1-cart .r{font-size:13px;font-weight:700}
+
+/* ═══════════ ② 優化後 · 點餐主頁 ═══════════ */
+.p2-head{flex:none;background:#fff;padding:6px 14px 10px}
+.p2-row1{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center}
+.p2-name{font-size:15px;font-weight:700;color:var(--s-900);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.p2-table{display:inline-flex;align-items:center;gap:4px;margin-top:4px;background:var(--o-50);color:var(--o-700);
+  font-size:10px;font-weight:600;border-radius:9999px;padding:3px 9px}
+.p2-hicons{display:flex;align-items:center;gap:7px}
+.p2-avatar{width:30px;height:30px;border-radius:50%;background:linear-gradient(135deg,#fdba74,#f97316);
+  display:flex;align-items:center;justify-content:center;color:#fff}
+.p2-mstrip{margin-top:9px;display:grid;grid-template-columns:32px minmax(0,1fr) auto;gap:9px;align-items:center;
+  background:var(--o-50);border-radius:12px;padding:8px 10px}
+.p2-mstrip .av{width:32px;height:32px;border-radius:50%;background:linear-gradient(135deg,#fdba74,#f97316);
+  display:flex;align-items:center;justify-content:center;color:#fff}
+.p2-mstrip .hi{font-size:11px;font-weight:700;color:var(--s-800)}
+.p2-mstrip .lv{display:inline-flex;align-items:center;margin-top:2px;background:#fff;color:var(--o-600);
+  font-size:9px;font-weight:600;border-radius:9999px;padding:2px 7px}
+.p2-mstrip .rt{display:flex;flex-direction:column;align-items:flex-end;gap:1px}
+.p2-mstrip .bal{display:flex;align-items:center;gap:2px;font-size:11px;font-weight:700;color:var(--o-600)}
+.p2-mstrip .bal svg{width:10px;height:10px}
+.p2-mstrip .sub{font-size:9px;color:var(--s-400)}
+.p2-body{flex:1;min-height:0;display:grid;grid-template-columns:68px minmax(0,1fr);overflow:hidden}
+.rail{background:#fff;border-right:1px solid var(--s-100);overflow-y:auto;padding:6px 0;display:flex;flex-direction:column}
+.rail-item{position:relative;border:0;background:none;font-family:inherit;cursor:pointer;
+  padding:11px 4px;font-size:11px;font-weight:600;color:var(--s-500);text-align:center}
+.rail-item.on{color:var(--o-600);font-weight:700;background:var(--s-50)}
+.rail-item.on::before{content:"";position:absolute;left:0;top:20%;bottom:20%;width:3px;border-radius:2px;background:var(--o-500)}
+.p2-list{overflow-y:auto;background:var(--s-50);padding:10px 12px 14px;display:flex;flex-direction:column;gap:10px}
+.sec-h{display:flex;align-items:center;gap:6px}
+.sec-h i{width:4px;height:13px;border-radius:2px;background:var(--o-500)}
+.sec-h span{font-size:13px;font-weight:700;color:var(--s-900)}
+.p2-dish{flex:none;display:grid;grid-template-columns:84px minmax(0,1fr);gap:10px;background:#fff;
+  border-radius:14px;padding:10px;box-shadow:0 1px 2px rgba(28,25,23,.04)}
+.p2-imgwrap{position:relative}
+.p2-img{width:84px;height:84px;border-radius:12px;display:flex;align-items:center;justify-content:center;
+  color:#fff;font-size:20px;font-weight:700}
+.img-a{background:linear-gradient(135deg,#fdba74,#f97316)}
+.img-b{background:linear-gradient(135deg,#fca5a5,#ef4444)}
+.img-c{background:linear-gradient(135deg,#fcd34d,#f59e0b)}
+.img-d{background:linear-gradient(135deg,#a7f3d0,#10b981)}
+.p2-badge{position:absolute;top:6px;left:6px;font-size:9px;font-weight:700;color:#fff;
+  border-radius:6px;padding:2px 6px;background:var(--o-500)}
+.p2-badge.rec{background:var(--em-500)}
+.p2-info{min-width:0;display:flex;flex-direction:column}
+.p2-dname{font-size:13px;font-weight:600;color:var(--s-900);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.p2-tags{display:flex;align-items:center;gap:5px;margin-top:4px;flex-wrap:wrap}
+.p2-tag{display:inline-flex;align-items:center;font-size:9px;font-weight:600;border-radius:5px;padding:2px 6px;
+  background:var(--o-50);color:var(--o-600)}
+.p2-tag.rec{background:var(--em-50);color:var(--em-600)}
+.p2-tag.plain{background:var(--s-100);color:var(--s-500)}
+.p2-desc{font-size:10px;color:var(--s-400);margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.p2-pricerow{margin-top:auto;padding-top:6px;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:end}
+.p2-price{font-size:15px;font-weight:700;color:var(--o-600);white-space:nowrap}
+.p2-price small{font-size:9px;font-weight:600;color:var(--s-400);margin-left:3px}
+.p2-orig{font-size:10px;color:var(--s-400);text-decoration:line-through;margin-left:5px}
+.p2-spec{display:inline-flex;align-items:center;background:var(--o-500);color:#fff;font-size:11px;font-weight:600;
+  border-radius:9999px;padding:6px 13px;border:0;font-family:inherit;cursor:pointer;white-space:nowrap}
+.act-plus{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:50%;
+  background:var(--o-500);color:#fff;border:0;cursor:pointer;font-size:16px;font-weight:600;line-height:1}
+.act-step{display:none;align-items:center;gap:8px}
+.act-step .q{min-width:14px;text-align:center;font-size:13px;font-weight:700;color:var(--s-900)}
+.stp{width:24px;height:24px;border-radius:50%;border:0;cursor:pointer;display:flex;align-items:center;justify-content:center;
+  font-size:14px;font-weight:700;line-height:1}
+.stp.minus{background:var(--s-100);color:var(--s-600)}
+.stp.plus{background:var(--o-500);color:#fff}
+.p2-dish.has-qty .act-plus{display:none}
+.p2-dish.has-qty .act-step{display:inline-flex}
+.p2-cartbar{flex:none;background:#fff;border-top:1px solid var(--s-200);padding:8px 12px;
+  display:flex;align-items:center;justify-content:space-between;gap:10px}
+.p2-cartbar .l{display:flex;align-items:center;gap:9px;min-width:0}
+.p2-cartbar .cicon{position:relative;width:34px;height:34px;border-radius:50%;background:var(--o-500);
+  display:flex;align-items:center;justify-content:center;color:#fff}
+.p2-cartbar .cicon i{position:absolute;top:-4px;right:-5px;min-width:16px;height:16px;border-radius:9999px;
+  background:var(--s-900);color:#fff;font-size:9px;font-style:normal;font-weight:700;display:flex;align-items:center;justify-content:center;padding:0 4px}
+.p2-cartbar .tot{font-size:14px;font-weight:700;color:var(--s-900);white-space:nowrap}
+.p2-cartbar .hint{font-size:9px;color:var(--s-400);margin-top:1px}
+.p2-checkout{background:var(--o-500);color:#fff;font-size:13px;font-weight:700;border-radius:9999px;
+  padding:10px 22px;border:0;font-family:inherit;cursor:pointer;white-space:nowrap}
+
+/* ═══════════ ③ 訂單列表 ═══════════ */
+.p3-chips{flex:none;display:flex;gap:18px;padding:2px 16px 9px;background:#fff;border-bottom:1px solid var(--s-100)}
+.p3-chip{position:relative;border:0;background:none;font-family:inherit;cursor:pointer;font-size:12px;
+  font-weight:600;color:var(--s-500);padding:2px 0}
+.p3-chip.on{color:var(--o-600);font-weight:700}
+.p3-chip.on::after{content:"";position:absolute;left:50%;transform:translateX(-50%);bottom:-4px;
+  width:16px;height:2.5px;border-radius:2px;background:var(--o-500)}
+.p3-list{flex:1;min-height:0;overflow-y:auto;background:var(--s-50);padding:10px 12px;
+  display:flex;flex-direction:column;gap:10px}
+.o-card{flex:none;background:#fff;border-radius:16px;padding:11px 12px;box-shadow:0 1px 2px rgba(28,25,23,.04)}
+.o-row1{display:flex;align-items:center;gap:6px}
+.o-dine{display:inline-flex;align-items:center;flex:none;background:var(--o-50);color:var(--o-600);
+  font-size:9px;font-weight:700;border-radius:5px;padding:2px 6px}
+.o-shop{font-size:12px;font-weight:600;color:var(--s-900);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;flex:1}
+.o-status{flex:none;font-size:10px;font-weight:600}
+.o-status.doing{color:var(--o-600)}
+.o-status.done{color:var(--s-400)}
+.o-date{font-size:10px;color:var(--s-400);margin-top:3px}
+.o-row3{margin-top:9px;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center}
+.o-thumbs{display:flex;align-items:center}
+.o-thumb{width:46px;height:46px;border-radius:10px;border:2px solid #fff;display:flex;align-items:center;
+  justify-content:center;color:#fff;font-size:13px;font-weight:700}
+.o-thumb + .o-thumb{margin-left:-10px}
+.o-more{width:46px;height:46px;border-radius:10px;background:var(--s-100);color:var(--s-400);
+  display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:600;margin-left:-10px;border:2px solid #fff}
+.o-amt{text-align:right}
+.o-amt .p{font-size:14px;font-weight:700;color:var(--s-900)}
+.o-amt .c{font-size:10px;color:var(--s-400);margin-top:2px}
+.o-row4{margin-top:9px;display:flex;justify-content:flex-end}
+.o-link{display:inline-flex;align-items:center;gap:2px;background:none;border:0;font-family:inherit;cursor:pointer;
+  font-size:10px;font-weight:600;color:var(--o-600)}
+.o-link svg{width:9px;height:9px}
+.p3-more{display:flex;align-items:center;justify-content:center;gap:4px;font-size:10px;color:var(--s-400);padding:2px 0 4px}
+.p3-more svg{width:11px;height:11px}
+
+/* ═══════════ ④ 訂單詳情 ═══════════ */
+.p4-body{flex:1;min-height:0;overflow-y:auto;background:var(--s-50);padding:12px;
+  display:flex;flex-direction:column;gap:10px}
+.p4-status{background:#fff;border-radius:16px;padding:16px 12px 14px;text-align:center}
+.p4-status .big{font-size:19px;font-weight:700;color:var(--s-900)}
+.p4-status .sub{font-size:10px;color:var(--s-500);margin-top:4px}
+.p4-shop{background:#fff;border-radius:16px;padding:11px 12px;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center}
+.p4-shop .nm{font-size:12px;font-weight:600;color:var(--s-900)}
+.p4-shop .ad{font-size:10px;color:var(--s-400);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.p4-shop .acts{display:flex;gap:7px}
+.p4-items{background:#fff;border-radius:16px;padding:2px 12px}
+.p4-item{display:grid;grid-template-columns:50px minmax(0,1fr) auto;gap:10px;align-items:center;padding:10px 0}
+.p4-item + .p4-item{border-top:1px solid var(--s-100)}
+.p4-item .nm{font-size:12px;font-weight:600;color:var(--s-900);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.p4-item .qty{font-size:10px;color:var(--s-400);margin-top:4px}
+.p4-item .pr{font-size:12px;font-weight:600;color:var(--s-900);text-align:right;white-space:nowrap}
+.p4-item .orig{font-size:9px;color:var(--s-400);text-decoration:line-through;text-align:right;margin-top:2px}
+.p4-sum{background:#fff;border-radius:16px;padding:10px 12px;display:flex;align-items:center;justify-content:space-between}
+.p4-sum .l{font-size:11px;color:var(--s-500)}
+.p4-sum .r{font-size:14px;font-weight:700;color:var(--o-600)}
+.p4-info{background:#fff;border-radius:16px;padding:11px 12px}
+.p4-info .h{font-size:12px;font-weight:700;color:var(--s-900);margin-bottom:4px}
+.kv{display:grid;grid-template-columns:64px minmax(0,1fr);gap:10px;padding:5px 0;font-size:10px;align-items:center}
+.kv .k{color:var(--s-400)}
+.kv .v{color:var(--s-700);text-align:right;display:flex;align-items:center;justify-content:flex-end;gap:5px;min-width:0}
+.kv .v .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:9.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.copypill{flex:none;background:var(--s-100);color:var(--s-600);font-size:9px;font-weight:600;border-radius:5px;
+  padding:2px 7px;border:0;font-family:inherit;cursor:pointer}
+.p4-again{background:var(--o-500);color:#fff;font-size:13px;font-weight:700;border-radius:14px;
+  padding:12px;border:0;font-family:inherit;cursor:pointer;width:100%}
+
+/* ═══════════ ⑤ 個人中心 ═══════════ */
+.p5-body{flex:1;min-height:0;overflow-y:auto;background:var(--s-50);padding:12px;
+  display:flex;flex-direction:column;gap:10px}
+.member-card{flex:none;border-radius:18px;padding:14px;color:#fff;
+  background:linear-gradient(135deg,#fb923c 0%,#ea580c 100%);box-shadow:0 6px 16px rgba(234,88,12,.25)}
+.member-card .r1{display:grid;grid-template-columns:40px minmax(0,1fr) auto;gap:10px;align-items:center}
+.member-card .av{width:40px;height:40px;border-radius:50%;background:rgba(255,255,255,.22);
+  display:flex;align-items:center;justify-content:center}
+.member-card .nm{font-size:13px;font-weight:700}
+.member-card .lv{display:inline-flex;align-items:center;margin-top:4px;background:rgba(255,255,255,.2);
+  font-size:9px;font-weight:600;border-radius:9999px;padding:2px 8px}
+.member-card .qr{width:32px;height:32px;border-radius:9px;background:rgba(255,255,255,.2);
+  display:flex;align-items:center;justify-content:center}
+.member-card .qr-lab{font-size:8px;text-align:center;margin-top:3px;opacity:.85}
+.member-card .prog{margin-top:12px;height:5px;border-radius:9999px;background:rgba(255,255,255,.25);overflow:hidden}
+.member-card .prog i{display:block;width:42%;height:100%;border-radius:9999px;background:#fff}
+.member-card .prog-lab{font-size:9px;opacity:.9;margin-top:5px}
+.stats{flex:none;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.stat{background:#fff;border-radius:14px;padding:9px 6px;text-align:center}
+.stat .v{font-size:12px;font-weight:700;color:var(--s-900)}
+.stat .v.dash{color:var(--s-300)}
+.stat .l{font-size:9px;color:var(--s-400);margin-top:3px}
+.stat.na{background:var(--s-50);border:1px dashed var(--s-300)}
+.stat.na .v{color:var(--s-300);font-weight:600}
+.footnote{font-size:9px;color:var(--s-400);line-height:1.6}
+.p5-menu{flex:none;background:#fff;border-radius:16px;padding:2px 12px}
+.mrow{display:grid;grid-template-columns:22px minmax(0,1fr) 12px;gap:10px;align-items:center;padding:11px 0;
+  font-size:12px;color:var(--s-700);cursor:pointer}
+.mrow + .mrow{border-top:1px solid var(--s-100)}
+.mrow .mi{color:var(--s-400);display:flex;align-items:center}
+.mrow .mi svg{width:15px;height:15px}
+.mrow .chev{color:var(--s-300);display:flex}
+.mrow .chev svg{width:11px;height:11px}
+
+/* ═══════════ ⑥ 設計決策備忘 ═══════════ */
+.notes{width:368px;height:744px;flex:none;background:#fff;border:1px solid var(--s-200);border-radius:26px;
+  padding:14px 16px 12px;display:flex;flex-direction:column;gap:8px;overflow:hidden;min-height:0;
+  box-shadow:0 10px 26px rgba(28,25,23,.10)}
+.notes .h1{font-size:14px;font-weight:800;color:var(--s-900)}
+.notes .h2{font-size:10.5px;color:var(--s-500);line-height:1.6}
+.nsec{display:flex;flex-direction:column;gap:4px}
+.nsec-h{display:flex;align-items:center;gap:7px;font-size:12px;font-weight:700;color:var(--s-800)}
+.nsec-h i{width:4px;height:12px;border-radius:2px}
+.nsec-h i.o{background:var(--o-500)} .nsec-h i.g{background:var(--em-500)} .nsec-h i.s{background:var(--s-400)}
+.nitem{position:relative;font-size:10px;line-height:1.56;color:var(--s-600);padding-left:15px}
+.nitem::before{content:"";position:absolute;left:4px;top:6px;width:4px;height:4px;border-radius:50%;background:var(--s-300)}
+.nitem b{color:var(--s-900);font-weight:700}
+.nitem code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:9.5px;background:var(--s-100);
+  border-radius:4px;padding:1px 4px;color:var(--s-700)}
+.krow{display:grid;grid-template-columns:46px minmax(0,1fr) 12px minmax(0,1fr);gap:6px;
+  font-size:10px;padding:3px 0;border-bottom:1px dashed var(--s-200);align-items:center}
+.krow:last-child{border-bottom:0}
+.krow .lab{font-weight:700;color:var(--s-700)}
+.krow .old{color:var(--s-400)}
+.krow .arr{color:var(--o-500);text-align:center;font-weight:700}
+.krow .new{color:var(--s-900);font-weight:600}
+</style>
+</head>
+<body>
+
+<div class="chrome">
+  <div class="chrome-h">
+    <span class="chrome-title">掃碼點餐 UI 優化確認稿 — 參考美團結構 · 保留我哋風格</span>
+    <span class="chrome-note">深色／此區為審稿工具列，唔屬產品介面</span>
+    <span class="chrome-note orange">橙色 = 我哋現有主色 orange-500</span>
+    <span class="chrome-note gray">灰虛框 = 美團有丶我哋未做得（需後端）</span>
+  </div>
+  <div class="chrome-sub">
+    <b>對照用嘅示範資料刻意鏡像美團截圖</b>（火車頭會員價 MOP 31.9／河粉 22.9／總價 MOP 54.8、3 人就餐、已完成單），方便一格一格對住睇。
+    版面為確認稿：固定畫布等比縮放、零響應式斷點；按鈕可撳（分類切換、＋−、複製、分頁）。
+  </div>
+</div>
+
+<div class="stage" id="stage">
+  <div class="canvas" id="canvas">
+
+    <!-- ════════ 第一行 ════════ -->
+    <div class="grid3">
+
+      <!-- ① 而家 -->
+      <div class="cell">
+        <div class="cellhead">
+          <span class="cellnum">①</span><span class="celltitle">而家嘅掃碼點餐</span>
+          <span class="cellsub">橫向 chips · 細圖單欄 · 得一個購物車</span>
+        </div>
+        <div class="phone" id="ph1">
+          <div class="pstatus"><span>13:24</span><span class="sic">
+            <svg width="16" height="11" viewBox="0 0 16 11" fill="currentColor"><rect x="0" y="7" width="3" height="4" rx="1"/><rect x="4.5" y="4.5" width="3" height="6.5" rx="1"/><rect x="9" y="2" width="3" height="9" rx="1"/><rect x="13.5" y="0" width="2.5" height="11" rx="1"/></svg>
+            <svg width="14" height="11" viewBox="0 0 14 11" fill="currentColor"><rect x="0" y="1.5" width="12" height="8" rx="2" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="2" y="3.5" width="7" height="4" rx="1"/><rect x="12.5" y="4" width="1.5" height="3" rx="0.8"/></svg>
+          </span></div>
+          <div class="p1-head">
+            <div>
+              <div class="p1-name">常安南越南粉（金嘉店）</div>
+              <div class="p1-sub"><span class="p1-dine">堂食 · 枱號 1</span></div>
+            </div>
+            <div class="p1-mem"><span class="n">阿傑</span><span class="b">儲值餘額 MOP 128.00</span></div>
+          </div>
+          <div class="p1-chips">
+            <button class="p1-chip on">熱銷</button><button class="p1-chip">湯粉類</button><button class="p1-chip">小食類</button><button class="p1-chip">飲品類</button><button class="p1-chip">越南法包</button>
+          </div>
+          <div class="p1-list">
+            <div class="p1-dish"><div class="p2-img img-a" style="width:56px;height:56px;font-size:14px;border-radius:10px">火</div>
+              <div><div class="nm">越經典火車頭</div><div class="pr">MOP 31.90</div></div>
+              <button class="p1-add">+</button></div>
+            <div class="p1-dish"><div class="p2-img img-b" style="width:56px;height:56px;font-size:14px;border-radius:10px">河</div>
+              <div><div class="nm">越南特別生牛肉湯河粉</div><div class="pr">MOP 22.90</div></div>
+              <button class="p1-add">+</button></div>
+            <div class="p1-dish"><div class="p2-img img-c" style="width:56px;height:56px;font-size:14px;border-radius:10px">串</div>
+              <div><div class="nm">印尼沙爹雞肉串（1 串）</div><div class="pr">MOP 9.50</div></div>
+              <button class="p1-add">+</button></div>
+            <div class="p1-dish"><div class="p2-img img-d" style="width:56px;height:56px;font-size:14px;border-radius:10px">包</div>
+              <div><div class="nm">越南法包（法包夾肉）</div><div class="pr">MOP 18.00</div></div>
+              <button class="p1-add">+</button></div>
+          </div>
+          <div class="p1-cartbar">
+            <div class="p1-cart">
+              <span class="l"><span class="badge">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="9.5" cy="20" r="1.4"/><circle cx="17.5" cy="20" r="1.4"/><path d="M3 4h2.2l2.3 11h10.9l2.2-8H6.2"/></svg>
+                <i>2</i></span><span class="sum">MOP 54.80</span></span>
+              <span class="r">查看購物車</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ② 優化後點餐主頁 -->
+      <div class="cell">
+        <div class="cellhead">
+          <span class="cellnum">②</span><span class="celltitle">優化後 · 點餐主頁</span>
+          <span class="cellsub">左分類欄 · 大圖角標卡 · 會員價劃線 · 底部分頁</span>
+        </div>
+        <div class="phone" id="ph2">
+          <div class="pstatus"><span>13:24</span><span class="sic">
+            <svg width="16" height="11" viewBox="0 0 16 11" fill="currentColor"><rect x="0" y="7" width="3" height="4" rx="1"/><rect x="4.5" y="4.5" width="3" height="6.5" rx="1"/><rect x="9" y="2" width="3" height="9" rx="1"/><rect x="13.5" y="0" width="2.5" height="11" rx="1"/></svg>
+            <svg width="14" height="11" viewBox="0 0 14 11" fill="currentColor"><rect x="0" y="1.5" width="12" height="8" rx="2" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="2" y="3.5" width="7" height="4" rx="1"/><rect x="12.5" y="4" width="1.5" height="3" rx="0.8"/></svg>
+          </span></div>
+          <div class="p2-head">
+            <div class="p2-row1">
+              <div>
+                <div class="p2-name">常安南越南粉（金嘉店）</div>
+                <span class="p2-table">枱號 1 · 3 人就餐</span>
+              </div>
+              <div class="p2-hicons">
+                <button class="iconbtn" data-k="noop" aria-label="搜尋">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M16.5 16.5 21 21"/></svg>
+                </button>
+                <span class="p2-avatar">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="8" r="4"/><path d="M4.5 21c0-4 3.4-6.5 7.5-6.5s7.5 2.5 7.5 6.5"/></svg>
+                </span>
+              </div>
+            </div>
+            <div class="p2-mstrip">
+              <span class="av">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="8" r="4"/><path d="M4.5 21c0-4 3.4-6.5 7.5-6.5s7.5 2.5 7.5 6.5"/></svg>
+              </span>
+              <div>
+                <div class="hi">Hi 阿傑 · 儲值會員</div>
+                <span class="lv">結帳快人一步</span>
+              </div>
+              <div class="rt">
+                <span class="bal">儲值餘額 MOP 128.00
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg>
+                </span>
+                <span class="sub">優惠券 — · 積分 —＊</span>
+              </div>
+            </div>
+          </div>
+          <div class="p2-body">
+            <div class="rail" id="rail2">
+              <button class="rail-item on" data-k="cat">熱銷</button>
+              <button class="rail-item" data-k="cat">湯粉類</button>
+              <button class="rail-item" data-k="cat">小食類</button>
+              <button class="rail-item" data-k="cat">飲品類</button>
+              <button class="rail-item" data-k="cat">越南法包</button>
+            </div>
+            <div class="p2-list">
+              <div class="sec-h"><i></i><span>熱銷</span></div>
+              <div class="p2-dish has-qty" id="d1">
+                <div class="p2-imgwrap"><div class="p2-img img-a">火</div><span class="p2-badge">招牌菜</span></div>
+                <div class="p2-info">
+                  <div class="p2-dname">越經典火車頭</div>
+                  <div class="p2-tags"><span class="p2-tag">會員價</span><span class="p2-tag plain">8 人推薦</span></div>
+                  <div class="p2-desc">牛骨牛腩牛筋金錢腱・30 年傳統熬湯</div>
+                  <div class="p2-pricerow">
+                    <div><span class="p2-price">MOP 31.90<small>/份</small></span><span class="p2-orig">MOP 38</span></div>
+                    <div>
+                      <button class="p2-spec" data-k="spec">選規格</button>
+                      <span class="act-step"><button class="stp minus" data-k="minus" data-id="d1">−</button><span class="q">1</span><button class="stp plus" data-k="plus" data-id="d1">+</button></span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="p2-dish has-qty" id="d2">
+                <div class="p2-imgwrap"><div class="p2-img img-b">河</div><span class="p2-badge rec">推荐菜</span></div>
+                <div class="p2-info">
+                  <div class="p2-dname">越南特別生牛肉湯河粉</div>
+                  <div class="p2-tags"><span class="p2-tag">會員價</span></div>
+                  <div class="p2-desc">生牛肉片・安格斯牛腩・河粉</div>
+                  <div class="p2-pricerow">
+                    <div><span class="p2-price">MOP 22.90<small>/份</small></span><span class="p2-orig">MOP 26</span></div>
+                    <div>
+                      <button class="p2-spec" data-k="spec">選規格</button>
+                      <span class="act-step"><button class="stp minus" data-k="minus" data-id="d2">−</button><span class="q">1</span><button class="stp plus" data-k="plus" data-id="d2">+</button></span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="p2-dish" id="d3">
+                <div class="p2-imgwrap"><div class="p2-img img-c">串</div></div>
+                <div class="p2-info">
+                  <div class="p2-dname">印尼沙爹雞肉串（1 串）</div>
+                  <div class="p2-tags"><span class="p2-tag rec">回購高</span></div>
+                  <div class="p2-desc">一份為一根・感謝品嚐</div>
+                  <div class="p2-pricerow">
+                    <div><span class="p2-price">MOP 9.50<small>/串</small></span><span class="p2-orig">MOP 10</span></div>
+                    <div>
+                      <button class="act-plus" data-k="plus" data-id="d3">+</button>
+                      <span class="act-step"><button class="stp minus" data-k="minus" data-id="d3">−</button><span class="q">1</span><button class="stp plus" data-k="plus" data-id="d3">+</button></span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="p2-dish" id="d4">
+                <div class="p2-imgwrap"><div class="p2-img img-d">包</div></div>
+                <div class="p2-info">
+                  <div class="p2-dname">越南法包（法包夾肉）</div>
+                  <div class="p2-tags"><span class="p2-tag plain">人氣</span></div>
+                  <div class="p2-desc">法包・肉片・醃蘿蔔青瓜</div>
+                  <div class="p2-pricerow">
+                    <div><span class="p2-price">MOP 18.00<small>/份</small></span></div>
+                    <div><button class="act-plus" data-k="plus" data-id="d4">+</button>
+                      <span class="act-step"><button class="stp minus" data-k="minus" data-id="d4">−</button><span class="q">1</span><button class="stp plus" data-k="plus" data-id="d4">+</button></span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="p2-cartbar">
+            <div class="l">
+              <span class="cicon">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="9.5" cy="20" r="1.4"/><circle cx="17.5" cy="20" r="1.4"/><path d="M3 4h2.2l2.3 11h10.9l2.2-8H6.2"/></svg>
+                <i id="cart-count">2</i>
+              </span>
+              <span><span class="tot" id="cart-total">MOP 54.80</span><div class="hint">已享會員價</div></span>
+            </div>
+            <button class="p2-checkout" data-k="checkout">去結帳</button>
+          </div>
+          <div class="tabbar">
+            <button class="tab on" data-k="tab">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3v7a2 2 0 0 0 4 0V3M8 10v11M16 3c-1.6 1.6-2.3 3.6-2.3 5.8 0 1.6.6 2.6 2.3 3.2V21"/></svg>
+              點餐
+            </button>
+            <button class="tab" data-k="tab">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="2.5"/><path d="M9 8h6M9 12h6M9 16h3"/></svg>
+              訂單
+            </button>
+            <button class="tab" data-k="tab">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="8" r="4"/><path d="M4.5 21c0-4 3.4-6.5 7.5-6.5s7.5 2.5 7.5 6.5"/></svg>
+              我的
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ③ 訂單列表 -->
+      <div class="cell">
+        <div class="cellhead">
+          <span class="cellnum">③</span><span class="celltitle">優化後 · 訂單列表（新增）</span>
+          <span class="cellsub">縮圖訂單卡 · 狀態篩選 · 直達詳情</span>
+        </div>
+        <div class="phone" id="ph3">
+          <div class="pstatus"><span>13:24</span><span class="sic">
+            <svg width="16" height="11" viewBox="0 0 16 11" fill="currentColor"><rect x="0" y="7" width="3" height="4" rx="1"/><rect x="4.5" y="4.5" width="3" height="6.5" rx="1"/><rect x="9" y="2" width="3" height="9" rx="1"/><rect x="13.5" y="0" width="2.5" height="11" rx="1"/></svg>
+            <svg width="14" height="11" viewBox="0 0 14 11" fill="currentColor"><rect x="0" y="1.5" width="12" height="8" rx="2" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="2" y="3.5" width="7" height="4" rx="1"/><rect x="12.5" y="4" width="1.5" height="3" rx="0.8"/></svg>
+          </span></div>
+          <div class="navhead">
+            <button class="iconbtn" data-k="noop" aria-label="返回">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M15 6l-6 6 6 6"/></svg>
+            </button>
+            <span class="nt">訂單列表</span>
+            <button class="iconbtn" data-k="noop" aria-label="更多">
+              <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>
+            </button>
+          </div>
+          <div class="p3-chips">
+            <button class="p3-chip on" data-k="ofilter">全部</button>
+            <button class="p3-chip" data-k="ofilter">製作中</button>
+            <button class="p3-chip" data-k="ofilter">已完成</button>
+          </div>
+          <div class="p3-list">
+            <div class="o-card">
+              <div class="o-row1"><span class="o-dine">堂食</span><span class="o-shop">常安南越南粉（金嘉店）</span><span class="o-status doing">製作中</span></div>
+              <div class="o-date">2026-10-19 13:47 · 枱號 1</div>
+              <div class="o-row3">
+                <div class="o-thumbs">
+                  <span class="o-thumb img-a">火</span><span class="o-thumb img-b">河</span><span class="o-more">2 件</span>
+                </div>
+                <div class="o-amt"><div class="p">MOP 54.80</div><div class="c">會員價已省 MOP 9.20</div></div>
+              </div>
+              <div class="o-row4"><button class="o-link" data-k="noop">查看詳情
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg>
+              </button></div>
+            </div>
+            <div class="o-card">
+              <div class="o-row1"><span class="o-dine">堂食</span><span class="o-shop">常安南越南粉（金嘉店）</span><span class="o-status done">已完成</span></div>
+              <div class="o-date">2026-10-12 19:02 · 枱號 3</div>
+              <div class="o-row3">
+                <div class="o-thumbs">
+                  <span class="o-thumb img-c">串</span><span class="o-thumb img-d">包</span><span class="o-thumb img-a">火</span><span class="o-more">3 件</span>
+                </div>
+                <div class="o-amt"><div class="p">MOP 88.00</div><div class="c">共 3 件</div></div>
+              </div>
+              <div class="o-row4"><button class="o-link" data-k="noop">查看詳情
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg>
+              </button></div>
+            </div>
+            <div class="p3-more">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg>
+              查看更多
+            </div>
+          </div>
+          <div class="tabbar">
+            <button class="tab" data-k="tab">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3v7a2 2 0 0 0 4 0V3M8 10v11M16 3c-1.6 1.6-2.3 3.6-2.3 5.8 0 1.6.6 2.6 2.3 3.2V21"/></svg>
+              點餐
+            </button>
+            <button class="tab on" data-k="tab">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="2.5"/><path d="M9 8h6M9 12h6M9 16h3"/></svg>
+              訂單
+            </button>
+            <button class="tab" data-k="tab">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="8" r="4"/><path d="M4.5 21c0-4 3.4-6.5 7.5-6.5s7.5 2.5 7.5 6.5"/></svg>
+              我的
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ════════ 第二行 ════════ -->
+    <div class="grid3">
+
+      <!-- ④ 訂單詳情 -->
+      <div class="cell">
+        <div class="cellhead">
+          <span class="cellnum">④</span><span class="celltitle">優化後 · 訂單詳情（新增）</span>
+          <span class="cellsub">大狀態卡 · 門店卡（電話／導航）· 明細 · 訂單資訊</span>
+        </div>
+        <div class="phone" id="ph4">
+          <div class="pstatus"><span>13:24</span><span class="sic">
+            <svg width="16" height="11" viewBox="0 0 16 11" fill="currentColor"><rect x="0" y="7" width="3" height="4" rx="1"/><rect x="4.5" y="4.5" width="3" height="6.5" rx="1"/><rect x="9" y="2" width="3" height="9" rx="1"/><rect x="13.5" y="0" width="2.5" height="11" rx="1"/></svg>
+            <svg width="14" height="11" viewBox="0 0 14 11" fill="currentColor"><rect x="0" y="1.5" width="12" height="8" rx="2" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="2" y="3.5" width="7" height="4" rx="1"/><rect x="12.5" y="4" width="1.5" height="3" rx="0.8"/></svg>
+          </span></div>
+          <div class="navhead">
+            <button class="iconbtn" data-k="noop" aria-label="返回">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M15 6l-6 6 6 6"/></svg>
+            </button>
+            <span class="nt">訂單詳情</span>
+            <button class="iconbtn" data-k="noop" aria-label="更多">
+              <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>
+            </button>
+          </div>
+          <div class="p4-body">
+            <div class="p4-status">
+              <div class="big">已完成</div>
+              <div class="sub">感謝您的光臨，歡迎再來</div>
+            </div>
+            <div class="p4-shop">
+              <div>
+                <div class="nm">常安南越南粉（金嘉店）</div>
+                <div class="ad">香洲區前山街道明珠南路西 200 米</div>
+              </div>
+              <div class="acts">
+                <button class="iconbtn" data-k="noop" aria-label="致電門店">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 3h3l1.6 4.6-2.2 1.7a12.5 12.5 0 0 0 5.8 5.8l1.7-2.2L21 14.5v3a2.4 2.4 0 0 1-2.6 2.4A16.8 16.8 0 0 1 4.1 5.6 2.4 2.4 0 0 1 6.5 3z"/></svg>
+                </button>
+                <button class="iconbtn" data-k="noop" aria-label="導航">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>
+                </button>
+              </div>
+            </div>
+            <div class="p4-items">
+              <div class="p4-item">
+                <div class="p2-img img-a" style="width:50px;height:50px;font-size:14px">火</div>
+                <div>
+                  <div class="nm">炭燒豬頸肉</div>
+                  <div class="p2-tags"><span class="p2-tag">會員價</span></div>
+                  <div class="qty">x1 份</div>
+                </div>
+                <div><div class="pr">MOP 31.90</div><div class="orig">MOP 38</div></div>
+              </div>
+              <div class="p4-item">
+                <div class="p2-img img-b" style="width:50px;height:50px;font-size:14px">河</div>
+                <div>
+                  <div class="nm">越南特別生牛肉湯河粉</div>
+                  <div class="p2-tags"><span class="p2-tag">會員價</span><span class="p2-tag plain">正常</span></div>
+                  <div class="qty">x1 份</div>
+                </div>
+                <div><div class="pr">MOP 22.90</div><div class="orig">MOP 26</div></div>
+              </div>
+            </div>
+            <div class="p4-sum"><span class="l">共 2 份</span><span class="r">總價 MOP 54.80</span></div>
+            <div class="p4-info">
+              <div class="h">訂單資訊</div>
+              <div class="kv"><span class="k">支付方式</span><span class="v">會員儲值扣除</span></div>
+              <div class="kv"><span class="k">訂單編號</span><span class="v"><span class="mono">194540352610190026</span><button class="copypill" data-k="copy">複製</button></span></div>
+              <div class="kv"><span class="k">下單時間</span><span class="v">2026-10-19 13:47:27</span></div>
+              <div class="kv"><span class="k">桌台名稱</span><span class="v">1</span></div>
+            </div>
+            <button class="p4-again" data-k="noop">再加一單</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ⑤ 個人中心 -->
+      <div class="cell">
+        <div class="cellhead">
+          <span class="cellnum">⑤</span><span class="celltitle">優化後 · 個人中心（新增）</span>
+          <span class="cellsub">會員卡 · 餘額統計 · 功能列表 · 付款碼</span>
+        </div>
+        <div class="phone" id="ph5">
+          <div class="pstatus"><span>13:24</span><span class="sic">
+            <svg width="16" height="11" viewBox="0 0 16 11" fill="currentColor"><rect x="0" y="7" width="3" height="4" rx="1"/><rect x="4.5" y="4.5" width="3" height="6.5" rx="1"/><rect x="9" y="2" width="3" height="9" rx="1"/><rect x="13.5" y="0" width="2.5" height="11" rx="1"/></svg>
+            <svg width="14" height="11" viewBox="0 0 14 11" fill="currentColor"><rect x="0" y="1.5" width="12" height="8" rx="2" fill="none" stroke="currentColor" stroke-width="1.2"/><rect x="2" y="3.5" width="7" height="4" rx="1"/><rect x="12.5" y="4" width="1.5" height="3" rx="0.8"/></svg>
+          </span></div>
+          <div class="navhead">
+            <span style="width:30px"></span>
+            <span class="nt">個人中心</span>
+            <button class="iconbtn" data-k="noop" aria-label="設定">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1.11-1.56 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.65 8.9a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1.03-1.56V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9v.09a1.7 1.7 0 0 0 1.56 1.03H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.51 1.03z"/></svg>
+            </button>
+          </div>
+          <div class="p5-body">
+            <div class="member-card">
+              <div class="r1">
+                <span class="av">
+                  <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="8" r="4"/><path d="M4.5 21c0-4 3.4-6.5 7.5-6.5s7.5 2.5 7.5 6.5"/></svg>
+                </span>
+                <div>
+                  <div class="nm">親愛的會員</div>
+                  <span class="lv">儲值會員 · 全店通用</span>
+                </div>
+                <div>
+                  <div class="qr">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><path d="M14 14h3v3h-3zM21 14v3M14 21h3"/></svg>
+                  </div>
+                  <div class="qr-lab">付款碼</div>
+                </div>
+              </div>
+              <div class="prog"><i></i></div>
+              <div class="prog-lab">餘額即扣 · 到前台支付都可以（不改現有收銀流程）</div>
+            </div>
+            <div class="stats">
+              <div class="stat"><div class="v">MOP 128.00</div><div class="l">儲值餘額</div></div>
+              <div class="stat na"><div class="v dash">—</div><div class="l">優惠券＊</div></div>
+              <div class="stat na"><div class="v dash">—</div><div class="l">積分＊</div></div>
+            </div>
+            <div class="footnote">＊ 灰色虛框＝美團有丶我哋未做得（需後端／Ledger 支援，見右欄）</div>
+            <div class="p5-menu">
+              <div class="mrow" data-k="noop">
+                <span class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="2.5"/><path d="M9 8h6M9 12h6M9 16h3"/></svg></span>
+                我的訂單
+                <span class="chev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg></span>
+              </div>
+              <div class="mrow" data-k="noop">
+                <span class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s7-5.6 7-11a7 7 0 1 0-14 0c0 5.4 7 11 7 11z"/><circle cx="12" cy="10" r="2.6"/></svg></span>
+                門店資訊
+                <span class="chev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg></span>
+              </div>
+              <div class="mrow" data-k="noop">
+                <span class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="10" width="16" height="11" rx="2.5"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg></span>
+                私隱設置
+                <span class="chev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg></span>
+              </div>
+              <div class="mrow" data-k="noop">
+                <span class="mi"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 3h3l1.6 4.6-2.2 1.7a12.5 12.5 0 0 0 5.8 5.8l1.7-2.2L21 14.5v3a2.4 2.4 0 0 1-2.6 2.4A16.8 16.8 0 0 1 4.1 5.6 2.4 2.4 0 0 1 6.5 3z"/></svg></span>
+                聯繫店員
+                <span class="chev"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg></span>
+              </div>
+            </div>
+          </div>
+          <div class="tabbar">
+            <button class="tab" data-k="tab">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3v7a2 2 0 0 0 4 0V3M8 10v11M16 3c-1.6 1.6-2.3 3.6-2.3 5.8 0 1.6.6 2.6 2.3 3.2V21"/></svg>
+              點餐
+            </button>
+            <button class="tab" data-k="tab">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="2.5"/><path d="M9 8h6M9 12h6M9 16h3"/></svg>
+              訂單
+            </button>
+            <button class="tab on" data-k="tab">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="12" cy="8" r="4"/><path d="M4.5 21c0-4 3.4-6.5 7.5-6.5s7.5 2.5 7.5 6.5"/></svg>
+              我的
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ⑥ 設計決策備忘 -->
+      <div class="cell">
+        <div class="cellhead">
+          <span class="cellnum">⑥</span><span class="celltitle">設計決策備忘</span>
+          <span class="cellsub">學美團咩 · 保留咩 · 要後端咩</span>
+        </div>
+        <div class="notes">
+          <div class="h1">對照美團，改邊啲？</div>
+          <div class="h2">結構借美團、視覺留我哋：stone 底＋白卡＋orange-500、MOP、繁體中文，全部唔變。</div>
+
+          <div class="nsec">
+            <div class="nsec-h"><i class="o"></i>跟美團學（結構）</div>
+            <div class="nitem"><b>左直向分類欄＋右滾動菜列表</b>：分類多過 5 個時，橫向 chips 要掃來掃去；直欄一眼睇齊，同美團一致。</div>
+            <div class="nitem"><b>大圖卡＋角標（招牌菜／推荐菜／回購高）</b>：56px 細圖放大到 84px，加會員價同劃線原價，推動力強過淨價格。</div>
+            <div class="nitem"><b>底部分頁：點餐／訂單／我的</b>：而家得一個購物車入口，歷史單同會員中心完全冇入口。美團 4 個 tab 我哋删「首頁」——掃碼入嚟就係點餐。</div>
+            <div class="nitem"><b>訂單詳情大狀態卡＋門店卡</b>：「已完成／感謝您的光臨」置頂；門店名＋地址＋電話＋導航，同美團截圖一致；支付方式／編號（可複製）／下單時間／桌台，對帳同客訴都靠呢格。</div>
+          </div>
+
+          <div class="nsec">
+            <div class="nsec-h"><i class="g"></i>保留我哋（風格＋業務）</div>
+            <div class="nitem"><b>主色留 orange-500</b>（美團按鈕係黃／綠）：stone 中性底＋白卡、MOP、繁體中文，一律唔變。</div>
+            <div class="nitem"><b>儲值即扣＋到前台支付</b>：會員條只顯示餘額，扣款流程完全唔動；「去結帳」打開揀付款方式，同而家一致。</div>
+            <div class="nitem"><b>加單流程</b>：堂食再掃同一個碼→「本枱已落單」→加單；詳情頁「再加一單」＝同一個入口。</div>
+            <div class="nitem"><b>時價菜／售罄保留灰化</b>、備註、規格 sheet：客人端既定規則全部沿用。</div>
+          </div>
+
+          <div class="nsec">
+            <div class="nsec-h"><i class="s"></i>要後端先做得（劃咗灰虛框）</div>
+            <div class="nitem"><b>訂單歷史</b>：而家客人 JWT 只讀「本枱單」；列表＋詳情要 API 讀返自己過往嘅單（狀態、明細、編號）。</div>
+            <div class="nitem"><b>優惠券／積分</b>：Ledger 未有呢兩張表；未上之前畫虛框，唔好彈空統計。</div>
+            <div class="nitem"><b>門店電話／導航</b>：要门店主檔有電話＋地址先渲染到。</div>
+            <div class="nitem"><b>會員等級</b>：美團等級進度條要有制度；未上之前「儲值會員」夠用。</div>
+          </div>
+
+          <div class="nsec">
+            <div class="nsec-h"><i class="o"></i>現狀 → 優化（逐項對照）</div>
+            <div class="krow"><span class="lab">分類</span><span class="old">橫向 chips</span><span class="arr">→</span><span class="new">左直向欄＋右滾動</span></div>
+            <div class="krow"><span class="lab">菜品卡</span><span class="old">56px 細圖＋價</span><span class="arr">→</span><span class="new">84px＋角標＋會員價劃線</span></div>
+            <div class="krow"><span class="lab">導航</span><span class="old">只有購物車</span><span class="arr">→</span><span class="new">底部分頁 點餐/訂單/我的</span></div>
+            <div class="krow"><span class="lab">歷史</span><span class="old">冇</span><span class="arr">→</span><span class="new">訂單列表＋訂單詳情</span></div>
+            <div class="krow"><span class="lab">會員</span><span class="old">只有餘額氣泡</span><span class="arr">→</span><span class="new">會員卡＋餘額＋付款碼</span></div>
+            <div class="krow"><span class="lab">熱銷</span><span class="old">第一位分類</span><span class="arr">→</span><span class="new">熱銷欄置頂＋角標推動</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+// 固定畫布等比縮放（無 @media；寧願橫滾都唔縮到睇唔到字）
+function fit(){
+  if (typeof window === "undefined" || typeof document === "undefined") return;
+  var stage = document.getElementById("stage");
+  var canvas = document.getElementById("canvas");
+  if (!stage || !canvas) return;
+  var w = stage.clientWidth || 1360;
+  var s = Math.min(1, Math.max(w / 1360, 0.42));
+  canvas.style.transform = "scale(" + s + ")";
+  stage.style.height = Math.round(1628 * s) + "px";
+  stage.style.overflowX = (1360 * s > w) ? "auto" : "hidden";
+}
+if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+  window.addEventListener("resize", fit);
+  fit();
+}
+
+// ─── 統一 data-k 分派器（樣式由 CSS 掄、行為單一入口） ───
+(function(){
+  var PRICE = { d1: 31.9, d2: 22.9, d3: 9.5, d4: 18.0 };
+  var QTY = { d1: 1, d2: 1, d3: 0, d4: 0 };
+
+  function money(n){ return "MOP " + n.toFixed(2); }
+  function renderCart(){
+    var total = 0, count = 0, k;
+    for (k in QTY){ if (!QTY.hasOwnProperty(k)) continue; total += PRICE[k] * QTY[k]; count += QTY[k]; }
+    var tc = document.getElementById("cart-count");
+    var tt = document.getElementById("cart-total");
+    if (tc) tc.textContent = String(count);
+    if (tt) tt.textContent = money(total);
+  }
+  function renderDish(id){
+    var card = document.getElementById(id);
+    if (!card) return;
+    var q = card.querySelector(".act-step .q");
+    if (q) q.textContent = String(QTY[id]);
+    card.classList.toggle("has-qty", QTY[id] > 0);
+  }
+  function renderAll(){
+    var k; for (k in QTY){ if (QTY.hasOwnProperty(k)) renderDish(k); }
+    renderCart();
+  }
+
+  var handlers = {
+    "plus": function(el){
+      var id = el.getAttribute("data-id");
+      if (id && QTY.hasOwnProperty(id)){ QTY[id] += 1; renderDish(id); renderCart(); }
+    },
+    "minus": function(el){
+      var id = el.getAttribute("data-id");
+      if (id && QTY.hasOwnProperty(id) && QTY[id] > 0){ QTY[id] -= 1; renderDish(id); renderCart(); }
+    },
+    "spec": function(el){
+      if (typeof el.blur === "function") el.blur();
+    },
+    "tab": function(el){
+      var bar = el.parentNode;
+      if (!bar) return;
+      var tabs = bar.querySelectorAll(".tab");
+      for (var i = 0; i < tabs.length; i++){ tabs[i].classList.toggle("on", tabs[i] === el); }
+    },
+    "cat": function(el){
+      var rail = el.parentNode;
+      if (!rail) return;
+      var items = rail.querySelectorAll(".rail-item");
+      for (var i = 0; i < items.length; i++){ items[i].classList.toggle("on", items[i] === el); }
+    },
+    "ofilter": function(el){
+      var bar = el.parentNode;
+      if (!bar) return;
+      var chips = bar.querySelectorAll(".p3-chip");
+      for (var i = 0; i < chips.length; i++){ chips[i].classList.toggle("on", chips[i] === el); }
+    },
+    "copy": function(el){
+      var old = el.textContent;
+      el.textContent = "已複製";
+      if (typeof setTimeout === "function"){
+        setTimeout(function(){ el.textContent = old; }, 1200);
+      }
+    },
+    "checkout": function(el){
+      if (typeof el.blur === "function") el.blur();
+    },
+    "noop": function(el){
+      if (typeof el.blur === "function") el.blur();
+    }
+  };
+
+  var els = document.querySelectorAll("[data-k]");
+  for (var i = 0; i < els.length; i++){
+    (function(el){
+      el.onclick = function(){ var h = handlers[el.getAttribute("data-k")]; if (h) h(el); };
+    })(els[i]);
+  }
+
+  renderAll();
+})();
+</script>
+</body>
+</html>
