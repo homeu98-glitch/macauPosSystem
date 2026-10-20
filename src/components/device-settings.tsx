@@ -7,8 +7,6 @@ import { AppSidebar } from "@/components/app-sidebar";
 import { useLang, useT, useTShort } from "@/components/lang-provider";
 import { LANG_DISPLAY_NAME, UI_LANGS } from "@/lib/i18n";
 import { KioskModePanel } from "@/components/kiosk-mode-panel";
-import { ViewportSelfCheck } from "@/components/viewport-self-check";
-import { ScanModePanel } from "@/components/scan-mode-panel";
 import { ResponsiveModal } from "@/components/responsive-modal";
 import { RelayPairingPanel } from "@/components/relay-pairing-panel";
 import { NumberInput } from "@/components/number-input";
@@ -1231,6 +1229,9 @@ export function DeviceSettings() {
                 ⚠️ 2026-09-15：狀態 pill（「店內營業」→側欄商店名卡、「線上接單」→營運畫面）
                 全部搬走，header 唔再放開關。 */}
             <div className="flex flex-wrap items-center gap-2 md:shrink-0 md:justify-end">
+              {/* 2026-10-20：版本列由 body 搬上嚟，放到「工作台」左邊，縮做一行字。
+                  過期（本機 ≠ 線上）會轉琥珀色 ＋ ⚠，但維持一行。 */}
+              <BuildVersionRow />
               {/* ⚠️ 2026-09-17：指向 `/`（統一入口）而唔係 `/select-workbench`。
                   兩者 render 同一個元件，但 `/` 係對外唯一入口 ——
                   側欄／文件／PWA 全部用 `/`，只留一條路徑畀商家記。
@@ -1295,25 +1296,9 @@ export function DeviceSettings() {
     {t(status)}
   </div>
 
-  {/* 🔎 版本列（2026-09-22）：顯示「呢部機跑緊嘅版本」＋ 對照線上最新部署。
-      放喺 status 隔籬（跨 tab 常駐），一入設置頁就見到，唔需要切 tab。 */}
-  <BuildVersionRow />
-
-  {/* 🔎 顯示尺寸自檢（2026-10-14）：平板適配嘅縮放係按 viewport 闊度觸發，
-      而家一路靠「2000 物理像素 ÷ DPR2 = 1000px」推算。呢張卡係俾人一眼
-      睇到真實闊×高 / DPR / 字級 / 縮放開關——純顯示，冇任何請求或寫入。
-      跨 tab 常駐（擺喺 BuildVersionRow 下面）。詳見 `viewport-self-check.tsx`。
-      2026-10-17（J 要求）：預設收合——撳標題行先展開；「複製診斷」掣收合
-      狀態都保持可見（send 數字返嚟唔使展開）。 */}
-  <div className="mt-3">
-    <ViewportSelfCheck />
-  </div>
-
   {activeTab === "kiosk" ? (
     <div className="grid gap-3">
       <KioskModePanel />
-      {/* 掃碼點餐：模式選擇（堂食 / 快餐互斥）+ 對應嘅 QR 面板（docs/115） */}
-      <ScanModePanel />
     </div>
   ) : null}
 
