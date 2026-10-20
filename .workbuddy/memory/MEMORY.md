@@ -25,9 +25,31 @@
 - 🔴 anon 時間窗 RLS（pos_orders 72h／pos_print_jobs 24h）係刻意，唔可收緊（三個 Realtime 消費者靠 anon）⇒ 收緊＝出紙 1–3 秒變 180 秒。
 - 入隊只准 `appendPrintJobsWithSync()`；`pushEvents()` base 一定要 `loadQueue()`；去重靠 `onceKey`。「本地有 job」帳本 per-瀏覽器 ⇒ 後掛載台會為已出紙線上單再造廚房 job。`/api/pos/state` printJobs 冇 template/content ⇒ 預覽≠出紙。
 - Realtime hook 四個同一寫法：subscribe callback 首行 `if (cancelled || channel !== ch) return;`；`await removeChannel` 後必再判 `if (cancelled) return;`；CLOSED 唔可為修迴圈而刪；清 reconnectTimer 前先 `if (subscribeInFlight) return;`；同 topic 一頁只准一條 channel。守衛 `realtime-resubscribe-loop.test.ts`。
+- 🔴 顧客會員 session **只存記憶體、禁持久化**（`use-kiosk-order.ts:73-110` OrderingMember／token；`:393-397` 會員 state 不入 localStorage、刻意不因 reload 復原 —— Kiosk 共用平板要徹底清）。§7.2：displayName／餘額／電話禁寫機，訂單只落 customerId。⇒ **掃碼第二次（甚至 reload）一定要重新揀「係咪會員」＋電話＋PIN**；要「記住」必須起 server 設備記憶票（只存 token/uuid，扣款仍要 PIN），Kiosk 維持不記。
 
 ## 訂單／交班
 - 結帳/免單/完成一律 `resolveSettleTargetOrder()`（只限當前枱）。三軌互不相干：pos_shifts／pos_store_status.is_open／Ledger merchant_enabled。pos_store_status 冇 row＝營業中；pos_shifts 冇 open row＝未開工（**方向相反**）。總掣 `close-gate.ts` 排喺 `closeShift()` early return 之前，永不 throw。
+- 🔴 **折扣會令實收／報表淨額細咗（正常，唔係 bug）**：任何折扣都行現成 `discountAmount` 通道 ⇒ 交班「應收 vs 實收」開始有差、報表淨額自動反映、毛利被推低。落手新折扣功能時唔好聲稱「報表零影響」。
+
+## 掃碼點餐（scan order）
+- 雙路由：`/menu?tableId=`（堂食每枱一碼）／`/quick`（快餐全店一碼），共用 `ScanOrderPage`。J 已拍板：**枱號＝現有 tableId、每枱一碼、QR 自帶 tableId**（唔使客人揀座位、唔使改枱號）；`scan-order-page.tsx:379` landing 閘 `!started && !activeTableOrder` ⇒ 有人就跳過 landing 顯示該單明細（`:434`），**唔使新起「座位佔用」**。`use-kiosk-order.ts:333-334` `persistStarted = variant !== "scan"`（掃碼每次由 landing 開始）。桌綁 resume 在 `:601-642`。
+- 🔴 **訂單綁枱，唔綁手機**（2026-10-20 J 拍板，撤回 v4「手機綁單」）：手機綁會拆散「同桌多人一齊加單」，而一張單得一個會員結帳 ⇒ 兩會員掃同一碼就亂。見錯人張單屬店鋪問題，唔加「唔係我」。
+- 掃碼自助扣款引擎已存在（scan v3.5）：`/api/ledger/scan-debit/quote|commit`，**伺服器核價**（讀 DB `row.total`，唔信 client；三重守門＋rate limit）。免 PIN 窗口＝`use-kiosk-order.ts:101/112`（`loggedInAt`+`pinWindowToken` TTL 180s）＋`:1340` 過期交返 PIN。
+- 確認菜單原本**唔存在會員價**。2026-10-20 J 拍板最終方案（**v6 稿 `docs/mockups/scan-order-v6-member-price-2026-10-20.html`**）：
+  - **兩層折扣制**：① 全單百分比放 macau-pos「折扣」設定內（`PosRules.memberDiscountRate`）；② 餐牌 → 菜品編輯可設**單品會員價**（`MenuItem.memberPrice`，絕對金額）；③ 有單品會員價就 **override** 全單百分比；④ **唔要分類折扣**。
+  - 混合單＝**逐項各自計＋加總**；**唔同手動折扣疊加**；**同優惠券互斥**；**澳門冇稅**；**前台支付做默認**；landing 保留但改單一「立即點餐」；**平板（Kiosk）完全唔改**。
+  - 顯示口徑：**會員價＝「會員後嘅價」**，原價**唔劃線**、前面寫「原價 MOP X」（J 明確要求：劃線令人以為原價作廢）。
+  - ✅ **掃碼點餐已實作**（2026-10-20）；**macau-pos 設定 UI 未做**（等 J 給實機圖）。
+- 🔴🔴 **會員折扣行現成「全單折扣」通道（`discountAmount` ＋ `discountNote`），唔改 items 價錢**。理由：收據／報表淨額／交班／POS「已優惠 −X」全部自動正確、下游零改動；反之若喺 `computeOrderTotals` 用 memberPrice 縮小計，就會「明細加起 64.00、總計 54.70」對唔上。`buildKioskOrder({memberDiscountAmount})` 負責，`clampMemberDiscount` 夾 0≤x≤應收。
+- 🔴🔴 **`discountRate` ≠ 會員價**（超易踩）：`MenuItem.discountRate`（0-100）／`OrderItem.discountRate` 係**所有顧客都享**嘅菜品促銷（對齊 Ledger `promo_rate_permille`），落單自動 pre-fill（`menuItemDiscountRate`）。會員價係獨立欄位 `memberPrice`。
+- 🔴 **`normalizeMenuItem` / `normalizeBootstrapPayload.rules` 都係 whitelist**（`lib/bootstrap-normalizer.ts`）：加新欄位唔改佢會被**靜靜剷走**（客人端永遠見唔到）。同 `normalizePosLocalSettings` 同一個坑。
+- 🔴 **客人端購物車冇折扣概念**：`CartLine` 只有 `price`／`quantity`。會員價**唔可以在加菜時鎖入 CartLine**（客人係「先點餐、後登入」，鎖死就永遠收原價）⇒ 每次 render／落單都用 `priceCartLinesForMember()` 即時算。
+- **生效範圍**：`memberPricingEnabled = isScanLink && member != null` ⇒ Kiosk 平板永遠 false、未登入 false。
+- ⚠️ **未登入顯示會員價（招徠）有預期落差風險**：餐牌可以顯示，但購物車「總計」必須仍標**原價**、會員價只單列「登入後套用」，否則客人以為付 54.70 而前台收 64.00 會爭執。
+- 🔴 `MemberLoginSheet` **冇 `open` prop**（無條件渲染就長開）⇒ 一定要 `memberLoginOpen &&` gate。landing 原本冇 gate 會蓋住 landing（舊 bug，已修）。
+- 計價純函式 `lib/pos/member-price.ts`（零 import，13 單測）：`memberUnitPrice()`／`memberOrderTotals()`／`hasMemberBenefit()`／`isValidMemberPrice()`（**必須嚴格細於原價**）。規格加價**唔打折**。
+- 菜品編輯 modal 四欄（價格／原價／折扣%）在 `device-settings.tsx:3836-3865`，驗證在 `saveMenuItem`（`:1002-1021`）；折扣預設清單在 `:1900-1937`。**（會員價欄位／會員折扣卡都未做）**
+- 確認稿一律**零 `@media`＋固定畫布＋`data-k` 分派器**；驗收用 `tools/_verify-scan-mockup.cjs`（需 `export NODE_PATH="C:/Users/surface/.workbuddy/binaries/node/workspace/node_modules"` 先有 puppeteer-core）＋`tools/2026-09-11-smoke-check-html-mockup.js`（靜態稿必報「冇 render 輸出」＝既定假失敗）。⚠️ 量度**三層都要查**：① 每個 `.phone`／`.panel` 的 overflow；② **canvas `scrollHeight` vs `clientHeight`**；③ **`.grid3` 的 children 數量同 tagName**（改壞 HTML 時 grid 會靜靜雞只剩 1 個 cell，`tagName === "B"` ＝ `<b>` 未閉合）。
 
 ## UI／i18n／守衛測試
 - 收銀台＝/pos；深連結 `/pos?tableId=&orderId=`，唔准推 `/`；清 query 用 replaceState。JSX 唔好用 `<b>`/Markdown ⇒ `<span className="font-semibold">`。條件警示卡要整卡條件 render。浮層用 `tooltip-placement.ts`（fixed＋JS 定位＋visualViewport）。
