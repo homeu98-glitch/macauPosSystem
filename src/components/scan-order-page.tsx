@@ -225,20 +225,33 @@ export function ScanOrderPage({ link }: { link: ScanLinkKind }) {
   }
 
   /**
-   * 落單（P0-1 修復）：**等結果**，成功先閂購物車；失敗保留 sheet 顯示錯誤 + 可直接重試。
-   * 舊版 `void placeOrder(); setCartOpen(false);` —— 未等結果就閂 sheet，
-   * 而錯誤訊息只喺已關閉嘅 sheet 內部渲染 → 客人以為落咗單，實際上冇（靜默丟單）。
+   * 「到前台支付」（稿 v6 第③格，默認選項）：**直接落單**，錢到前台收。
+   *
+   * ⚠️ 已登入都要走呢條 —— 因為落單時 `memberDiscountAmount` 已經寫入訂單
+   *    （total 已係會員價），前台照單收錢就係，唔會收多。
    */
-  async function handlePlaceOrder() {
-    // 會員（S5/S6）：唔直接落單 —— 先開付款 sheet 揀「扣會員餘額 / 到前台支付」。
-    //   非會員（S4）：**根本冇扣餘額能力** → 唔引導、唔推銷，直接落單（確認稿已拍板）。
-    if (member) {
-      setCartOpen(false);
-      openPaySheet();
-      return;
-    }
+  async function handlePlaceToCounter() {
     const ok = await placeOrder();
     if (ok) setCartOpen(false);
+  }
+
+  /**
+   * 「會員結帳」：扣儲值餘額（要客人入 PIN）。
+   *
+   * 🔴 **唔可以**先 `placeOrder()` 再開付款 sheet —— `confirmPay()` 內部會再
+   *    `placeOrder()` 一次，新 order.id ⇒ 新冪等鍵 ⇒ **落多一張單**（見
+   *    `use-kiosk-order.ts` confirmDeduct 嘅註解）。所以呢度只負責「開付款 sheet」，
+   *    真正落單交由付款確認時一次性完成。
+   */
+  function handlePlaceByMember() {
+    if (!member) {
+      // 未登入：先叫客人登入（登入後再撳一次就會入付款流程）
+      setCartOpen(false);
+      openMemberLogin();
+      return;
+    }
+    setCartOpen(false);
+    openPaySheet();
   }
 
   // ── 載入中（含手機攞所屬店 menu）──
@@ -353,7 +366,7 @@ export function ScanOrderPage({ link }: { link: ScanLinkKind }) {
               ✅
             </div>
             <h1 className="mb-1 text-2xl font-bold text-stone-900">{deductReceipt ? t("deductSuccess") : t("thanks")}</h1>
-            <p className="mb-6 text-sm text-stone-500">{deductReceipt ? t("deductSuccessBody") : t("payAtCounter")}</p>
+            <p className="mb-6 text-sm text-stone-500">{deductReceipt ? t("deductSuccessBody") : t("payAtCounterOption")}</p>
             {/* P1-4：網絡抖動時訂單入咗本地待同步隊列，唔可以講「已同步」講大話 */}
             {orderSyncPending && (
               <p className="mb-6 rounded-xl bg-amber-100 px-3 py-2 text-xs font-medium text-amber-800" role="status">
@@ -405,27 +418,46 @@ export function ScanOrderPage({ link }: { link: ScanLinkKind }) {
   // 但只有一顆「立即點餐」。「係咪會員」延到**埋單**先問，客人一掃碼就入餐牌。
   // 平板（Kiosk）唔經呢個元件，所以唔受影響。
   if (!started && !activeTableOrder) {
+    // 稿 v6 第①格：橙色漸變全屏 + 玻璃擬態 logo + 白色大掣。
+    // 舊版係白底 + emoji + 橙色掣 —— 客人掃碼第一眼見到嘅就係呢一版，所以最值得做靚。
+    const logoChar = (displayStoreName || "").trim().slice(0, 1) || (quick ? "取" : "餐");
     return (
       <>
-        <main className="mx-auto flex min-h-[100dvh] max-w-md flex-col items-center justify-center bg-stone-50 p-6 text-center">
-          <div className="mb-5 text-7xl">{quick ? "🥡" : "🍽️"}</div>
-          <h1 className="mb-2 text-2xl font-bold text-stone-900">{displayStoreName}</h1>
+        <main className="relative mx-auto flex min-h-[100dvh] w-full max-w-md flex-col overflow-hidden bg-gradient-to-b from-orange-400 via-orange-500 to-orange-700 px-7 text-center">
+          {/* 背景光暈（純裝飾，唔接收事件） */}
+          <div className="pointer-events-none absolute -left-28 top-6 h-72 w-72 rounded-full bg-white/15 blur-2xl" />
+          <div className="pointer-events-none absolute -right-24 bottom-10 h-64 w-64 rounded-full bg-white/10 blur-2xl" />
 
-          {/* 一眼確認「堂食枱號 / 快餐自取」——枱號由 QR 帶入，客人唔使自己揀 */}
-          <div className="mb-8 inline-flex items-center gap-2 rounded-full bg-white px-3.5 py-1.5 text-xs text-stone-600 ring-1 ring-stone-200">
-            <span className="font-semibold">{displayStoreName}</span>
-            <span className="text-stone-300">·</span>
-            <span>{quick ? t("pickup") : `${t("dineIn")} ${tableName}`}</span>
+          <div className="relative flex flex-1 flex-col items-center justify-center">
+            {/* 店名首字：半透明白方塊 */}
+            <div className="mb-5 flex h-[74px] w-[74px] items-center justify-center rounded-[22px] bg-white/20 text-4xl font-black text-white ring-1 ring-white/30 backdrop-blur-sm">
+              {logoChar}
+            </div>
+            <h1 className="max-w-[16rem] text-2xl font-black leading-snug text-white drop-shadow-sm">
+              {displayStoreName}
+            </h1>
+            <div className="mt-3 inline-flex items-center gap-1.5 rounded-full bg-white/20 px-4 py-1.5 text-[13px] font-semibold text-white ring-1 ring-white/25">
+              <span>{quick ? t("pickup") : t("dineIn")}</span>
+              {quick ? null : (
+                <>
+                  <span className="text-white/50">·</span>
+                  <span>
+                    {t("table")} {tableName}
+                  </span>
+                </>
+              )}
+            </div>
           </div>
 
-          <button
-            onClick={skipMemberLogin}
-            className="w-full rounded-2xl bg-orange-500 py-4 text-lg font-semibold text-white active:scale-[0.98]"
-          >
-            {t("startOrder")}
-          </button>
-
-          <p className="mt-5 text-xs text-stone-400">{t("memberDiscountAtCheckout")}</p>
+          <div className="relative pb-12">
+            <button
+              onClick={skipMemberLogin}
+              className="w-full rounded-2xl bg-white py-4 text-lg font-black text-orange-600 shadow-lg shadow-orange-900/20 transition active:scale-[0.98]"
+            >
+              {t("startOrder")}
+            </button>
+            <p className="mt-7 text-[11.5px] leading-relaxed text-white/70">{t("memberDiscountAtCheckout")}</p>
+          </div>
         </main>
       </>
     );
@@ -453,7 +485,7 @@ export function ScanOrderPage({ link }: { link: ScanLinkKind }) {
               {justPlaced ? t("thanks") : t("tableOrderTitle")}
             </h1>
             <p className="mb-6 text-sm text-stone-500">
-              {justPlaced ? t("payAtCounter") : t("addToOrderHint")}
+              {justPlaced ? t("payAtCounterOption") : t("addToOrderHint")}
             </p>
             {/* P1-4：網絡抖動時訂單入咗本地待同步隊列，唔可以講「已同步」講大話 */}
             {orderSyncPending && (
@@ -510,47 +542,37 @@ export function ScanOrderPage({ link }: { link: ScanLinkKind }) {
   }
 
   return (
-    <main className="mx-auto flex h-[100dvh] w-full max-w-md flex-col overflow-hidden bg-stone-50">
-      {/* 頂欄：店名 + 枱號 + 語言 */}
-      <header className="sticky top-0 z-10 shrink-0 bg-white/95 px-4 pb-3 pt-4 backdrop-blur">
-        <div className="flex items-center justify-between gap-2">
+    <main className="mx-auto flex h-[100dvh] w-full max-w-md flex-col overflow-hidden bg-white">
+      {/* 頂欄（稿 v6 第②格）：店名 ＋「會員折扣 95 折」badge ＋ 枱號 pill */}
+      <header className="shrink-0 bg-white px-4 pb-2.5 pt-3.5">
+        <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
-            <div className="truncate text-lg font-bold text-stone-900">{displayStoreName}</div>
-            <div className="mt-0.5 flex items-center gap-1.5 text-xs text-stone-500">
-              <span className="rounded-full bg-orange-50 px-2 py-0.5 font-medium text-orange-600">
+            <div className="truncate text-[17px] font-black tracking-tight text-stone-900">{displayStoreName}</div>
+            <div className="mt-1 flex items-center gap-1.5">
+              <span className="rounded-full bg-orange-50 px-2 py-0.5 text-[11px] font-semibold text-orange-600">
                 {mode === "dine_in" ? `${t("dineIn")} · ${t("table")} ${tableName}` : t("pickup")}
               </span>
             </div>
           </div>
-          {/* 會員氣泡（確認稿 S5）：登入後顯示名 + 儲值餘額。
-              🔴 **唔顯示電話號碼**（個資紅線 §7.2：電話唔可以渲染成 UI 文字）。 */}
-          {member && (
-            <div className="shrink-0 rounded-xl bg-emerald-50 px-2.5 py-1.5 text-right">
-              <div className="max-w-[7rem] truncate text-xs font-semibold text-emerald-800">
-                {member.displayName ?? "會員"}
+          {/* 右側：會員折扣 badge（做招徠，未登入都顯示）＋ 已登入就多一個餘額氣泡 */}
+          <div className="flex shrink-0 flex-col items-end gap-1.5">
+            {memberDiscountRate ? (
+              <span className="rounded-full bg-orange-50 px-2.5 py-1 text-[11px] font-bold text-orange-600 ring-1 ring-orange-100">
+                {t("memberDiscountBadge").replace("{rate}", String(memberDiscountRate))}
+              </span>
+            ) : null}
+            {/* 🔴 **唔顯示電話號碼**（個資紅線 §7.2） */}
+            {member ? (
+              <div className="rounded-xl bg-emerald-50 px-2.5 py-1 text-right">
+                <div className="max-w-[7rem] truncate text-[11px] font-semibold text-emerald-800">
+                  {member.displayName ?? "會員"}
+                </div>
+                <div className="text-[10px] text-emerald-600">
+                  {t("memberBalanceLabel")} MOP {money2(member.balanceAvos / 100)}
+                </div>
               </div>
-              <div className="text-[11px] text-emerald-600">
-                {t("memberBalanceLabel")} MOP {money2(member.balanceAvos / 100)}
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* 分類橫向 chips */}
-        <div className="-mx-4 mt-3 flex gap-2 overflow-x-auto px-4 pb-1">
-          {bootstrap.categories.map((cat) => (
-            <button
-              key={cat.id}
-              onClick={() => setActiveCategory(cat.id)}
-              className={`shrink-0 whitespace-nowrap rounded-full px-4 py-1.5 text-sm font-medium transition ${
-                activeCategory === cat.id
-                  ? "bg-stone-900 text-white"
-                  : "bg-white text-stone-600 ring-1 ring-stone-200"
-              }`}
-            >
-              {cat.name}
-            </button>
-          ))}
+            ) : null}
+          </div>
         </div>
       </header>
 
@@ -573,102 +595,143 @@ export function ScanOrderPage({ link }: { link: ScanLinkKind }) {
         </div>
       )}
 
-      {/* 菜單：單欄 list */}
-      <section className="flex-1 space-y-2.5 overflow-y-auto px-4 py-3">
-        {categoryItems.map((item) => {
-          const sold = soldoutIds.has(item.id);
-          // P1-3b 時價菜：客人端唔可以提供一個可以係 0 元嘅價（舊版會 0 元落單）。
-          const marketPrice = Boolean(item.isMarketPrice);
-          const blocked = sold || marketPrice;
-          const qty = cartCountByItem(item.id);
-          const lineId = firstLineId(item.id);
-          // 會員價（2026-10-20）：**未登入都顯示**，做招徠。
-          // 只有真係平過原價先顯示，避免「原價 38、會員 38」呢種假優惠寫法。
-          const showMemberPrice = !marketPrice && hasMemberBenefit(item, memberDiscountRate);
-          const memberUnit = showMemberPrice
-            ? memberUnitPriceForMenuItem(item, memberDiscountRate)
-            : null;
-          return (
-            <div
-              key={item.id}
-              className={`flex items-center gap-3 rounded-2xl bg-white p-3.5 shadow-sm ${
-                blocked ? "opacity-60" : ""
-              }`}
-            >
-              {item.image ? (
-                // eslint-disable-next-line @next/next/no-img-element -- Ledger 圖片係任意外部域名，唔適合 next/image 固定 remotePatterns
-                <img
-                  src={item.image}
-                  alt={item.name}
-                  width={56}
-                  height={56}
-                  decoding="async"
-                  className="h-14 w-14 shrink-0 rounded-xl object-cover"
-                  loading="lazy"
-                />
-              ) : null}
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-[15px] font-semibold text-stone-900">{item.name}</div>
-                {marketPrice ? (
-                  <div className="mt-1 text-sm font-semibold text-orange-600">
-                    {`${t("marketPrice")} · ${t("marketPriceHint")}`}
+      {/* 左側分類欄 ＋ 右側菜單（稿 v6 第②格） */}
+      <div className="flex min-h-0 flex-1 border-t border-stone-100">
+        <nav className="w-[70px] shrink-0 overflow-y-auto bg-stone-50/80 py-1.5">
+          {bootstrap.categories.map((cat) => {
+            const active = activeCategory === cat.id;
+            return (
+              <button
+                className={`relative flex w-full items-center justify-center px-1.5 py-3.5 text-[12.5px] leading-tight transition ${
+                  active ? "bg-white font-bold text-orange-600" : "text-stone-500"
+                }`}
+                key={cat.id}
+                onClick={() => setActiveCategory(cat.id)}
+                type="button"
+              >
+                {active ? (
+                  <span className="absolute left-0 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-r bg-orange-500" />
+                ) : null}
+                <span className="break-words text-center">{cat.name}</span>
+              </button>
+            );
+          })}
+        </nav>
+
+        <section className="min-w-0 flex-1 space-y-2.5 overflow-y-auto px-3 py-3">
+          {categoryItems.map((item) => {
+            const sold = soldoutIds.has(item.id);
+            // P1-3b 時價菜：客人端唔可以提供一個可以係 0 元嘅價（舊版會 0 元落單）。
+            const marketPrice = Boolean(item.isMarketPrice);
+            const blocked = sold || marketPrice;
+            const qty = cartCountByItem(item.id);
+            const lineId = firstLineId(item.id);
+            // 會員價（2026-10-20）：**未登入都顯示**，做招徠。
+            // 只有真係平過原價先顯示，避免「原價 38、會員 38」呢種假優惠寫法。
+            const showMemberPrice = !marketPrice && hasMemberBenefit(item, memberDiscountRate);
+            const memberUnit = showMemberPrice
+              ? memberUnitPriceForMenuItem(item, memberDiscountRate)
+              : null;
+            const saving = memberUnit !== null ? item.price - memberUnit : 0;
+            return (
+              <div
+                className={`flex items-center gap-3 rounded-2xl bg-white p-2.5 ring-1 ring-stone-100 ${
+                  blocked ? "opacity-55" : ""
+                }`}
+                key={item.id}
+              >
+                {/* 縮圖：有圖用圖；冇圖用店名首字做色塊（稿就係咁，Ledger 菜品好多冇圖） */}
+                {item.image ? (
+                  // eslint-disable-next-line @next/next/no-img-element -- Ledger 圖片係任意外部域名，唔適合 next/image 固定 remotePatterns
+                  <img
+                    alt={item.name}
+                    className="h-[54px] w-[54px] shrink-0 rounded-xl object-cover"
+                    decoding="async"
+                    height={54}
+                    loading="lazy"
+                    src={item.image}
+                    width={54}
+                  />
+                ) : (
+                  <div className="flex h-[54px] w-[54px] shrink-0 items-center justify-center rounded-xl bg-orange-100 text-xl font-black text-orange-500">
+                    {item.name.slice(0, 1)}
                   </div>
-                ) : showMemberPrice && memberUnit !== null ? (
-                  // 「原價 MOP 38.00　會員 MOP 30.00」——原價**唔劃線**（客人明確要求：
-                  // 劃線會令人以為原價作廢），只係用淺色＋前面標明「原價」。
-                  <div className="mt-1 flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-                    <span className="text-xs font-medium text-stone-400">
-                      {t("originalPriceLabel")} MOP {money2(item.price)}
-                    </span>
-                    <span className="text-sm font-bold text-emerald-600">
-                      {t("memberPriceLabel")} MOP {money2(memberUnit)}
-                    </span>
+                )}
+
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-[14.5px] font-bold leading-snug text-stone-900">{item.name}</div>
+                  {marketPrice ? (
+                    <div className="mt-1 text-[13px] font-semibold text-orange-600">
+                      {`${t("marketPrice")} · ${t("marketPriceHint")}`}
+                    </div>
+                  ) : showMemberPrice && memberUnit !== null ? (
+                    <>
+                      {/* 「原價 MOP 38.00　會員 MOP 30.00」——原價**唔劃線**（客人明確要求） */}
+                      <div className="mt-0.5 flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                        <span className="text-[11px] font-medium text-stone-400">
+                          {t("originalPriceLabel")} MOP {money2(item.price)}
+                        </span>
+                        <span className="text-[14px] font-black text-emerald-600">
+                          {t("memberPriceLabel")} MOP {money2(memberUnit)}
+                        </span>
+                      </div>
+                      {/* 綠色小標籤：單品會員價唔顯示「全單 95 折」（因為佢 override 咗） */}
+                      {item.memberPrice == null && memberDiscountRate ? (
+                        <div className="mt-1 inline-flex items-center rounded-md bg-emerald-50 px-1.5 py-0.5 text-[10px] font-bold text-emerald-700">
+                          {t("memberRateSaving")
+                            .replace("{rate}", String(memberDiscountRate))
+                            .replace("{amt}", money2(saving))}
+                        </div>
+                      ) : null}
+                    </>
+                  ) : (
+                    <div className="mt-1 text-[14px] font-bold text-orange-600">MOP {money2(item.price)}</div>
+                  )}
+                </div>
+
+                {blocked ? (
+                  // P2-1：售罄項**保留**喺菜單（客人理解為暫時缺貨，可以轉點其他菜）
+                  <span className="shrink-0 rounded-lg bg-stone-100 px-2.5 py-1.5 text-[11px] font-semibold text-stone-400">
+                    {sold ? t("soldout") : t("marketPrice")}
+                  </span>
+                ) : qty > 0 && lineId ? (
+                  <div className="flex shrink-0 items-center gap-2">
+                    <button
+                      aria-label={`${item.name} 減少一件`}
+                      className="flex h-7 w-7 items-center justify-center rounded-full bg-stone-100 text-base text-stone-700 active:scale-90"
+                      onClick={() => changeQty(lineId, -1)}
+                      type="button"
+                    >
+                      −
+                    </button>
+                    <span className="w-4 text-center text-[14px] font-bold text-stone-900">{qty}</span>
+                    <button
+                      aria-label={`${item.name} 增加一件`}
+                      className="flex h-7 w-7 items-center justify-center rounded-full bg-orange-500 text-base text-white active:scale-90"
+                      onClick={() => handleAdd(item)}
+                      type="button"
+                    >
+                      +
+                    </button>
                   </div>
                 ) : (
-                  <div className="mt-1 text-sm font-semibold text-orange-600">MOP {money2(item.price)}</div>
-                )}
-              </div>
-
-              {blocked ? (
-                // P2-1：售罄項**保留**喺菜單（客人理解為暫時缺貨，可以轉點其他菜），
-                // 灰化 + 標籤。舊版 filter 走售罄項 → 呢個分支係死碼。
-                <span className="shrink-0 rounded-lg bg-red-50 px-3 py-2 text-xs font-medium text-red-500">
-                  {sold ? t("soldout") : t("marketPrice")}
-                </span>
-              ) : qty > 0 && lineId ? (
-                <div className="flex shrink-0 items-center gap-2.5">
                   <button
-                    onClick={() => changeQty(lineId, -1)}
-                    aria-label={`${item.name} 減少一件`}
-                    className="flex h-8 w-8 items-center justify-center rounded-full bg-stone-100 text-lg text-stone-700 active:scale-90"
-                  >
-                    −
-                  </button>
-                  <span className="w-5 text-center text-[15px] font-semibold text-stone-900">{qty}</span>
-                  <button
+                    aria-label={`${t("add")} ${item.name}`}
+                    className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-orange-500 text-xl font-light text-white shadow-sm shadow-orange-200 active:scale-90"
                     onClick={() => handleAdd(item)}
-                    aria-label={`${item.name} 增加一件`}
-                    className="flex h-8 w-8 items-center justify-center rounded-full bg-orange-500 text-lg text-white active:scale-90"
+                    type="button"
                   >
                     +
                   </button>
-                </div>
-              ) : (
-                <button
-                  onClick={() => handleAdd(item)}
-                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-orange-500 text-xl text-white active:scale-90"
-                  aria-label={`${t("add")} ${item.name}`}
-                >
-                  +
-                </button>
-              )}
-            </div>
-          );
-        })}
-        {categoryItems.length === 0 && (
-          <div className="py-16 text-center text-sm text-stone-400">{t("empty")}</div>
-        )}
-      </section>
+                )}
+              </div>
+            );
+          })}
+          {categoryItems.length === 0 && (
+            <div className="py-16 text-center text-sm text-stone-400">{t("empty")}</div>
+          )}
+        </section>
+      </div>
 
       {/* 底部固定購物車 bar */}
       {cart.length > 0 && (
@@ -691,38 +754,34 @@ export function ScanOrderPage({ link }: { link: ScanLinkKind }) {
         </div>
       )}
 
-      {/* 購物車 bottom sheet */}
+      {/* 購物車 bottom sheet（稿 v6 第③格） */}
       {cartOpen && (
         <div
-          className="fixed inset-0 z-30 flex items-end justify-center bg-black/40"
+          className="fixed inset-0 z-30 flex items-end justify-center bg-black/45"
           onClick={() => setCartOpen(false)}
         >
           <div
-            ref={cartSheetRef}
-            tabIndex={-1}
-            role="dialog"
-            aria-modal="true"
-            aria-label={t("cart")}
-            className="max-h-[85dvh] w-full max-w-md overflow-y-auto rounded-t-3xl bg-white p-4 pb-6 outline-none"
+            className="max-h-[88dvh] w-full max-w-md overflow-y-auto rounded-t-[26px] bg-white px-4 pb-5 pt-3 outline-none"
             onClick={(e) => e.stopPropagation()}
+            ref={cartSheetRef}
+            role="dialog"
+            aria-label={t("cart")}
+            aria-modal="true"
+            tabIndex={-1}
           >
             <div className="mx-auto mb-3 h-1.5 w-10 rounded-full bg-stone-200" />
             <div className="mb-3 flex items-center justify-between">
-              <h2 className="text-lg font-bold text-stone-900">{t("cart")}</h2>
-              <button onClick={() => setCartOpen(false)} className="text-sm text-stone-400">
-                {t("cancel")}
+              <h2 className="text-[17px] font-black text-stone-900">{t("cart")}</h2>
+              <button
+                className="text-[12.5px] font-semibold text-orange-600"
+                onClick={() => setCartOpen(false)}
+                type="button"
+              >
+                {t("keepOrdering")} ›
               </button>
             </div>
 
-            <textarea
-              value={orderNote}
-              onChange={(e) => setOrderNote(e.target.value)}
-              placeholder={t("notePlaceholder")}
-              aria-label={t("note")}
-              className="mb-3 h-14 w-full resize-none rounded-xl border border-stone-200 p-2.5 text-sm text-stone-700"
-            />
-
-            <div className="mb-3 max-h-64 space-y-2.5 overflow-y-auto">
+            <div className="mb-3 max-h-60 space-y-3 overflow-y-auto">
               {cart.map((line) => {
                 // 會員價（2026-10-20）：每行獨立計 —— 有單品會員價用單品價，
                 // 冇就跟全店百分比；規格加價唔打折（同落單時同一個函式）。
@@ -733,116 +792,152 @@ export function ScanOrderPage({ link }: { link: ScanLinkKind }) {
                     ? memberUnitPrice(menuItem.price, menuItem.memberPrice, memberDiscountRate, specDelta)
                     : null;
                 return (
-                <div key={line.lineId} className="flex items-center gap-3 rounded-xl bg-stone-50 p-2.5">
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate text-sm font-semibold text-stone-900">{line.name}</div>
-                    {(line.selectedSpecs?.length ?? 0) > 0 && (
-                      <div className="truncate text-xs text-stone-400">
-                        {line.selectedSpecs!.map((s) => s.optionLabel).join(" / ")}
+                  <div className="flex items-start gap-3" key={line.lineId}>
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-[13.5px] font-bold text-stone-900">{line.name}</div>
+                      <div className="mt-0.5 truncate text-[11px] text-stone-400">
+                        ×{line.quantity}
+                        {line.selectedSpecs && line.selectedSpecs.length > 0
+                          ? " · " + line.selectedSpecs.map((s) => s.optionLabel).join("/")
+                          : ""}
+                        {memberUnit !== null
+                          ? ` · ${t("memberPriceLabel")} MOP ${money2(memberUnit)}`
+                          : ""}
                       </div>
-                    )}
-                    {/* P2-3：統一 2 位小數（舊版 `line.price * line.quantity` 冇 toFixed） */}
-                    <div className="mt-0.5 text-xs text-orange-600">MOP {money2(line.price * line.quantity)}</div>
-                    {memberUnit !== null && (
-                      <div className="text-xs font-semibold text-emerald-600">
-                        {`${t("memberPriceLabel")} MOP ${money2(memberUnit * line.quantity)}`}
+                    </div>
+                    <div className="shrink-0 text-right">
+                      <div className="text-[13.5px] font-bold text-stone-900">
+                        MOP {money2(line.price * line.quantity)}
                       </div>
-                    )}
+                      {memberUnit !== null ? (
+                        <div className="text-[11px] font-bold text-emerald-600">
+                          {t("memberPriceLabel")} MOP {money2(memberUnit * line.quantity)}
+                        </div>
+                      ) : null}
+                    </div>
+                    <div className="flex shrink-0 items-center gap-1.5 pl-1">
+                      <button
+                        aria-label={`${line.name} 減少一件`}
+                        className="flex h-6 w-6 items-center justify-center rounded-full bg-stone-100 text-sm text-stone-600 active:scale-90"
+                        onClick={() => changeQty(line.lineId, -1)}
+                        type="button"
+                      >
+                        −
+                      </button>
+                      <button
+                        aria-label={`${line.name} 增加一件`}
+                        className="flex h-6 w-6 items-center justify-center rounded-full bg-orange-500 text-sm text-white active:scale-90"
+                        onClick={() => changeQty(line.lineId, 1)}
+                        type="button"
+                      >
+                        +
+                      </button>
+                    </div>
                   </div>
-                  <div className="flex shrink-0 items-center gap-2">
-                    <button
-                      onClick={() => changeQty(line.lineId, -1)}
-                      aria-label={`${line.name} 減少一件`}
-                      className="flex h-7 w-7 items-center justify-center rounded-full bg-stone-200 text-stone-700 active:scale-90"
-                    >
-                      −
-                    </button>
-                    <span className="w-4 text-center text-sm font-medium text-stone-900">{line.quantity}</span>
-                    <button
-                      onClick={() => changeQty(line.lineId, 1)}
-                      aria-label={`${line.name} 增加一件`}
-                      className="flex h-7 w-7 items-center justify-center rounded-full bg-orange-500 text-white active:scale-90"
-                    >
-                      +
-                    </button>
-                  </div>
-                </div>
                 );
               })}
             </div>
 
-            {/* P1-3：小計 + 稅 / 服務費明細，同寫入訂單嘅金額同源 */}
-            <div className="mb-1 flex items-center justify-between text-sm text-stone-600">
-              <span>{t("subtotal")}</span>
-              <span>MOP {money2(totals.subtotal)}</span>
+            <textarea
+              aria-label={t("note")}
+              className="mb-3 h-12 w-full resize-none rounded-xl bg-stone-50 px-3 py-2.5 text-[12.5px] text-stone-700 placeholder:text-stone-300"
+              onChange={(e) => setOrderNote(e.target.value)}
+              placeholder={t("notePlaceholder")}
+              value={orderNote}
+            />
+
+            <div className="space-y-1.5 border-t border-stone-100 pt-3">
+              <div className="flex items-center justify-between text-[12.5px] text-stone-500">
+                <span>{t("subtotalOriginal")}</span>
+                <span>MOP {money2(totals.subtotal)}</span>
+              </div>
+              {/* 已登入：折扣行（同收據「小計→折扣→總計」一致） */}
+              {memberDiscountAmount > 0 ? (
+                <div className="flex items-center justify-between text-[12.5px]">
+                  <span className="text-emerald-700">
+                    {t("memberPriceLabel")}
+                    {memberDiscountRate ? `（${memberDiscountRate} 折）` : ""}
+                  </span>
+                  <span className="font-bold text-emerald-600">−MOP {money2(memberDiscountAmount)}</span>
+                </div>
+              ) : null}
+              {/* 未登入：只做預覽，**唔併入「現在應付」**
+                  （否則客人以為付 54.70、前台收 64.00 會爭執） */}
+              {!memberPricingEnabled && cartMemberPreviewTotal < cartOriginalTotal - 0.005 ? (
+                <div className="flex items-center justify-between text-[12.5px]">
+                  <span className="text-emerald-700">{t("memberTotalLogin")}</span>
+                  <span className="font-bold text-emerald-600">MOP {money2(cartMemberPreviewTotal)}</span>
+                </div>
+              ) : null}
+              {totals.serviceChargeAmount > 0 ? (
+                <div className="flex items-center justify-between text-[12.5px] text-stone-500">
+                  <span>{t("service")}</span>
+                  <span>MOP {money2(totals.serviceChargeAmount)}</span>
+                </div>
+              ) : null}
+              {totals.taxAmount > 0 ? (
+                <div className="flex items-center justify-between text-[12.5px] text-stone-500">
+                  <span>{t("tax")}</span>
+                  <span>MOP {money2(totals.taxAmount)}</span>
+                </div>
+              ) : null}
+              <div className="flex items-baseline justify-between pt-1">
+                <span className="text-[13.5px] font-bold text-stone-900">{t("payableNow")}</span>
+                <span className="text-[19px] font-black text-orange-600">MOP {money2(payableTotal)}</span>
+              </div>
             </div>
-
-            {/* 會員折扣（2026-10-20）：已登入時，折扣行現成「全單折扣」通道。
-                同收據一致 —— 收據一樣係「小計 → 折扣 → 總計」，唔會出現
-                「明細加起 64.00 但總計 54.70」嘅對唔上。 */}
-            {memberDiscountAmount > 0 && (
-              <div className="mb-1 flex items-center justify-between text-sm">
-                <span className="text-emerald-700">{t("memberPriceLabel")}</span>
-                <span className="font-semibold text-emerald-600">−MOP {money2(memberDiscountAmount)}</span>
-              </div>
-            )}
-
-            {totals.serviceChargeAmount > 0 && (
-              <div className="mb-1 flex items-center justify-between text-sm text-stone-600">
-                <span>{t("service")}</span>
-                <span>MOP {money2(totals.serviceChargeAmount)}</span>
-              </div>
-            )}
-            {totals.taxAmount > 0 && (
-              <div className="mb-1 flex items-center justify-between text-sm text-stone-600">
-                <span>{t("tax")}</span>
-                <span>MOP {money2(totals.taxAmount)}</span>
-              </div>
-            )}
-            <div className="mb-1 flex items-center justify-between text-base font-bold text-stone-900">
-              <span>{t("total")}</span>
-              <span>MOP {money2(payableTotal)}</span>
-            </div>
-
-            {/* 未登入優惠預覽（2026-10-20）：
-                「總計」照標**原價實付**，會員價**另外單列**，唔直接畫成總計。
-                否則客人以為付 54.70、到前台被收 64.00 會爭執。
-                呢個落差係**刻意**嘅，唔好「順手優化」掉。 */}
-            {!memberPricingEnabled && cartMemberPreviewTotal < cartOriginalTotal - 0.005 && (
-              <div className="mb-2 flex items-center justify-between rounded-lg bg-emerald-50 px-2.5 py-1.5 text-xs">
-                <span className="text-emerald-700">
-                  {`${t("memberPriceLabel")}（${t("loginToApply")}）`}
-                </span>
-                <span className="font-bold text-emerald-700">MOP {money2(cartMemberPreviewTotal)}</span>
-              </div>
-            )}
-
-            {/* 登入享會員價（2026-10-20）：未登入 + 真係有得平時才顯示。
-                撳完即刻打開登入 sheet，登入成功後上面會多一行「會員 −MOP X」。 */}
-            {!memberPricingEnabled && cartMemberPreviewTotal < cartOriginalTotal - 0.005 && (
-              <button
-                onClick={() => openMemberLogin()}
-                className="mb-2 w-full rounded-2xl bg-emerald-50 py-3 text-sm font-semibold text-emerald-700 ring-1 ring-emerald-200 active:scale-[0.99]"
-              >
-                {t("loginForMemberPrice")}
-              </button>
-            )}
 
             {/* P0-1：錯誤必須喺 sheet **仍然打開** 嘅時候顯示，並且用 aria-live 播報 */}
             <div aria-live="assertive" role="alert">
-              {error && <div className="mb-2 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600">{error}</div>}
+              {error ? (
+                <div className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-[11.5px] text-red-600">{error}</div>
+              ) : null}
             </div>
 
+            {/* 兩個支付選項（稿 v6）：前台支付做默認，放上面 */}
+            <div className="mt-3 space-y-2">
+              <button
+                className="flex w-full items-center gap-3 rounded-2xl bg-white px-3.5 py-3 text-left ring-1 ring-stone-200 transition active:scale-[0.99] disabled:opacity-50"
+                disabled={cart.length === 0 || submitting}
+                onClick={() => void handlePlaceToCounter()}
+                type="button"
+              >
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-orange-50 text-base">
+                  🧾
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-[13.5px] font-bold text-stone-900">
+                    {submitting ? t("submitting") : t("payAtCounterOption")}
+                  </span>
+                  <span className="block truncate text-[10.5px] text-stone-400">{t("payAtCounterHint")}</span>
+                </span>
+                <span className="shrink-0 text-lg text-stone-300">›</span>
+              </button>
+
+              <button
+                className="flex w-full items-center gap-3 rounded-2xl bg-emerald-50/60 px-3.5 py-3 text-left ring-1 ring-emerald-200 transition active:scale-[0.99] disabled:opacity-50"
+                disabled={cart.length === 0 || submitting}
+                onClick={() => handlePlaceByMember()}
+                type="button"
+              >
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-base">
+                  💳
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-[13.5px] font-bold text-emerald-800">{t("payByMember")}</span>
+                  <span className="block truncate text-[10.5px] text-emerald-600">
+                    {t("payByMemberHint").replace("{amt}", money2(cartMemberPreviewTotal))}
+                  </span>
+                </span>
+                <span className="shrink-0 text-lg text-emerald-300">›</span>
+              </button>
+            </div>
+
+            <p className="mt-2.5 text-center text-[10px] leading-relaxed text-stone-400">{t("cartFooterNote")}</p>
             <button
-              onClick={() => void handlePlaceOrder()}
-              disabled={cart.length === 0 || submitting}
-              className="w-full rounded-2xl bg-orange-500 py-3.5 text-lg font-semibold text-white disabled:opacity-50 active:scale-[0.99]"
-            >
-              {submitting ? t("submitting") : error ? t("retryPlace") : t("place")}
-            </button>
-            <button
+              className="mt-1 w-full py-1.5 text-[11px] text-stone-300"
               onClick={() => setCart([])}
-              className="mt-2 w-full py-2 text-xs text-stone-400"
+              type="button"
             >
               {t("clearCart")}
             </button>

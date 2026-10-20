@@ -197,6 +197,23 @@ export const KIOSK_I18N: Record<KioskLanguage, Record<string, string>> = {
     loginToApply: "登入後套用",
     /** 購物車未登入時嘅登入入口 */
     loginForMemberPrice: "登入享會員價",
+    // ── 稿 v6 餐牌 ／ 購物車（2026-10-20）──────────────────────────
+    /** 頂欄橙色小 badge，`{rate}` 由呼叫端替換（95 → 「會員折扣 95 折」） */
+    memberDiscountBadge: "會員折扣 {rate} 折",
+    /** 菜卡綠色小標籤，`{rate}` / `{amt}` 由呼叫端替換 */
+    memberRateSaving: "全單 {rate} 折 · 慳 MOP {amt}",
+    keepOrdering: "繼續加菜",
+    /** 「小計（原價合計）」—— 刻意標明係原價，同下面「會員價合計」對照 */
+    subtotalOriginal: "小計（原價合計）",
+    memberTotalLogin: "會員價合計（登入後套用）",
+    payableNow: "現在應付",
+    /** ⚠️ 唔可以叫 `payAtCounter` —— 嗰個 key 已被「請往收銀付款 / 取餐」佔用（落單成功頁） */
+    payAtCounterOption: "到前台支付",
+    payAtCounterHint: "默認 · 會員折扣由店員手計",
+    payByMember: "會員結帳",
+    /** `{amt}` 由呼叫端替換 */
+    payByMemberHint: "用會員價 {amt} · 扣儲值餘額（要客人入 PIN）",
+    cartFooterNote: "唔使揀都喺妥當 — 落單之後去柜台都得，會員價照計",
     needSpec: "請選規格",
     specConfirm: "確定",
     submitting: "落單中…",
