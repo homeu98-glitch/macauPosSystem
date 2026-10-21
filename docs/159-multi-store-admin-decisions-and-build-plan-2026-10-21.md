@@ -303,33 +303,80 @@ if (canEnterAdmin && !isPlatform && storeIds.length === 0) → 403「未獲分�
 
 ### 13.5 驗收（重點：A 店帳號查 B 店 = 403）
 
-先造一個**店舖級測試帳號**（P2 UI 未做，暫時用 SQL）：
+> 🔴 **帳號 ≠ 店**。`d564b932-…`（60000002 嗰間）本身已經係 Ledger 店，**唔需要新建店**，
+> 亦唔需要在 Ledger 開任何嘢。測試只需要一個「非平台級」嘅登入身份 + 一條 binding；
+> 綁定係一次性設定（P2 會有 UI），唔需要為每間店重複做落去。
+
+**方案 A（推薦，零風險）**：造一個臨時登入帳號，綁去你指定嘅真實店
 
 ```sql
--- ① 權限組：明確開 adminPanelAccess、明確唔係平台
+-- ① 權限組（⚠️ admin_permission_groups.id 係 uuid，唔可以自己填文字 id，否則 22P02）
+insert into admin_permission_groups (id, code, name, role, permissions, created_at, updated_at, note)
+select gen_random_uuid(), 'owner-test', '店主（測試）', 'manager',
+       '{"adminPanelAccess":true,"scopeAllStores":false,"manageAccounts":false}'::jsonb,
+       now(), now(), '多店 P1 驗收用，可刪'
+ where not exists (select 1 from admin_permission_groups where code = 'owner-test');
+
 update admin_permission_groups
-   set permissions = coalesce(permissions,'{}'::jsonb)
-                     || '{"adminPanelAccess":true,"scopeAllStores":false,"manageAccounts":false}'::jsonb
- where id = '<現有某個權限組 id>';
+   set permissions = '{"adminPanelAccess":true,"scopeAllStores":false,"manageAccounts":false}'::jsonb,
+       updated_at = now()
+ where code = 'owner-test';
 
--- ② 建測試帳號（PIN hash 用 0040 嘅 helper；<PEPPER> = Vercel AUTH_PIN_PEPPER）
-insert into admin_account_users (account, name, role, active, permission_group_id, pin_hash, created_at, updated_at)
-values ('60000099','測試店主','admin',true,'<同上 permission_group_id>',
-        public.pos_hash_pin('60000099','1234','<PEPPER>'), now(), now())
-on conflict (account) do update set pin_hash = excluded.pin_hash, active = true;
+-- ② 測試帳號（PIN 用明文 pin_code；首次成功登入會自動升級成 pin_hash）
+insert into admin_account_users
+  (account, pin_code, name, role, active, permission_group_id, created_at, updated_at, note)
+values
+  ('60000099','1234','測試店主','manager',true,
+   (select id from admin_permission_groups where code='owner-test'), now(), now(), 'P1 驗收用')
+on conflict (account) do update
+  set pin_code = '1234', active = true, updated_at = now(),
+      permission_group_id = (select id from admin_permission_groups where code='owner-test');
 
--- ③ 綁 1 間店（A 店）
-insert into admin_account_store_bindings (account_id, store_id, merchant_id)
-select id, '<admin_stores.id>', '<A 店 merchant UUID>'
-  from admin_account_users where account = '60000099'
-on conflict do nothing;
+-- ③ 綁 A 店（只需 merchant_id；resolver 會優先讀佢）
+delete from admin_account_store_bindings
+ where account_id = (select id from admin_account_users where account='60000099');
+
+insert into admin_account_store_bindings (account_id, merchant_id)
+select id, 'd564b932-0c91-45e9-86fd-0ec8e2711f13'
+  from admin_account_users where account='60000099';
+```
+
+> 若 `admin_account_store_bindings.store_id` 係 **NOT NULL**，改用：
+> ```sql
+> insert into admin_account_store_bindings (account_id, store_id, merchant_id)
+> select a.id,
+>        coalesce((select s.id from admin_stores s
+>                   where s.merchant_id='d564b932-0c91-45e9-86fd-0ec8e2711f13' limit 1),
+>                 (select s.id from admin_stores limit 1)),
+>        'd564b932-0c91-45e9-86fd-0ec8e2711f13'
+>   from admin_account_users a where a.account='60000099';
+> ```
+
+**方案 B（唔想新增帳號）**：暫時把你現有平台帳號降級，測完還原
+
+```sql
+-- 0) 記低原本嘅 permission_group_id（copy 出嚟，還原要用）
+select id, account, permission_group_id from admin_account_users where account = '<你嘅帳號>';
+
+-- 1) 同上面 ① 一樣建 owner-test 組；2) 綁 A 店；3) 切過去
+update admin_account_users
+   set permission_group_id = (select id from admin_permission_groups where code='owner-test')
+ where account = '<你嘅帳號>';
+
+-- 🔴 測完還原（唔記得做就會發現自己睇唔到其他店）
+update admin_account_users
+   set permission_group_id = '<原本嘅 uuid>'
+ where account = '<你嘅帳號>';
+delete from admin_account_store_bindings
+ where account_id = (select id from admin_account_users where account='<你嘅帳號>')
+   and merchant_id = 'd564b932-0c91-45e9-86fd-0ec8e2711f13';
 ```
 
 驗收清單：
 
 | # | 動作 | 期望 |
 |---|---|---|
-| 1 | `60000099` 登入 `/admin` | 成功；回傳 `scope.all = false`、`storeIds` 只有 A 店 |
+| 1 | 測試帳號（或方案 B 降級後嘅平台帳號）登入 `/admin` | 成功；回傳 `scope.all = false`、`storeIds` 只有 A 店 |
 | 2 | `GET /api/admin/me` | `stores` 只有 A 店（有名稱） |
 | 3 | `GET /api/admin/orders?storeId=<B>` | **403** `scope.denied` |
 | 4 | `GET /api/admin/orders`（無參數） | 只回 A 店單（睇 `scope` 欄位） |
