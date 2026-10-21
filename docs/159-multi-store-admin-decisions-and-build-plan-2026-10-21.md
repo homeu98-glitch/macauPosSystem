@@ -186,6 +186,16 @@ P4 會員 KPI        1 日（Ledger 做完之後）／B2 3–4 日（Ledger 唔�
 
 ### 12.3 上線後即場驗收（5 分鐘）
 
+> ⚠️ **測試鎖定一定要用「存在於 `admin_account_users` 嘅帳號」**（即你平時入 `/admin` 嗰個）。
+> `60000002` / `2222` 係 **Ledger 店員帳號**（用嚟登入 POS 收銀，走 `/api/ledger/login`），
+> **唔存在於 `admin_account_users`**，所以喺 `/admin` 登入頁永遠只會回「帳號或密碼不正確」，
+> 而且**永遠唔會被鎖** —— 冇 row 就冇地方記失敗次數。呢個係設計如此，唔係 bug
+> （帳號唔存在 = 冇嘢可以爆破；IP 限流仍然生效）。
+>
+> 判斷「新 code 有冇上線」最乾淨嘅方法：去查 `admin_audit_log` 有冇你嗰幾次失敗紀錄
+> （舊 code 完全唔會寫 audit）。冇表 = migration 0068 未跑，或者跑錯專案
+> （**POS = `iyrywzormzisyppkokbi`**，Ledger = `zymdemjflsckicwcinxl`）。
+
 ```bash
 # ① 未帶 token → 401
 curl -s -o /dev/null -w '%{http_code}\n' -X PATCH \
