@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { readAdminSessionFromRequest } from "@/lib/admin-session-token";
+import { requireAdmin } from "@/lib/admin-guard.server";
 import { RELEASE_STORAGE_BUCKET, validateReleaseDraft } from "@/lib/release/release-core";
 import {
   mapReleaseVersionRow,
@@ -34,8 +34,9 @@ import { getSupabaseAdminClient } from "@/lib/supabase-server";
  *
  * ## 四條紀律
  *
- * 1. **鑑權一律 `readAdminSessionFromRequest`**（同 `/api/admin/traffic`、
- *    `/api/admin/sessions` 一致）。呢張表控制「對外派邊個安裝包」⇒ 屬 admin 權限。
+ * 1. **鑑權一律經 `requireAdmin({ platform: true })`**（2026-10-21 P1 scope 化；同
+ *    `/api/admin/traffic`、`/api/admin/sessions` 一致）。呢張表控制「對外派邊個安裝包」
+ *    ⇒ 屬平台權限（店主帳號 403）。
  * 2. **寫入用 `getSupabaseAdminClient()`**（只認 service role）。migration 0050 已經
  *    revoke anon ⇒ 用 anon key 寫入會**靜默失敗**（前端以為成功、DB 冇變）。
  * 3. **驗證只用 `validateReleaseDraft()`**（`@/lib/release/release-core`），
@@ -80,8 +81,9 @@ function notReady(reason: string, ctx: Ctx) {
 // GET · 列出全部版本
 // ─────────────────────────────────────────────────────────────────────────────
 export async function GET(request: Request) {
-  const claims = readAdminSessionFromRequest(request);
-  if (!claims) return bad("未授權，請先登入管理後台。", 401);
+  // 🔴 平台專屬（2026-10-21 P1）：呢張表控制「對外派邊個安裝包」，影響全平台。
+  const guard = await requireAdmin(request, { platform: true });
+  if (!guard.ok) return guard.res;
 
   const ctx: Ctx = { baseUrl: resolveReleaseStorageBaseUrl() };
   const supabase = getSupabaseAdminClient();
@@ -129,8 +131,9 @@ export async function GET(request: Request) {
 // POST · 新增版本
 // ─────────────────────────────────────────────────────────────────────────────
 export async function POST(request: Request) {
-  const claims = readAdminSessionFromRequest(request);
-  if (!claims) return bad("未授權，請先登入管理後台。", 401);
+  // 🔴 平台專屬（2026-10-21 P1）：呢張表控制「對外派邊個安裝包」，影響全平台。
+  const guard = await requireAdmin(request, { platform: true });
+  if (!guard.ok) return guard.res;
 
   const ctx: Ctx = { baseUrl: resolveReleaseStorageBaseUrl() };
   const supabase = getSupabaseAdminClient();
@@ -192,8 +195,9 @@ export async function POST(request: Request) {
 // PATCH · 改資料 / 切換 active
 // ─────────────────────────────────────────────────────────────────────────────
 export async function PATCH(request: Request) {
-  const claims = readAdminSessionFromRequest(request);
-  if (!claims) return bad("未授權，請先登入管理後台。", 401);
+  // 🔴 平台專屬（2026-10-21 P1）：呢張表控制「對外派邊個安裝包」，影響全平台。
+  const guard = await requireAdmin(request, { platform: true });
+  if (!guard.ok) return guard.res;
 
   const ctx: Ctx = { baseUrl: resolveReleaseStorageBaseUrl() };
   const supabase = getSupabaseAdminClient();
@@ -282,8 +286,9 @@ export async function PATCH(request: Request) {
 // DELETE · 刪除版本
 // ─────────────────────────────────────────────────────────────────────────────
 export async function DELETE(request: Request) {
-  const claims = readAdminSessionFromRequest(request);
-  if (!claims) return bad("未授權，請先登入管理後台。", 401);
+  // 🔴 平台專屬（2026-10-21 P1）：呢張表控制「對外派邊個安裝包」，影響全平台。
+  const guard = await requireAdmin(request, { platform: true });
+  if (!guard.ok) return guard.res;
 
   const supabase = getSupabaseAdminClient();
   if (!supabase) return bad("未配置 SUPABASE_SERVICE_ROLE_KEY（Supabase 管理憑證）。", 503);

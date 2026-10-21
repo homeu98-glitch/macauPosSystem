@@ -235,3 +235,116 @@ select account, failed_login_count, locked_until from admin_account_users;
 
 - `scope` 只係**回傳摘要**，**未有任何 route 真正用佢收窄**（A 店帳號打 `?storeId=B` 仍然會拿到 B）。
   ⇒ **P1 完成前，仍然只可以派「平台級」帳號**（即現有 admin）。
+
+---
+
+## 13. P1 完成紀錄（2026-10-21 已改碼，未部署）
+
+### 13.1 核心機制：scope 由 server 端解析，唔入 token
+
+```
+token = { account, role, exp }          ← 唔變（stateless，仍然 12h）
+        ↓ 每個 request
+resolveAdminScope(account)              ← 查 DB（10 秒 cache）
+        ↓
+{ all: true }  或  { all: false, storeIds: [...] }
+        ↓
+storeFilterFor(scope, 請求指定嘅店)      ← 三條不變量
+        ↓
+SQL: 無 filter（只用於 all）／ in(store_ids)／ 空結果
+```
+
+**三條不變量**（有單測鎖死，`admin-scope-core.test.ts`）：
+
+1. `storeIds: []` **≠ 全部** —— 空 scope = 乜都睇唔到（fail closed）
+2. 唔帶店參數 **≠ 全部** —— 只有 `all: true` 才可以用 null
+3. 指定越權店 = **403**（唔可以靜默降級做「睇自己店」，否則前端會以為睇緊 B 店、實際係 A 店數字）
+
+> 為何唔把 `storeIds` 寫入 token：改權限／停用要**即時生效**，唔可以等 12 小時 token 過期。
+
+### 13.2 改咗咩
+
+| 檔案 | 內容 |
+|---|---|
+| `src/lib/admin-scope-core.ts`（新） | 純函數：`storeFilterFor()` / `isPlatformPermissions()` / `scopeSummary()` / `dedupeStoreIds()`；`MAX_SCOPE_STORES = 20`（D5） |
+| `src/lib/admin-scope.server.ts`（新） | `resolveAdminScope()`：查 `admin_account_users`（**順便驗 active**，停用即刻失效）＋ 權限組 ＋ bindings→merchant UUID（`admin_stores.merchant_id` 補 mapping，補唔到一律剔除）；10 秒 cache ＋ `clearAdminScopeCache()` |
+| `src/lib/admin-guard.server.ts`（新） | `requireAdmin(request, { platform? })`：401 / 403 / 503 統一出口；`storeFilterOrDeny()`：越權 403 |
+| `src/app/api/admin/me/route.ts`（新） | 回 `{ account, role, scope:{all,storeIds}, stores:[{id,name}] }`（前端只作顯示／預設選店） |
+| 9 條 admin route | 全部改用 `requireAdmin()`（唔再自己驗 token） |
+| `merchants` | Ledger 商戶列表 + POS 統計（兩條查詢）都跟 scope；回傳加 `scope` |
+| `orders` / `ledger/orders` | `storeId`/`merchantId` 驗 scope；無參數時用 `in(scope.storeIds)`；空 scope 直接回空 |
+| `merchants/status` | **`platform: true`**（D4）＋ 落 audit |
+| `merchants/modules` | GET 限 scope（店主睇得到自己開通咩）；PATCH **`platform: true`**（D4） |
+| `sessions` / `traffic` / `release-versions` | **`platform: true`**（跨店營運情報＋全平台設定） |
+| `src/lib/pos-orders-range.ts` | 新增 `storeIds?: string[] \| null`：`null`=全部、`[]`=**即刻回空**、`[a,b]`=`in()`；RPC 走新 `pos_orders_page_scoped`，未跑就自動降級四腿 |
+| `supabase/migrations/0069_pos_orders_page_scoped.sql`（新） | `p_store_ids text[]` 版本；空陣列 fail closed；`security invoker`、只 grant service_role |
+| `src/lib/types.ts` | `UserPermissions` 加 `adminPanelAccess?` / `scopeAllStores?` |
+| `admin/session` | 登入閘改為「平台級 **或** `adminPanelAccess` ＋ 有綁店」（見 §13.3） |
+
+**測試**：`admin-scope-core.test.ts`（11）＋ `admin-security-contract.test.ts` 擴充（P1：每條 admin route 必須用 `requireAdmin`、唔可以自己驗 token；平台專屬 route 必須有 `platform: true`）。全量 **2549 pass / 0 fail**；`tsc` 0 error。
+
+### 13.3 🔴 登入閘（最需要留意嘅一點）
+
+```ts
+canEnterAdmin = permissions.manageAccounts === true        // 平台級
+             || permissions.adminPanelAccess === true      // 店舖級（明確開啟）
+if (canEnterAdmin && !isPlatform && storeIds.length === 0) → 403「未獲分配任何店舖」
+```
+
+**刻意唔用「有店舖綁定就入得」**：`admin_account_store_bindings` 早就存在，好多現有店長／收銀帳號都有綁定；如果照綁定放行，等於突然開一個新入口畀所有前線帳號（雖然只係自己店、只讀），屬未經批准嘅權限擴張。
+⇒ 現有帳號行為**完全不變**；要開店舖級後台，必須明確設 `adminPanelAccess`（P2 建號 UI 會勾）。
+
+### 13.4 上線次序
+
+1. **跑 migration `0069`**（**POS 專案 `iyrywzormzisyppkokbi`** —— 即 `pos_orders` 所在嗰個，唔係 Ledger）。
+   —— 未跑都唔會壞：`pos_orders_page_scoped` 唔存在 → 自動降級四條時間腿（功能正確、慢少少）。
+2. 部署 code。
+3. 驗收（§13.5）。
+
+### 13.5 驗收（重點：A 店帳號查 B 店 = 403）
+
+先造一個**店舖級測試帳號**（P2 UI 未做，暫時用 SQL）：
+
+```sql
+-- ① 權限組：明確開 adminPanelAccess、明確唔係平台
+update admin_permission_groups
+   set permissions = coalesce(permissions,'{}'::jsonb)
+                     || '{"adminPanelAccess":true,"scopeAllStores":false,"manageAccounts":false}'::jsonb
+ where id = '<現有某個權限組 id>';
+
+-- ② 建測試帳號（PIN hash 用 0040 嘅 helper；<PEPPER> = Vercel AUTH_PIN_PEPPER）
+insert into admin_account_users (account, name, role, active, permission_group_id, pin_hash, created_at, updated_at)
+values ('60000099','測試店主','admin',true,'<同上 permission_group_id>',
+        public.pos_hash_pin('60000099','1234','<PEPPER>'), now(), now())
+on conflict (account) do update set pin_hash = excluded.pin_hash, active = true;
+
+-- ③ 綁 1 間店（A 店）
+insert into admin_account_store_bindings (account_id, store_id, merchant_id)
+select id, '<admin_stores.id>', '<A 店 merchant UUID>'
+  from admin_account_users where account = '60000099'
+on conflict do nothing;
+```
+
+驗收清單：
+
+| # | 動作 | 期望 |
+|---|---|---|
+| 1 | `60000099` 登入 `/admin` | 成功；回傳 `scope.all = false`、`storeIds` 只有 A 店 |
+| 2 | `GET /api/admin/me` | `stores` 只有 A 店（有名稱） |
+| 3 | `GET /api/admin/orders?storeId=<B>` | **403** `scope.denied` |
+| 4 | `GET /api/admin/orders`（無參數） | 只回 A 店單（睇 `scope` 欄位） |
+| 5 | `GET /api/admin/merchants` | 只有 A 店 |
+| 6 | `GET /api/admin/ledger/orders?merchantId=<B>` | **403** |
+| 7 | `PATCH /api/admin/merchants/status` | **403** `platform_only` |
+| 8 | `PATCH /api/admin/merchants/modules` | **403** `platform_only` |
+| 9 | `GET /api/admin/sessions`、`/traffic`、`/release-versions` | **403** `platform_only` |
+| 10 | 用返原本平台帳號做以上全部 | 全部照舊正常（`scope.all = true`） |
+| 11 | 停用 `60000099`（`active=false`）後，**用同一張舊 token** 再打 | **401**（唔使等 token 過期） |
+
+### 13.6 刻意未做（移到 P2）
+
+- **前端店舖多選 UI**（`admin-shell` 店舖勾選、報表 `allStoresMode` → `storeIds`）。
+  原因：P2 之前冇正式嘅店舖級帳號（要靠 §13.5 嘅 SQL 造），UI 冇對象可測；
+  而且平台帳號仍然係「全部」，現有畫面行為完全正確。P2 建號 UI 會一次過做完。
+- **`merchants` 的 Ledger 查詢仍然 `select` 全表再 JS 過濾**（店主只收到自己嘅店，冇外洩，
+  但多讀幾十行）。等 P3 寫入通道一齊改成 server 端 `.in()`（Ledger 表細，暫時唔急）。

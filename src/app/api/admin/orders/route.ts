@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { readAdminSessionFromRequest } from "@/lib/admin-session-token";
+import { requireAdmin, storeFilterOrDeny } from "@/lib/admin-guard.server";
 import { mapOrderRow } from "@/lib/pos-order-row";
 import { fetchOrdersInRange } from "@/lib/pos-orders-range";
 import { getSupabaseServerClient } from "@/lib/supabase-server";
@@ -33,13 +33,18 @@ function toUtcIso(iso: string): string {
 }
 
 export async function GET(request: Request) {
-  const claims = readAdminSessionFromRequest(request);
-  if (!claims) {
-    return NextResponse.json({ ok: false, error: "未授權，請先登入管理後台。" }, { status: 401 });
-  }
+  // 🔴 2026-10-21（P1）：唔再係「有 token = 睇全部」。
+  // scope 由 server 解析；`storeId` 必須 ∈ scope，否則 403（唔可以靜默降級）。
+  const guard = await requireAdmin(request);
+  if (!guard.ok) return guard.res;
+  const { claims, scope } = guard;
 
   const { searchParams } = new URL(request.url);
-  const storeId = searchParams.get("storeId")?.trim() || null;
+  const requestedStoreId = searchParams.get("storeId")?.trim() || null;
+  const filter = storeFilterOrDeny(scope, requestedStoreId, request);
+  if (!filter.ok) return filter.res;
+  /** null = 平台級「全部店」；陣列 = scope 內店舖（空陣列 = 一間都冇）。 */
+  const storeIds = filter.storeIds;
 
   const rawLimit = searchParams.get("limit");
   let limit = 500;
@@ -69,7 +74,7 @@ export async function GET(request: Request) {
   // 對照前端 Network tab 嘅 query string，可以一眼睇出係「前端冇傳」定「後端查唔到」。
   console.log("[admin/orders] request", {
     account: claims.account,
-    storeId,
+    storeIds: storeIds ?? "all",
     startRaw: searchParams.get("start"),
     endRaw: searchParams.get("end"),
     start,
@@ -100,15 +105,15 @@ export async function GET(request: Request) {
     );
   }
 
-  const { orders, error } = await fetchOrdersInRange({ supabase, storeId, start, end, limit, offset });
+  const { orders, error } = await fetchOrdersInRange({ supabase, storeIds, start, end, limit, offset });
 
   if (error) {
-    console.error("[admin/orders] query_failed", { storeId, start, end, limit, offset, error });
+    console.error("[admin/orders] query_failed", { storeIds, start, end, limit, offset, error });
     return NextResponse.json({ ok: false, error: "讀取訂單失敗。", detail: error }, { status: 502 });
   }
 
   // 🩺 可觀測性：記錄實際查到嘅筆數 + 區間，0 筆時用 warn 方便喺 log 度 grep。
-  const summary = { account: claims.account, storeId: storeId ?? "all", start, end, count: orders.length };
+  const summary = { account: claims.account, storeIds: storeIds ?? "all", start, end, count: orders.length };
   if (orders.length === 0) {
     console.warn("[admin/orders] empty_result", summary);
   } else {
@@ -117,7 +122,8 @@ export async function GET(request: Request) {
 
   return NextResponse.json({
     ok: true,
-    scope: storeId ?? "all",
+    // 回傳實際過濾範圍：null = 全部店；陣列 = 只含這些店（前端可用嚟核對「我睇緊邊幾間」）
+    scope: storeIds ?? "all",
     orders: orders.map((row) => mapOrderRow(row)),
     limit,
     offset,

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 
+import { requireAdmin, storeFilterOrDeny } from "@/lib/admin-guard.server";
 import { getLedgerServiceClient, isLedgerServiceConfigured } from "@/lib/ledger/admin-server";
-import { readAdminSessionFromRequest } from "@/lib/admin-session-token";
 import { orderEventInstant } from "@/lib/pos/order-event-time";
 import { fetchOrdersInRange } from "@/lib/pos-orders-range";
 import { getSupabaseServerClient } from "@/lib/supabase-server";
@@ -96,7 +96,7 @@ function isCountableSale(status: unknown): boolean {
  * ⚠️ 只改日歸屬口徑，**冇改**「可計銷售狀態」定義、金額來源（`total`）同無上限語義
  *    —— 同舊行為逐位對齊嘅部分保持原樣。
  */
-async function loadPosStats(): Promise<{
+async function loadPosStats(storeIds: string[] | null): Promise<{
   today: Map<string, { orders: number; revenue: number }>;
   d7: Map<string, { orders: number; revenue: number }>;
   lastOrderAt: Map<string, string>;
@@ -106,16 +106,28 @@ async function loadPosStats(): Promise<{
     d7: new Map<string, { orders: number; revenue: number }>(),
     lastOrderAt: new Map<string, string>(),
   };
+  // 🔴 空 scope = 一間店都冇 ⇒ 唔好查（亦唔可以變成「查全部」）。
+  if (Array.isArray(storeIds) && storeIds.length === 0) return empty;
+
   const supabase = getSupabaseServerClient();
   if (!supabase) return empty;
 
   const todayStartMs = Date.parse(macauTodayStartIso());
   const d7StartMs = Date.parse(macauDaysAgoStartIso(7));
 
+  // 🩺 2026-10-21（P1）：近 7 日超集 + 「最近落單」兩條查詢都要跟 scope，
+  // 否則店主帳號雖然只見到自己嘅店名，統計數字卻係全平台 —— 比見唔到更危險。
+  const lastQuery = supabase
+    .from("pos_orders")
+    .select("store_id,created_at,updated_at,reopened_at,settled_at")
+    .order("created_at", { ascending: false })
+    .limit(2000);
+
   const [rangeRes, lastRes] = await Promise.all([
     fetchOrdersInRange({
       supabase,
-      storeId: null,
+      // 平台級 = null（全部店）；店主 = 自己嘅店
+      storeIds,
       // start / end 一律 UTC ISO（`fetchOrdersInRange` 嘅約定；同 /api/admin/orders 一致）。
       start: new Date(d7StartMs).toISOString(),
       // end: null = 無上限 —— 保持舊實作「只設下限」嘅語義，唔加新限制。
@@ -124,11 +136,7 @@ async function loadPosStats(): Promise<{
       offset: 0,
       columns: STATS_COLUMNS,
     }),
-    supabase
-      .from("pos_orders")
-      .select("store_id,created_at,updated_at,reopened_at,settled_at")
-      .order("created_at", { ascending: false })
-      .limit(2000),
+    storeIds === null ? lastQuery : lastQuery.in("store_id", storeIds),
   ]);
 
   // 唔可以靜默當 0：否則總覽會顯示「今日冇單」而管理員無從判斷係查詢失敗定真係冇單。
@@ -201,13 +209,18 @@ async function loadPosStats(): Promise<{
 }
 
 export async function GET(request: Request) {
-  const claims = readAdminSessionFromRequest(request);
-  if (!claims) {
-    return NextResponse.json({ ok: false, error: "未授權，請先登入管理後台。" }, { status: 401 });
-  }
+  // 🔴 2026-10-21（P1）：呢支 route 以前 `select` Ledger `merchants` **全表**。
+  // 店主帳號唔可以見到其他商戶（連店名都唔可以），所以由 scope 過濾。
+  const guard = await requireAdmin(request);
+  if (!guard.ok) return guard.res;
+
+  const filter = storeFilterOrDeny(guard.scope, null, request);
+  if (!filter.ok) return filter.res;
+  /** null = 平台級（全部店）；陣列 = 店主可見店舖（空陣列 = 一間都冇）。 */
+  const storeIds = filter.storeIds;
 
   const ledgerConfigured = isLedgerServiceConfigured();
-  const posStats = await loadPosStats();
+  const posStats = await loadPosStats(storeIds);
 
   let merchants: Array<{
     id: string;
@@ -233,7 +246,10 @@ export async function GET(request: Request) {
       );
     }
 
-    merchants = ((data ?? []) as LedgerMerchantRow[]).map((m) => {
+    merchants = ((data ?? []) as LedgerMerchantRow[])
+      // scope 過濾：店主只回自己嘅店；平台級（null）回全部。
+      .filter((m) => storeIds === null || storeIds.includes(String(m.id ?? "")))
+      .map((m) => {
       const key = m.id ?? "(null)";
       const t = posStats.today.get(key) ?? { orders: 0, revenue: 0 };
       const w = posStats.d7.get(key) ?? { orders: 0, revenue: 0 };
@@ -279,6 +295,8 @@ export async function GET(request: Request) {
   return NextResponse.json({
     ok: true,
     ledgerConfigured,
+    // 回傳實際範圍：null = 全部店；陣列 = 只含這些 merchant（前端用嚟核對）
+    scope: storeIds ?? "all",
     merchants,
     generatedAt: new Date().toISOString(),
   });

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { readAdminSessionFromRequest } from "@/lib/admin-session-token";
+import { requireAdmin, storeFilterOrDeny } from "@/lib/admin-guard.server";
 import {
   defaultMerchantGrants,
   normalizeMerchantGrants,
@@ -29,15 +29,17 @@ import {
  * 「呢間店未設定過，而家係跟預設全開」，否則管理員會以為自己已經設過。
  */
 export async function GET(request: Request) {
-  const claims = readAdminSessionFromRequest(request);
-  if (!claims) {
-    return NextResponse.json({ ok: false, error: "未授權，請先登入管理後台。" }, { status: 401 });
-  }
+  // 讀：任何 admin 帳號都可以讀**自己 scope 內**嘅店（店主睇得到自己開通咗咩模組）。
+  const guard = await requireAdmin(request);
+  if (!guard.ok) return guard.res;
 
   const merchantId = new URL(request.url).searchParams.get("merchantId")?.trim();
   if (!merchantId) {
     return NextResponse.json({ ok: false, error: "缺少 merchantId。" }, { status: 400 });
   }
+
+  const filter = storeFilterOrDeny(guard.scope, merchantId, request);
+  if (!filter.ok) return filter.res;
 
   const map = await loadMerchantGrantsMap([merchantId]);
   const explicit = map.get(merchantId);
@@ -51,10 +53,10 @@ export async function GET(request: Request) {
 }
 
 export async function PATCH(request: Request) {
-  const claims = readAdminSessionFromRequest(request);
-  if (!claims) {
-    return NextResponse.json({ ok: false, error: "未授權，請先登入管理後台。" }, { status: 401 });
-  }
+  // 🔴 D4（2026-10-21 拍板）：「模組開關」只有平台可以改。
+  // 店主可以睇自己店開通咗咩，但唔可以自己開／關 —— 呢個係商業授權，唔係店舖設定。
+  const guard = await requireAdmin(request, { platform: true });
+  if (!guard.ok) return guard.res;
 
   let body: unknown;
   try {

@@ -62,6 +62,16 @@ export type OrdersInRangeParams = {
   supabase: SupabaseClient;
   /** 唔帶 = 全部店（admin 跨店彙總用；POS / 單店模式一定帶） */
   storeId?: string | null;
+  /**
+   * 多店範圍（2026-10-21 · 多店控制台 P1）。
+   *
+   * `undefined` / `null` = 唔加 store 過濾（＝全部店，**只准平台級 admin 用**）。
+   * `[]` = 乜都唔回（fail closed：空 scope ≠ 全部，呼叫端亦應該喺入嚟之前就短路）。
+   * `[a, b]` = `store_id in (a,b)`（店主帳號嘅「我的店舖」彙總）。
+   *
+   * 優先於 `storeId`：兩者同時有值時以 `storeIds` 為準（呼叫端唔應該兩個都傳）。
+   */
+  storeIds?: string[] | null;
   /** UTC ISO（`...Z`）；null = 無下限 */
   start?: string | null;
   /** UTC ISO（`...Z`）；null = 無上限 */
@@ -111,7 +121,7 @@ async function runTimeLegs(
   params: OrdersInRangeParams,
   columns: string,
 ): Promise<{ result: OrdersInRangeResult; failure: OrdersRangeFailure | null }> {
-  const { supabase, storeId, start, end, limit, offset } = params;
+  const { supabase, storeId, storeIds, start, end, limit, offset } = params;
 
   // 三腿基礎查詢（同 table、同 store 過濾）——先 .select(columns) 轉 FilterBuilder，
   // 之後嘅 conditional .gte() / .lte() chain 先會全部喺同一型別上（PostgrestQueryBuilder
@@ -125,7 +135,15 @@ async function runTimeLegs(
   //    原本寫死 `select("*")` 時唔會撞到，係改成可變字串投影後才出現。
   const buildBase = () =>
     supabase.from("pos_orders").select(columns) as unknown as OrderFilterBuilder;
-  const base = () => (storeId ? buildBase().eq("store_id", storeId) : buildBase());
+  // 🔴 多店 scope 先行：`storeIds` 有值時以佢為準（`.in()`）；
+  //    `storeIds: []` 喺 `fetchOrdersInRange()` 入口已經短路，唔會行到呢度 ——
+  //    呢點好重要：空陣列絕對唔可以變成「唔加 filter」（＝全平台）。
+  const base = () => {
+    const b = buildBase();
+    if (storeIds && storeIds.length > 0) return b.in("store_id", storeIds);
+    if (storeId) return b.eq("store_id", storeId);
+    return b;
+  };
 
   // 各腿只 filter 自己嘅時間欄位 + 同 window 分頁，plain chain、零 .or() 語法。
   const createdQuery = applyRange(base(), "created_at", start, end)
@@ -216,17 +234,31 @@ async function runRpc(
 ): Promise<
   { ok: true; result: OrdersInRangeResult } | { ok: false; failure: OrdersRangeFailure; error: string }
 > {
-  const { supabase, storeId, start, end, limit, offset } = params;
+  const { supabase, storeId, storeIds, start, end, limit, offset } = params;
+
+  // 🔴 2026-10-21（多店 P1）：scope 有多間店時用 `pos_orders_page_scoped`（0069）。
+  //    舊 `pos_orders_page` 只有單一 `p_store_id`，傳 null = 全部店 —— 唔可以靠佢做多店。
+  //    未跑 0069 → function not found（rpc-missing）→ 自動降級四腿（`.in()`），功能仍然正確。
+  const scoped = Array.isArray(storeIds) && storeIds.length > 0;
+  const args: Record<string, unknown> = scoped
+    ? {
+        p_store_ids: storeIds,
+        p_start: start ?? null,
+        p_end: end ?? null,
+        p_limit: limit,
+        p_offset: offset,
+      }
+    : {
+        // ⚠️ `pos_orders.store_id` 係 **text**（見 0012），唔係 uuid。
+        p_store_id: storeId ?? null,
+        p_start: start ?? null,
+        p_end: end ?? null,
+        p_limit: limit,
+        p_offset: offset,
+      };
 
   const { data, error } = await supabase
-    .rpc("pos_orders_page", {
-      // ⚠️ `pos_orders.store_id` 係 **text**（見 0012），唔係 uuid。
-      p_store_id: storeId ?? null,
-      p_start: start ?? null,
-      p_end: end ?? null,
-      p_limit: limit,
-      p_offset: offset,
-    })
+    .rpc(scoped ? "pos_orders_page_scoped" : "pos_orders_page", args)
     // PostgREST 對 `returns setof <table>` 嘅函數支援 `?select=` 投影
     //（舊版 PostgREST 會忽略而回全欄位 —— 只會少省流量，唔會出錯）。
     .select(columns);
@@ -248,18 +280,25 @@ async function runRpc(
 export async function fetchOrdersInRange(params: OrdersInRangeParams): Promise<OrdersInRangeResult> {
   const columns = params.columns?.trim() || POS_ORDER_DB_SELECT;
 
+  // 🔴 fail closed（2026-10-21 P1）：空 scope 絕對唔可以當「全部」。
+  //    `storeIds: []` 代表「呢個帳號一間店都冇」⇒ 直接回空，連 DB 都唔打。
+  //    （如果呢個分支漏咗，下面所有路徑都會變成「唔加 store filter」＝全平台。）
+  if (Array.isArray(params.storeIds) && params.storeIds.length === 0) {
+    return { orders: [], error: null };
+  }
+
   // ── ① 首選：單一 RPC（1 次 round trip、每行只回一次）──
   const viaRpc = await runRpc(params, columns);
   if (viaRpc.ok) return viaRpc.result;
 
-  // ── ② RPC 唔可用 → 降級：三條時間腿（舊行為）──
-  // 「未跑 migration 0046」係**預期**情況（正常 warn 一句就夠）；
+  // ── ② RPC 唔可用 → 降級：四條時間腿（舊行為）──
+  // 「未跑 migration 0046／0069」係**預期**情況（正常 warn 一句就夠）；
   // 其他錯誤（DB 故障 / 權限）就要令人見得到。
   // ⚠️ `fatal`（超時之類）都一律行呢條路：寧願慢一次，都唔可以令報表變空。
   if (viaRpc.failure === "rpc-missing") {
     console.warn(
-      "[pos-orders-range] 搵唔到 pos_orders_page()（migration 0046 未跑）→ 降級用四條時間腿。" +
-        "跑咗 0046 之後會自動用返單一查詢（egress 省成截）。",
+      "[pos-orders-range] 搵唔到 pos_orders_page()／pos_orders_page_scoped()（migration 0046/0069 未跑）" +
+        "→ 降級用四條時間腿。跑咗之後會自動用返單一查詢（egress 省成截）。",
     );
   } else {
     console.warn(`[pos-orders-range] RPC 失敗（${viaRpc.error}）→ 降級用四條時間腿。`);

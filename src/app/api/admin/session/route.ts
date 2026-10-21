@@ -110,10 +110,32 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, error: result.error }, { status: 401 });
   }
 
-  // 登入成功 ≠ 有權管帳戶：要明確有 manageAccounts
-  if (!result.session.permissions?.manageAccounts) {
+  // 登入閘（2026-10-21 P1 調整）：
+  //   · 平台級（`manageAccounts`）→ 可以登入，scope = 全部店。
+  //   · 店舖級（`adminPanelAccess === true` ＋ 有店舖綁定）→ 可以登入，scope = 自己嘅店。
+  //   · 其餘（包括舊有冇 manageAccounts 嘅店長／收銀帳號）→ **照舊拒絕**。
+  //
+  // 🔴 為何要一個**明確** flag 而唔係「有綁定就入得」：
+  //    `admin_account_store_bindings` 早就存在，好多現有店長／收銀帳號都有綁定。
+  //    如果「有綁定就入得 /admin」，等於突然開咗個新入口畀所有前線帳號（雖然只係自己店、
+  //    只讀），屬**未經批准嘅權限擴張**。所以要有 `adminPanelAccess` 明確開啟；
+  //    P2 建 owner 帳號時由平台勾選（或 SQL 設 `permissions.adminPanelAccess = true`）。
+  const permissions = result.session.permissions;
+  const storeIds = result.session.storeIds ?? [];
+  const isPlatform = Boolean(permissions?.manageAccounts);
+  const canEnterAdmin = isPlatform || permissions?.adminPanelAccess === true;
+
+  if (!canEnterAdmin) {
     await writeAdminAudit({ account, action: "login_failed", target: "session.permission_denied", ip });
-    return NextResponse.json({ ok: false, error: "此帳號沒有管理帳戶的權限。" }, { status: 403 });
+    return NextResponse.json({ ok: false, error: "此帳號沒有管理後台權限。" }, { status: 403 });
+  }
+
+  if (!isPlatform && storeIds.length === 0) {
+    await writeAdminAudit({ account, action: "login_failed", target: "session.no_scope", ip });
+    return NextResponse.json(
+      { ok: false, error: "此帳號未獲分配任何店舖，請聯絡平台管理員。" },
+      { status: 403 },
+    );
   }
 
   const token = issueAdminSessionToken({ account: result.session.account, role: result.session.role });
@@ -127,13 +149,12 @@ export async function POST(request: Request) {
     );
   }
 
-  const storeIds = result.session.storeIds ?? [];
   await writeAdminAudit({
     account: result.session.account,
     action: "login_success",
     target: "session",
     // ⚠️ 登入時只記「有冇店綁定」同數量，唔記全部 id（避免一行塞幾十個 uuid）
-    detail: { storeCount: storeIds.length, role: result.session.role },
+    detail: { storeCount: storeIds.length, role: result.session.role, platform: isPlatform },
     ip,
   });
 
@@ -144,12 +165,12 @@ export async function POST(request: Request) {
     name: result.session.name,
     role: result.session.role,
     /**
-     * Scope 摘要（P0-5）。P1 會由 `resolveAdminScope()` 正式計算（含 `scopeAllStores` flag）。
-     * 現階段登入本身已要求 `manageAccounts`，即只有平台帳號入得到 ⇒ `all` 為 true 係實情。
+     * Scope 摘要（P0-5 / P1）：同 `resolveAdminScope()` 嘅判斷一致
+     * （`manageAccounts` 為平台級過渡推導；P2 會改用明確 `scopeAllStores` flag）。
      * 前端**唔可以**用呢個值做授權判斷，只作顯示／預設選店用（真授權永遠在 server）。
      */
     scope: {
-      all: Boolean(result.session.permissions?.manageAccounts),
+      all: isPlatform,
       storeIds,
     },
   });

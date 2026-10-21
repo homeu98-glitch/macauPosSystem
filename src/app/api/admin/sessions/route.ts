@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { readAdminSessionFromRequest } from "@/lib/admin-session-token";
+import { requireAdmin } from "@/lib/admin-guard.server";
 import { readServerBuildId } from "@/lib/build-info";
 import { getLedgerServiceClient } from "@/lib/ledger/admin-server";
 import {
@@ -46,10 +46,10 @@ import { canClearPosSession } from "@/lib/pos/session-record";
 const MAX_BULK = 50;
 
 export async function GET(request: Request) {
-  const claims = readAdminSessionFromRequest(request);
-  if (!claims) {
-    return NextResponse.json({ ok: false, error: "未授權，請先登入管理後台。" }, { status: 401 });
-  }
+  // 🔴 平台專屬（2026-10-21 P1）：工作階段總覽橫跨全部店，而且可以強制關閉
+  // 別人間店嘅分頁 —— 屬營運情報 + 平台操作，店主帳號唔應該見到。
+  const guard = await requireAdmin(request, { platform: true });
+  if (!guard.ok) return guard.res;
 
   // 🔴 自動清除「已死」記錄（2026-10-17，J 拍板）：節流後每個 process 5 分鐘一次，
   //    **先清再列** ⇒ admin 睇到嘅即係清完之後嘅實況。
@@ -91,10 +91,11 @@ export async function GET(request: Request) {
 }
 
 export async function PATCH(request: Request) {
-  const claims = readAdminSessionFromRequest(request);
-  if (!claims) {
-    return NextResponse.json({ ok: false, error: "未授權，請先登入管理後台。" }, { status: 401 });
-  }
+  // 🔴 平台專屬（2026-10-21 P1）：工作階段總覽橫跨全部店，而且可以強制關閉
+  // 別人間店嘅分頁 —— 屬營運情報 + 平台操作，店主帳號唔應該見到。
+  const guard = await requireAdmin(request, { platform: true });
+  if (!guard.ok) return guard.res;
+  const { claims } = guard;
 
   let payload: { id?: string; ids?: string[]; action?: string; reason?: string };
   try {

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { readAdminSessionFromRequest } from "@/lib/admin-session-token";
+import { requireAdmin, storeFilterOrDeny } from "@/lib/admin-guard.server";
 import { getLedgerServiceClient } from "@/lib/ledger/admin-server";
 import { mapLedgerOrderRow, type LedgerOrderRow, type LedgerOnlineOrder } from "@/lib/ledger/order-mapper";
 
@@ -43,13 +43,19 @@ const CAP = 4000;
 const PAGE = 1000;
 
 export async function GET(request: Request) {
-  const claims = readAdminSessionFromRequest(request);
-  if (!claims) {
-    return NextResponse.json({ ok: false, error: "未授權，請先登入管理後台。" }, { status: 401 });
-  }
+  // 🔴 2026-10-21（P1）：舊版唔帶 merchantId 就查全部商家線上單。
+  // 店主帳號只可以見自己嘅店；指定其他店 → 403（唔會靜默降級）。
+  const guard = await requireAdmin(request);
+  if (!guard.ok) return guard.res;
+  const { claims } = guard;
 
   const { searchParams } = new URL(request.url);
-  const merchantId = searchParams.get("merchantId")?.trim() || null;
+  const requestedMerchantId = searchParams.get("merchantId")?.trim() || null;
+  const filter = storeFilterOrDeny(guard.scope, requestedMerchantId, request);
+  if (!filter.ok) return filter.res;
+  /** null = 平台級（全部商家）；陣列 = scope 內店舖（空陣列 = 一間都冇）。 */
+  const merchantIds = filter.storeIds;
+
   const startRaw = searchParams.get("start")?.trim() || null;
   const endRaw = searchParams.get("end")?.trim() || null;
   const start = startRaw ? toUtcIso(startRaw) : null;
@@ -57,12 +63,24 @@ export async function GET(request: Request) {
 
   console.log("[admin/ledger/orders] request", {
     account: claims.account,
-    merchantId: merchantId ?? "all",
+    merchantIds: merchantIds ?? "all",
     startRaw,
     endRaw,
     start,
     end,
   });
+
+  // 空 scope：直接回空，唔好打 Ledger（亦唔可以變成「查全部」）。
+  if (Array.isArray(merchantIds) && merchantIds.length === 0) {
+    return NextResponse.json({
+      ok: true,
+      scope: [],
+      orders: [],
+      limit: 0,
+      offset: 0,
+      debug: { start, end, count: 0 },
+    });
+  }
 
   const supabase = getLedgerServiceClient();
   if (!supabase) {
@@ -90,7 +108,8 @@ export async function GET(request: Request) {
         .select("*")
         .order("updated_at", { ascending: false })
         .range(off, off + PAGE - 1);
-      if (merchantId) q = q.eq("merchant_id", merchantId);
+      // scope：null = 全部商家；陣列 = `merchant_id in (...)`
+      if (merchantIds !== null) q = q.in("merchant_id", merchantIds);
       // 🔴 一定要 `updated_at`：前端口徑係 `orderEventInstant()`（updatedAt 優先）。
       // 用 `created_at` 會靜默丟棄「昨日落單、今日完成」嘅預約單（2026-09-24 實案）。
       if (start) q = q.gte("updated_at", start);
@@ -98,7 +117,7 @@ export async function GET(request: Request) {
 
       const { data, error } = await q;
       if (error) {
-        console.error("[admin/ledger/orders] query_failed", { merchantId, start, end, off, error });
+        console.error("[admin/ledger/orders] query_failed", { merchantIds, start, end, off, error });
         return NextResponse.json(
           { ok: false, error: "讀取線上單失敗。", detail: error.message },
           { status: 502 },
@@ -112,21 +131,21 @@ export async function GET(request: Request) {
     const orders: LedgerOnlineOrder[] = all.map(mapLedgerOrderRow);
     console.log("[admin/ledger/orders] result", {
       account: claims.account,
-      scope: merchantId ?? "all",
+      scope: merchantIds ?? "all",
       rawCount: all.length,
       mappedCount: orders.length,
     });
 
     return NextResponse.json({
       ok: true,
-      scope: merchantId ?? "all",
+      scope: merchantIds ?? "all",
       orders,
       limit: all.length,
       offset: 0,
       debug: { start, end, count: orders.length },
     });
   } catch (err) {
-    console.error("[admin/ledger/orders] unexpected", { merchantId, start, end, err });
+    console.error("[admin/ledger/orders] unexpected", { merchantIds, start, end, err });
     return NextResponse.json(
       { ok: false, error: "讀取線上單時發生錯誤。", detail: err instanceof Error ? err.message : String(err) },
       { status: 500 },

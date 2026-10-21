@@ -1,26 +1,27 @@
 import { NextResponse } from "next/server";
 
+import { readClientIp, writeAdminAudit } from "@/lib/admin-audit.server";
+import { requireAdmin } from "@/lib/admin-guard.server";
 import { getLedgerServiceClient } from "@/lib/ledger/admin-server";
-import { readAdminSessionFromRequest } from "@/lib/admin-session-token";
 
 /**
- * PATCH /api/admin/merchants/status — 啟用 / 停用整個商家（admin panel 唯一寫操作）。
+ * PATCH /api/admin/merchants/status — 啟用 / 停用整個商家（平台級寫操作）。
  *
  * 動作：Ledger DB `merchants.status` 改 "active" ⇄ "suspended"。
  * `/api/ledger/login` 已內置檢查：status = suspended（或任何非 active/pending）→
  * 該店**全部賬號**都無法登入 POS（403「商戶已停用」）。所以呢個粒度係「整個商家」，
  * 唔係個別 8 位賬號（用戶 2026-09-06 確認）。
  *
- * 把關：admin session token。動作會喺 response 入面回傳新狀態，前端更新列表。
+ * 把關：admin session token ＋ **平台級**（2026-10-21 P1）。
+ * 呢個動作會令別人間店即刻登入唔到 —— 店主帳號絕對唔可以做到，所以係 `platform: true`。
  */
 
 const ALLOWED_STATUS = new Set(["active", "suspended"]);
 
 export async function PATCH(request: Request) {
-  const claims = readAdminSessionFromRequest(request);
-  if (!claims) {
-    return NextResponse.json({ ok: false, error: "未授權，請先登入管理後台。" }, { status: 401 });
-  }
+  const guard = await requireAdmin(request, { platform: true });
+  if (!guard.ok) return guard.res;
+  const { claims } = guard;
 
   let payload: { merchantId?: string; status?: string };
   try {
@@ -60,6 +61,16 @@ export async function PATCH(request: Request) {
       { status: 502 },
     );
   }
+
+  // 平台級寫操作：停／啟用會令該店全部帳號即刻登入唔到（或恢復），必須留痕。
+  await writeAdminAudit({
+    account: claims.account,
+    action: "write",
+    target: "merchant.status",
+    storeIds: [merchantId],
+    detail: { status },
+    ip: readClientIp(request),
+  });
 
   return NextResponse.json({
     ok: true,

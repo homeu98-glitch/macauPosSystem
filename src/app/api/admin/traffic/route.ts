@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { readAdminSessionFromRequest } from "@/lib/admin-session-token";
+import { requireAdmin } from "@/lib/admin-guard.server";
 import { getLedgerServiceClient } from "@/lib/ledger/admin-server";
 import { EGRESS_FREE_QUOTA_BYTES, macauDayString, recentMacauDays } from "@/lib/pos/egress-usage";
 import { getSupabaseServerClient } from "@/lib/supabase-server";
@@ -22,7 +22,7 @@ import { getSupabaseServerClient } from "@/lib/supabase-server";
  *   避免「API 一套、頁面另一套」口徑漂移（同 `/api/admin/sessions` 同一個做法）。
  * · **migration 未跑要 graceful**：`pos_egress_daily` 唔存在 → 回
  *   `{ ok: true, available: false, reason }`，令 admin 頁顯示「未啟用」而唔係爆 500。
- * · 鑑權同其他 admin API 一致（`readAdminSessionFromRequest`）。
+ * · 鑑權：`requireAdmin({ platform: true })`（2026-10-21 P1 起 scope 化；平台專屬）。
  *
  * ## 口徑（頁面要寫明）
  *
@@ -36,10 +36,9 @@ const MAX_ROWS = 20_000;
 const MAX_STORES_FOR_NAMES = 2_000;
 
 export async function GET(request: Request) {
-  const claims = readAdminSessionFromRequest(request);
-  if (!claims) {
-    return NextResponse.json({ ok: false, error: "未授權，請先登入管理後台。" }, { status: 401 });
-  }
+  // 🔴 平台專屬（2026-10-21 P1）：雲端用量係成本／營運情報，跨全部店。
+  const guard = await requireAdmin(request, { platform: true });
+  if (!guard.ok) return guard.res;
 
   const { searchParams } = new URL(request.url);
   const rawDays = Number.parseInt(searchParams.get("days") ?? "14", 10);

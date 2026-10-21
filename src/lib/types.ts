@@ -23,6 +23,25 @@ export interface UserPermissions {
   reprintReceipt?: boolean;
   manageAccounts?: boolean;
   /**
+   * 可以登入**管理後台**（`/admin`）嘅店舖級帳號（2026-10-21 多店控制台 P1）。
+   *
+   * 缺省 = 冇。只有平台明確開啟（P2 建 owner 帳號時勾選／SQL 設）才入得到。
+   * 🔴 唔可以改成「有店舖綁定就入得」：`admin_account_store_bindings` 好多前線帳號都有，
+   *    咁樣等於靜靜開一個新入口畀所有店長／收銀，屬未經批准嘅權限擴張。
+   *
+   * 入到之後**仍然只見到自己綁定嘅店**（scope 由 server 端 `resolveAdminScope()` 解析，
+   * 同 token 無關）。平台級（`manageAccounts`）不受此限。
+   */
+  adminPanelAccess?: boolean;
+  /**
+   * 平台級：可見**全部**店舖（2026-10-21 多店控制台 P1）。
+   *
+   * 缺省時，`resolveAdminScope()` 會用 `manageAccounts` 做**過渡推導**
+   * （現有 admin 帳號都有 `manageAccounts`）。P2 之後建議明確設呢個 flag，
+   * 令「可以管帳號」同「可以跨全部店」兩件事分開。
+   */
+  scopeAllStores?: boolean;
+  /**
    * 零售：單品改價。**舞弊高風險位**，缺省 = 冇（要明文開）。
    * 見 docs/124 §R3。
    */

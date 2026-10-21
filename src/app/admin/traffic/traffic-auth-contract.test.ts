@@ -42,13 +42,16 @@ describe("/admin/traffic ── 鑑權契約", () => {
   });
 
   it("route 側仍然要驗 admin claims（唔可以為方便而放寬）", () => {
+    // 2026-10-21（P1）：由「自己驗 token」改為經統一守衛 `requireAdmin()`，
+    // 並加上 `platform: true`（雲端用量係跨店營運情報，店主帳號唔應該見到）。
+    // 401 亦由守衛統一處理，所以唔再喺 route 內出現 `status: 401`。
     assert.ok(
-      /readAdminSessionFromRequest\(request\)/.test(ROUTE),
-      "route 冇驗 admin session ⇒ 任何人知道 storeId 就可以讀走各店用量",
+      /requireAdmin\(request/.test(ROUTE),
+      "route 冇經統一守衛 ⇒ 任何人知道 storeId 就可以讀走各店用量",
     );
     assert.ok(
-      /status:\s*401/.test(ROUTE),
-      "冇 token 唔係回 401 ⇒ 鑑權語義同其他 admin API 唔一致",
+      /platform:\s*true/.test(ROUTE),
+      "冇 platform: true ⇒ 店主帳號可以睇到全平台雲端用量",
     );
   });
 });
