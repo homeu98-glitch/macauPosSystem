@@ -241,16 +241,22 @@ export async function createAdminAccount(
   if (value.storeIds.length > 0) {
     // 確保 admin_stores 有對應 row（0025 之後係空表；id 用 merchant UUID）
     const names = await loadStoreNames(value.storeIds);
-    await supabase.from("admin_stores").upsert(
+    // ⚠️ 刻意**唔寫** `merchant_id`：呢個欄係 migration 0024 先加，而生產 DB
+    // 從未跑過 0024（2026-10-21 實測）。`admin_stores.id` 本身已經係 merchant UUID
+    // （0025 §5 做法），resolver 三級優先序第 ③ 條會直接用，唔需要 merchant_id。
+    const storeUpsert = await supabase.from("admin_stores").upsert(
       value.storeIds.map((id) => ({
         id,
         name: names[id] ?? id,
         active: true,
-        merchant_id: id,
         updated_at: new Date().toISOString(),
       })),
       { onConflict: "id" },
     );
+    if (storeUpsert.error) {
+      // 唔致命：binding 仍然可以只帶 store_id（冇 FK 時照樣入到）
+      console.warn("[admin-accounts] upsert admin_stores 失敗（唔影響綁定）：", storeUpsert.error.message);
+    }
 
     const { error: bindError } = await supabase.from("admin_account_store_bindings").insert(
       value.storeIds.map((storeId) => ({ account_id: inserted.id, store_id: storeId })),
@@ -340,16 +346,19 @@ export async function updateAdminAccount(
     // 平台帳號唔靠 binding（scope.all），改綁店對佢冇意義 —— 但仍然容許設定，
     // 方便日後把平台帳號降級做店主時即刻有店。
     const names = await loadStoreNames(storeIds);
-    await supabase.from("admin_stores").upsert(
+    // 同上：唔寫 `merchant_id`（0024 未跑）。
+    const updStoreUpsert = await supabase.from("admin_stores").upsert(
       storeIds.map((id) => ({
         id,
         name: names[id] ?? id,
         active: true,
-        merchant_id: id,
         updated_at: new Date().toISOString(),
       })),
       { onConflict: "id" },
     );
+    if (updStoreUpsert.error) {
+      console.warn("[admin-accounts] upsert admin_stores 失敗（唔影響綁定）：", updStoreUpsert.error.message);
+    }
 
     const del = await supabase.from("admin_account_store_bindings").delete().eq("account_id", row.id);
     if (del.error) return { ok: false, status: 500, error: `清除舊綁定失敗：${del.error.message}` };
