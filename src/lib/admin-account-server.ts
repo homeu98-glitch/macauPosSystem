@@ -2,6 +2,7 @@ import "server-only";
 
 import { createHmac, timingSafeEqual } from "node:crypto";
 
+import { dedupeStoreIds } from "@/lib/admin-scope-core";
 import {
   isLocked,
   lockRemainingSec,
@@ -248,7 +249,14 @@ export async function authenticateAccountFromServer(account: string, pin: string
 
   const [{ data: groups }, { data: bindings }] = await Promise.all([
     supabase.from("admin_permission_groups").select("*"),
-    supabase.from("admin_account_store_bindings").select("account_id, store_id").eq("account_id", accountRow.id),
+    // 🔴 2026-10-21（P1）：一定要帶 `merchant_id`。bindings 嘅 `store_id` 係
+    // `admin_stores.id`（舊文本 id，例如 macau-store-a），**唔係** POS 嘅 store_id。
+    // 只讀 `store_id` 會令 session.storeIds 同真正可見範圍（merchant UUID）對唔上，
+    // 而且當 binding 只填 merchant_id（store_id 可為 null）時會拿到 null。
+    supabase
+      .from("admin_account_store_bindings")
+      .select("account_id, store_id, merchant_id")
+      .eq("account_id", accountRow.id),
   ]);
 
   const role = (accountRow.role ?? "cashier") as UserRole;
@@ -263,7 +271,14 @@ export async function authenticateAccountFromServer(account: string, pin: string
     name: accountRow.name,
     role,
     active: Boolean(accountRow.active),
-    storeIds: (bindings ?? []).map((item) => item.store_id),
+    // 優先 merchant_id（＝POS store_id / Ledger merchant UUID）；舊資料冇就落 store_id。
+    // 用 dedupeStoreIds 去重 + 去 null（binding 只填 merchant_id 時 store_id 係 null）。
+    storeIds: dedupeStoreIds(
+      (bindings ?? []).map(
+        (item: { store_id?: string | null; merchant_id?: string | null }) =>
+          item.merchant_id ?? item.store_id,
+      ),
+    ),
     permissionGroupId: accountRow.permission_group_id ?? undefined,
     permissions: mergePermissions(role, permissionGroup, undefined),
     createdAt: accountRow.created_at,
