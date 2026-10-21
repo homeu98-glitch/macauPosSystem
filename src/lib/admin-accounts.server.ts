@@ -97,6 +97,49 @@ async function loadStoreNames(ids: string[]): Promise<Record<string, string>> {
   return out;
 }
 
+/**
+ * 確保 `admin_stores` 有指定嘅店 row（`id` = Ledger merchant UUID）。
+ *
+ * 🔴 為何一定要做：`admin_account_store_bindings.store_id` 有 **FK → admin_stores(id)**，
+ *    而 0025 之後 `admin_stores` 係空表 ⇒ 直接 insert binding 會
+ *    `violates foreign key constraint`（2026-10-21 J 實測）。
+ *
+ * 刻意**唔寫** `merchant_id`：呢個欄係 migration 0024 先加，生產 DB 從未跑過；
+ * 寫咗會令整個 upsert 失敗（而且 0024 之前嘅錯誤係靜默的）。
+ * `admin_stores.id` 本身已經係 merchant UUID（0025 §5 做法），resolver 第 ③ 條會直接用。
+ *
+ * 回傳 missing 清單 → 呼叫端可以講「邊幾間店寫唔入」，而唔係丟一個 FK error 出嚟。
+ */
+async function ensureAdminStores(
+  supabase: NonNullable<ReturnType<typeof getSupabaseAdminClient>>,
+  storeIds: string[],
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (storeIds.length === 0) return { ok: true };
+
+  const names = await loadStoreNames(storeIds);
+  const { error } = await supabase.from("admin_stores").upsert(
+    storeIds.map((id) => ({
+      id,
+      name: names[id] ?? id,
+      active: true,
+      updated_at: new Date().toISOString(),
+    })),
+    { onConflict: "id" },
+  );
+  if (error) return { ok: false, error: error.message };
+
+  // 回讀核對：upsert 冇報錯 ≠ row 一定存在（權限／RLS 之類可以靜靜無效）
+  const { data, error: readError } = await supabase.from("admin_stores").select("id").in("id", storeIds);
+  if (readError) return { ok: false, error: readError.message };
+
+  const have = new Set((data ?? []).map((row) => String((row as { id?: string }).id ?? "")));
+  const missing = storeIds.filter((id) => !have.has(id));
+  if (missing.length > 0) {
+    return { ok: false, error: `以下店舖未能建立：${missing.join("、")}` };
+  }
+  return { ok: true };
+}
+
 /** 列出全部 admin 帳號（含綁店）。只供平台管理員。 */
 export async function listAdminAccounts(): Promise<AccountOpResult<AdminAccountDto[]>> {
   const supabase = getSupabaseAdminClient();
@@ -239,23 +282,16 @@ export async function createAdminAccount(
   }
 
   if (value.storeIds.length > 0) {
-    // 確保 admin_stores 有對應 row（0025 之後係空表；id 用 merchant UUID）
-    const names = await loadStoreNames(value.storeIds);
-    // ⚠️ 刻意**唔寫** `merchant_id`：呢個欄係 migration 0024 先加，而生產 DB
-    // 從未跑過 0024（2026-10-21 實測）。`admin_stores.id` 本身已經係 merchant UUID
-    // （0025 §5 做法），resolver 三級優先序第 ③ 條會直接用，唔需要 merchant_id。
-    const storeUpsert = await supabase.from("admin_stores").upsert(
-      value.storeIds.map((id) => ({
-        id,
-        name: names[id] ?? id,
-        active: true,
-        updated_at: new Date().toISOString(),
-      })),
-      { onConflict: "id" },
-    );
-    if (storeUpsert.error) {
-      // 唔致命：binding 仍然可以只帶 store_id（冇 FK 時照樣入到）
-      console.warn("[admin-accounts] upsert admin_stores 失敗（唔影響綁定）：", storeUpsert.error.message);
+    // 確保 admin_stores 有對應 row（0025 之後係空表；id 用 merchant UUID）。
+    // 🔴 `bindings.store_id` 有 FK → `admin_stores(id)`，所以**必須**先建 row，
+    //    唔可以靠 binding 自己（會 violate foreign key constraint）。
+    const ensured = await ensureAdminStores(supabase, value.storeIds);
+    if (!ensured.ok) {
+      return {
+        ok: false,
+        status: 500,
+        error: `帳號已建立，但店舖資料寫唔入（${ensured.error}）。請喺 SQL 補 admin_stores 後再用「改綁店」。`,
+      };
     }
 
     const { error: bindError } = await supabase.from("admin_account_store_bindings").insert(
@@ -345,19 +381,15 @@ export async function updateAdminAccount(
 
     // 平台帳號唔靠 binding（scope.all），改綁店對佢冇意義 —— 但仍然容許設定，
     // 方便日後把平台帳號降級做店主時即刻有店。
-    const names = await loadStoreNames(storeIds);
-    // 同上：唔寫 `merchant_id`（0024 未跑）。
-    const updStoreUpsert = await supabase.from("admin_stores").upsert(
-      storeIds.map((id) => ({
-        id,
-        name: names[id] ?? id,
-        active: true,
-        updated_at: new Date().toISOString(),
-      })),
-      { onConflict: "id" },
-    );
-    if (updStoreUpsert.error) {
-      console.warn("[admin-accounts] upsert admin_stores 失敗（唔影響綁定）：", updStoreUpsert.error.message);
+    // 🔴 **先確保店 row 存在，才可以刪舊 binding**：如果順序反過來而 FK 失敗，
+    //    帳號會變成「一間店都冇」（店主即刻登入唔到）。
+    const ensured = await ensureAdminStores(supabase, storeIds);
+    if (!ensured.ok) {
+      return {
+        ok: false,
+        status: 500,
+        error: `店舖資料寫唔入（${ensured.error}），已保留原有綁定。`,
+      };
     }
 
     const del = await supabase.from("admin_account_store_bindings").delete().eq("account_id", row.id);
