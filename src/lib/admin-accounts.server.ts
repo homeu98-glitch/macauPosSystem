@@ -212,8 +212,15 @@ export async function createAdminAccount(
     .insert({
       account: value.account,
       pin_hash: pinHash,
-      // 明文欄位一律留空（0040 之後嘅新帳號只存 hash）
-      pin_code: null,
+      /**
+       * 🔴 2026-10-21 實測：生產 DB 嘅 `pin_code` **係 NOT NULL**（0040 §5 嘅
+       * `drop not null` 從未跑）⇒ 寫 `null` 會 violate not-null constraint。
+       * 寫**空字串**係最兼容嘅做法：
+       *   · `verifyAdminPin()` 明文分支要求 `plain &&`（非空）才比對
+       *     ⇒ 空字串永遠登入唔到，等同「冇明文 PIN」。
+       *   · 唔需要為此多跑一個 migration。
+       */
+      pin_code: "",
       name: value.name,
       role: value.kind === "platform" ? "admin" : "manager",
       active: true,
@@ -317,7 +324,8 @@ export async function updateAdminAccount(
       return { ok: false, status: 503, error: "系統未設定 AUTH_PIN_PEPPER，暫時唔可以重設 PIN。" };
     }
     updates.pin_hash = pinHash;
-    updates.pin_code = null;
+    // `pin_code` 係 NOT NULL ⇒ 用空字串（永遠唔會命中明文比對），唔可以用 null。
+    updates.pin_code = "";
     updates.must_change_pin = true; // 重設後要求本人改
     updates.failed_login_count = 0;
     updates.locked_until = null;
@@ -409,7 +417,8 @@ export async function changeOwnPin(
     .from("admin_account_users")
     .update({
       pin_hash: pinHash,
-      pin_code: null,
+      // `pin_code` 係 NOT NULL ⇒ 空字串（永遠唔會命中明文比對）
+      pin_code: "",
       must_change_pin: false,
       failed_login_count: 0,
       locked_until: null,

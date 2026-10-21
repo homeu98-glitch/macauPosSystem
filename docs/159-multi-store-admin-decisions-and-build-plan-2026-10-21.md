@@ -436,6 +436,13 @@ delete from admin_account_store_bindings
 而 0025 已清空 `admin_stores` ⇒ 建號時自動 upsert `admin_stores`（id = merchant UUID、
 名由 Ledger `merchants` 取）。管理員**唔需要**事先建店。
 
+> 🔴 **實測陷阱（2026-10-21 首次建號就中）**：生產 DB 嘅 `admin_account_users.pin_code`
+> **係 NOT NULL**（0040 §5 嘅 `drop not null` 從未跑）⇒ 寫 `pin_code: null` 會
+> `null value in column "pin_code" ... violates not-null constraint`。
+> 而家三處寫入（建號／重設 PIN／自己改 PIN）一律用**空字串** `""`：
+> `verifyAdminPin()` 的明文分支要求 `plain &&`（非空）才比對 ⇒ 空字串永遠登入唔到，
+> 等同「冇明文 PIN」。唔需要為此多跑一個 migration。
+
 **測試**：`admin-accounts-core.test.ts`（12）＋ 契約測試加 `accounts` 兩條 route 入 platform 清單。
 全量 **2557+ pass**、`tsc` 0 error、eslint 0 error。
 
