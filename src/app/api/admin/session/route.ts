@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { authenticateAccountFromServer } from "@/lib/admin-account-server";
+import { readClientIp, writeAdminAudit } from "@/lib/admin-audit.server";
 import { issueAdminSessionToken } from "@/lib/admin-session-token";
 
 /**
@@ -18,12 +19,39 @@ import { issueAdminSessionToken } from "@/lib/admin-session-token";
  *     會 fallback 去 `mock-data.ts` 嘅示範帳號（60000000 / 0000），呢組係公開值，
  *     喺生產環境等於開咗道後門。dev/local 先容許 fallback。
  *   - 回傳只畀 token + 到期時間，唔回傳 PIN。
+ *
+ * 【2026-10-21 多店控制台 P0-2／P0-4】
+ *   - IP rate limit（10 次／分鐘）＋ **per-account 失敗鎖定**（5 次鎖 15 分鐘，落 DB）。
+ *     後者係 D2「沿用 4 位 PIN」嘅補償措施：PIN 只有 10⁴ 組合、帳號可枚舉，
+ *     單靠 IP 限流換 IP 即繞過。
+ *   - 每次登入結果寫 `admin_audit_log`（成功／失敗／鎖定）。**失敗唔阻登入**。
+ *   - 回傳多一個 `scope` 摘要（P0-5）。P1 會由 `resolveAdminScope()` 正式計算；
+ *     現階段登入本身已要求 `manageAccounts`，即只有平台帳號入得到，故 `all` 為 true。
  */
 
 const ACCOUNT_PATTERN = /^\d{8}$/;
 const PIN_PATTERN = /^\d{4}$/;
 
+/** IP 維度限流（防同一 IP 快速枚舉多個帳號）。per-account 鎖定由 DB 負責。 */
+const LOGIN_WINDOW_MS = 60_000;
+const LOGIN_MAX_ATTEMPTS = 10;
+type RateBucket = { count: number; resetAt: number };
+const ipAttempts = new Map<string, RateBucket>();
+
+function checkIpRateLimit(ip: string, now = Date.now()): boolean {
+  const bucket = ipAttempts.get(ip);
+  if (!bucket || now >= bucket.resetAt) {
+    ipAttempts.set(ip, { count: 1, resetAt: now + LOGIN_WINDOW_MS });
+    return true;
+  }
+  if (bucket.count >= LOGIN_MAX_ATTEMPTS) return false;
+  bucket.count += 1;
+  return true;
+}
+
 export async function POST(request: Request) {
+  const ip = readClientIp(request);
+
   let payload: { account?: string; pin?: string };
   try {
     payload = (await request.json()) as { account?: string; pin?: string };
@@ -39,6 +67,14 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, error: "請輸入 8 位帳號與 4 位 PIN。" }, { status: 400 });
   }
 
+  if (!checkIpRateLimit(ip)) {
+    await writeAdminAudit({ account, action: "login_locked", target: "session.ip_rate_limit", ip });
+    return NextResponse.json(
+      { ok: false, error: "登入嘗試過於頻繁，請稍後再試。", code: "rate_limited" },
+      { status: 429, headers: { "Retry-After": "60" } },
+    );
+  }
+
   const result = await authenticateAccountFromServer(account, pin);
 
   // 生產環境 + mock 來源 = 用咗公開嘅示範帳號 → fail closed
@@ -50,25 +86,56 @@ export async function POST(request: Request) {
     );
   }
 
-  // 帳號 / PIN 錯、帳戶停用 → 一律同一句，唔好洩漏「邊樣錯」
+  // 帳號 / PIN 錯、帳戶停用 → 一律同一類回覆，唔好洩漏「邊樣錯」
   if (!result.ok) {
-    return NextResponse.json({ ok: false, error: "帳號或 PIN 不正確。" }, { status: 401 });
+    // 鎖定（per-account，DB 狀態）→ 429 + Retry-After。
+    // ⚠️ 訊息刻意同「帳號或 PIN 不正確」分開講「嘗試過多」：呢個唔會洩露帳號是否存在
+    //   （一個唔存在嘅帳號永遠唔會被鎖，因為根本冇 row 可以鎖），
+    //   但對被鎖嘅真用戶嚟講，唔講清楚只會不斷重試／打去客服。
+    if (result.code === "locked") {
+      const retry = Math.max(1, result.retryAfterSec ?? 900);
+      await writeAdminAudit({ account, action: "login_locked", target: "session.account_locked", ip });
+      return NextResponse.json(
+        { ok: false, error: result.error, code: "locked", retryAfterSec: retry },
+        { status: 429, headers: { "Retry-After": String(retry) } },
+      );
+    }
+
+    await writeAdminAudit({
+      account,
+      action: "login_failed",
+      target: result.code === "inactive" ? "session.inactive" : "session.invalid_credentials",
+      ip,
+    });
+    return NextResponse.json({ ok: false, error: result.error }, { status: 401 });
   }
 
   // 登入成功 ≠ 有權管帳戶：要明確有 manageAccounts
   if (!result.session.permissions?.manageAccounts) {
+    await writeAdminAudit({ account, action: "login_failed", target: "session.permission_denied", ip });
     return NextResponse.json({ ok: false, error: "此帳號沒有管理帳戶的權限。" }, { status: 403 });
   }
 
   const token = issueAdminSessionToken({ account: result.session.account, role: result.session.role });
   if (!token) {
-    // 冇任何 server secret → 簽唔到 token → fail closed，寧願用唔到都唔好開放
-    console.error("[admin/session] 拒絕：未設定 ADMIN_SESSION_SECRET 或 SUPABASE_SERVICE_ROLE_KEY。");
+    // 冇 ADMIN_SESSION_SECRET → 簽唔到 token → fail closed，寧願用唔到都唔好開放。
+    // 🔴 2026-10-21：**唔會**再 fallback 用 service role key（見 admin-session-token.ts 註解）。
+    console.error("[admin/session] 拒絕：未設定 ADMIN_SESSION_SECRET（已取消 service key fallback）。");
     return NextResponse.json(
       { ok: false, error: "系統未設定管理員憑證密鑰，管理功能停用。" },
       { status: 503 },
     );
   }
+
+  const storeIds = result.session.storeIds ?? [];
+  await writeAdminAudit({
+    account: result.session.account,
+    action: "login_success",
+    target: "session",
+    // ⚠️ 登入時只記「有冇店綁定」同數量，唔記全部 id（避免一行塞幾十個 uuid）
+    detail: { storeCount: storeIds.length, role: result.session.role },
+    ip,
+  });
 
   return NextResponse.json({
     ok: true,
@@ -76,5 +143,14 @@ export async function POST(request: Request) {
     account: result.session.account,
     name: result.session.name,
     role: result.session.role,
+    /**
+     * Scope 摘要（P0-5）。P1 會由 `resolveAdminScope()` 正式計算（含 `scopeAllStores` flag）。
+     * 現階段登入本身已要求 `manageAccounts`，即只有平台帳號入得到 ⇒ `all` 為 true 係實情。
+     * 前端**唔可以**用呢個值做授權判斷，只作顯示／預設選店用（真授權永遠在 server）。
+     */
+    scope: {
+      all: Boolean(result.session.permissions?.manageAccounts),
+      storeIds,
+    },
   });
 }

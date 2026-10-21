@@ -2,6 +2,15 @@ import "server-only";
 
 import { createHmac, timingSafeEqual } from "node:crypto";
 
+import {
+  isLocked,
+  lockRemainingSec,
+  lockoutFromRow,
+  lockoutToRow,
+  onFailure,
+  onSuccess,
+  type LockoutState,
+} from "@/lib/admin-login-lockout";
 import { defaultAccountStores, defaultAccountUsers, defaultPermissionGroups } from "@/lib/mock-data";
 import { getSupabaseAdminClient } from "@/lib/supabase-server";
 import { AuthSession } from "@/lib/storage";
@@ -108,6 +117,35 @@ function verifyAdminPin(row: Record<string, unknown>, pin: string, pepper: strin
   return null;
 }
 
+/** 落 DB 失敗只 log 一次（0068 未跑 → 42703；**唔可以**因此令登入失敗）。 */
+let warnedLockoutWriteSkip = false;
+
+/**
+ * 把鎖定狀態寫返 DB（2026-10-21 · P0-2）。
+ *
+ * 🔴 一定要落 DB，唔可以只放記憶體：Vercel 多 instance，每個 instance 各自計數，
+ *    實際可試次數 = 5 × instance 數，冷啟動即清零 —— 等於冇鎖。
+ * ⚠️ 寫入失敗（migration 0068 未跑）→ 只 warn 一次，**唔影響登入**，
+ *    寧願暫時冇鎖，都唔可以令所有人登入唔到。
+ */
+async function persistLockout(
+  supabase: NonNullable<ReturnType<typeof getSupabaseAdminClient>>,
+  accountRowId: unknown,
+  state: LockoutState,
+): Promise<void> {
+  const { error } = await supabase
+    .from("admin_account_users")
+    .update(lockoutToRow(state))
+    .eq("id", accountRowId);
+  if (error && !warnedLockoutWriteSkip) {
+    warnedLockoutWriteSkip = true;
+    console.warn(
+      "[admin-account] 鎖定狀態寫入失敗（可能 migration 0068 未跑；**唔影響登入**）：",
+      error.message,
+    );
+  }
+}
+
 export async function authenticateAccountFromServer(account: string, pin: string) {
   const supabase = getSupabaseAdminClient();
   if (!supabase) {
@@ -135,6 +173,22 @@ export async function authenticateAccountFromServer(account: string, pin: string
     return { ok: false as const, error: "帳號或密碼不正確。", source: "supabase" as const };
   }
 
+  // ── 失敗鎖定（2026-10-21 · P0-2，對應 D2「沿用 4 位 PIN」）──────────────
+  // 4 位 PIN 只有 10⁴ 組合、帳號係可枚舉嘅電話格式 ⇒ 必須 per-account 鎖定，
+  // 唔可以只靠 IP rate limit（換 IP 即繞過）。
+  // 🔴 鎖定期間**唔會再驗 PIN**（連正確 PIN 都拒），否則鎖定期間照樣可以慢慢爆破。
+  const nowMs = Date.now();
+  const lockout = lockoutFromRow(accountRow as Record<string, unknown>);
+  if (isLocked(lockout, nowMs)) {
+    return {
+      ok: false as const,
+      code: "locked" as const,
+      retryAfterSec: lockRemainingSec(lockout, nowMs),
+      error: "登入嘗試次數過多，請稍後再試。",
+      source: "supabase" as const,
+    };
+  }
+
   const pinPepper = process.env.AUTH_PIN_PEPPER?.trim() ?? "";
   // 🔴 誤配置偵測：DB 已經有 hash，但 server 冇 pepper ⇒ 只可以回退明文。
   // 若連明文都清空（0040 §5）就會**完全登入唔到**。唔可以靜默，所以大聲 log 一次。
@@ -149,11 +203,29 @@ export async function authenticateAccountFromServer(account: string, pin: string
   }
   const pinMatch = verifyAdminPin(accountRow as Record<string, unknown>, pin, pinPepper);
   if (!pinMatch) {
-    return { ok: false as const, error: "帳號或密碼不正確。", source: "supabase" as const };
+    // 記一次失敗（第 5 次即鎖 15 分鐘）。寫 DB 失敗唔阻流程（見 persistLockout）。
+    const next = onFailure(lockout, nowMs);
+    await persistLockout(supabase, accountRow.id, next);
+    if (next.lockedUntilMs !== null) {
+      return {
+        ok: false as const,
+        code: "locked" as const,
+        retryAfterSec: lockRemainingSec(next, nowMs),
+        error: "登入嘗試次數過多，請稍後再試。",
+        source: "supabase" as const,
+      };
+    }
+    // ⚠️ 「帳號不存在」同「PIN 錯」回同一句 —— 唔可以洩露帳號是否存在。
+    return { ok: false as const, code: "invalid" as const, error: "帳號或密碼不正確。", source: "supabase" as const };
   }
 
   if (!accountRow.active) {
-    return { ok: false as const, error: "此帳戶已停用，請聯絡管理員。", source: "supabase" as const };
+    return { ok: false as const, code: "inactive" as const, error: "此帳戶已停用，請聯絡管理員。", source: "supabase" as const };
+  }
+
+  // 成功登入 → 清零（只在真係有計數／有鎖時才寫，避免每次登入多一次 UPDATE）。
+  if (lockout.failedLoginCount > 0 || lockout.lockedUntilMs !== null) {
+    await persistLockout(supabase, accountRow.id, onSuccess());
   }
 
   // ── 機會式升級（opportunistic upgrade）────────────────────────────────

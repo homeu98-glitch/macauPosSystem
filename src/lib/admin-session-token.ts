@@ -37,12 +37,28 @@ export type AdminSessionClaims = {
   exp: number;
 };
 
-/** 簽名密鑰：優先用專屬 secret，冇就借用 service role key（一樣係 server-only）。 */
+/**
+ * 簽名密鑰：**只准**用專屬 `ADMIN_SESSION_SECRET`。
+ *
+ * 🔴 2026-10-21（多店控制台 P0-1）：**移除** fallback 到 `SUPABASE_SERVICE_ROLE_KEY`。
+ *
+ * 舊行為（fallback 到 service key）有兩個實質風險：
+ *   ① **提權**：service role key 一旦洩漏（例如誤貼、log、第三方），攻擊者唔止可以讀寫 DB，
+ *      仲可以直接用同一條 key **偽造 admin token** ⇒ 整個管理後台失守。
+ *   ② **靜默失效**：rotate service key 會令所有 admin token 即刻驗唔過（但冇任何提示），
+ *      兩件事本來唔應該綁在同一把鎖上。
+ *
+ * 代價（已同 J 確認）：冇設 `ADMIN_SESSION_SECRET` = 簽唔到／驗唔到 = 登入回 503（fail closed）。
+ * 呢個係刻意嘅：寧願後台用唔到，都唔好靜靜用一把過強嘅 key 頂上。
+ *
+ * ⚠️ 輪換呢支 secret 會令**現有 admin token 全部失效**（所有人要重新登入）。
+ *    另外 `pos/pos-device-token.ts` 的第二順位都係呢支 secret —— 如果生產未設
+ *    `POS_DEVICE_TOKEN_SECRET`，POS 終端憑證亦會一齊失效（終端要重新登入）。
+ *    建議兩支 secret 分開設，唔好互相依賴。
+ */
 function resolveSecret(): string | null {
   const dedicated = process.env.ADMIN_SESSION_SECRET?.trim();
-  if (dedicated) return dedicated;
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.SUPABASE_SERVICE_KEY;
-  return serviceKey?.trim() || null;
+  return dedicated || null;
 }
 
 function base64url(input: Buffer | string): string {
