@@ -2,7 +2,7 @@ import "server-only";
 
 import { createHmac, timingSafeEqual } from "node:crypto";
 
-import { dedupeStoreIds } from "@/lib/admin-scope-core";
+import { dedupeStoreIds, isMissingColumnError } from "@/lib/admin-scope-core";
 import {
   isLocked,
   lockRemainingSec,
@@ -247,7 +247,7 @@ export async function authenticateAccountFromServer(account: string, pin: string
     }
   }
 
-  const [{ data: groups }, { data: bindings }] = await Promise.all([
+  const [groupsRes, bindingsRes] = await Promise.all([
     supabase.from("admin_permission_groups").select("*"),
     // 🔴 2026-10-21（P1）：一定要帶 `merchant_id`。bindings 嘅 `store_id` 係
     // `admin_stores.id`（舊文本 id，例如 macau-store-a），**唔係** POS 嘅 store_id。
@@ -258,6 +258,19 @@ export async function authenticateAccountFromServer(account: string, pin: string
       .select("account_id, store_id, merchant_id")
       .eq("account_id", accountRow.id),
   ]);
+
+  // ⛔ migration 0024 未跑 → bindings 冇 `merchant_id` 欄（42703）。
+  // 對平台帳號無影響（佢哋唔靠 bindings），但店舖級帳號會變「零可見店舖」，
+  // 所以一定要大聲講，唔可以靜靜當冇綁定。
+  if (bindingsRes.error && isMissingColumnError(bindingsRes.error)) {
+    console.error(
+      "[admin-account] ⛔ bindings 未有 `merchant_id` 欄（migration 0024 未跑）⇒ 店舖級帳號會冇可見店舖。" +
+        "請跑 supabase/migrations/0024_admin_store_id_align.sql。",
+    );
+  }
+
+  const groups = groupsRes.data;
+  const bindings = bindingsRes.data;
 
   const role = (accountRow.role ?? "cashier") as UserRole;
   const permissionGroup = (groups ?? []).find((item) => item.id === accountRow.permission_group_id) as

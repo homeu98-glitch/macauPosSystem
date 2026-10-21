@@ -4,6 +4,7 @@ import { describe, it } from "node:test";
 import {
   MAX_SCOPE_STORES,
   dedupeStoreIds,
+  isMissingColumnError,
   isPlatformPermissions,
   platformScope,
   scopeAllows,
@@ -99,5 +100,14 @@ describe("admin-scope-core ── 其他", () => {
     assert.ok(filter.ok);
     (filter.storeIds as string[]).push("hacked");
     assert.deepEqual(scope.storeIds, ["a"]);
+  });
+
+  it("isMissingColumnError：認得 42703 同訊息（migration 0024 未跑時要 503 而唔係靜默空白）", () => {
+    assert.equal(isMissingColumnError({ code: "42703", message: "column x does not exist" }), true);
+    assert.equal(isMissingColumnError({ message: 'column "merchant_id" does not exist' }), true);
+    assert.equal(isMissingColumnError({ code: "PGRST116", message: "no rows" }), false);
+    assert.equal(isMissingColumnError(null), false);
+    assert.equal(isMissingColumnError(undefined), false);
+    assert.equal(isMissingColumnError("boom"), false);
   });
 });

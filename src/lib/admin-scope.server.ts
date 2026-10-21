@@ -1,6 +1,12 @@
 import "server-only";
 
-import { dedupeStoreIds, isPlatformPermissions, scopedScope, type AdminScope } from "@/lib/admin-scope-core";
+import {
+  dedupeStoreIds,
+  isMissingColumnError,
+  isPlatformPermissions,
+  scopedScope,
+  type AdminScope,
+} from "@/lib/admin-scope-core";
 import { getSupabaseAdminClient } from "@/lib/supabase-server";
 
 /**
@@ -98,10 +104,34 @@ export async function resolveAdminScope(account: string): Promise<ScopeResult> {
   }
 
   // 店舖綁定 → merchant UUID
-  const [{ data: bindings }, { data: stores }] = await Promise.all([
+  // 🔴 `merchant_id` 係 **migration 0024** 先加嘅欄（`admin_stores` 同 bindings 兩張表都要）。
+  //    實測 2026-10-21：生產 DB 從未跑 0024 ⇒ 呢兩個 select 直接 42703。
+  //    呢個時候**唔可以**靜靜當「冇店」——用戶只會見到一片空白、以為冇數據，
+  //    而真正原因係 DB 未升級。所以明確報 `unavailable`（→ 503 + log 指明邊個 migration）。
+  const [bindingsRes, storesRes] = await Promise.all([
     supabase.from("admin_account_store_bindings").select("store_id, merchant_id").eq("account_id", row.id),
     supabase.from("admin_stores").select("id, merchant_id"),
   ]);
+
+  if (isMissingColumnError(bindingsRes.error) || isMissingColumnError(storesRes.error)) {
+    console.error(
+      "[admin-scope] ⛔ 資料庫未升級：`admin_stores` / `admin_account_store_bindings` 未有 `merchant_id` 欄。" +
+        "請跑 supabase/migrations/0024_admin_store_id_align.sql（idempotent）。" +
+        "未跑之前，店舖級帳號一律視為「冇可見店舖」（平台帳號不受影響）。",
+    );
+    return { ok: false, reason: "unavailable" };
+  }
+  if (bindingsRes.error) {
+    console.error("[admin-scope] 讀取 bindings 失敗", bindingsRes.error.message);
+    return { ok: false, reason: "unavailable" };
+  }
+  if (storesRes.error) {
+    // 店名對照讀唔到唔算致命：binding 自己有 merchant_id 就照用。
+    console.warn("[admin-scope] 讀取 admin_stores 失敗（只影響舊 binding 的 store_id→merchant 對照）：", storesRes.error.message);
+  }
+
+  const bindings = bindingsRes.data;
+  const stores = storesRes.data;
 
   const merchantByStoreId = new Map<string, string>();
   for (const s of (stores ?? []) as Array<{ id?: string; merchant_id?: string | null }>) {

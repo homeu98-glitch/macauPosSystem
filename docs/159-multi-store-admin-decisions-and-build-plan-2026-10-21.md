@@ -296,7 +296,12 @@ if (canEnterAdmin && !isPlatform && storeIds.length === 0) → 403「未獲分�
 
 ### 13.4 上線次序
 
-1. **跑 migration `0069`**（**POS 專案 `iyrywzormzisyppkokbi`** —— 即 `pos_orders` 所在嗰個，唔係 Ledger）。
+0. 🔴 **跑 migration `0024`（`admin_store_id_align`）** —— **P1 硬依賴**
+   `admin_account_store_bindings.merchant_id` 同 `admin_stores.merchant_id`。
+   **實測 2026-10-21：生產 DB 從未跑過**（SQL 報 `42703 column "merchant_id" does not exist`）。
+   全檔 idempotent（`add column if not exists`）；尾段「阶段 2 drop table」係**註解**，唔會執行。
+   未跑之前：店舖級帳號一律 503（code 已加明確偵測 + log 指明 0024），**平台帳號不受影響**。
+1. 跑 migration `0069`（**POS 專案 `iyrywzormzisyppkokbi`** —— 即 `pos_orders` 所在嗰個，唔係 Ledger）。
    —— 未跑都唔會壞：`pos_orders_page_scoped` 唔存在 → 自動降級四條時間腿（功能正確、慢少少）。
 2. 部署 code。
 3. 驗收（§13.5）。

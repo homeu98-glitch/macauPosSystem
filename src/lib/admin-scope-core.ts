@@ -99,3 +99,17 @@ export function scopeAllows(scope: AdminScope, storeId: string): boolean {
 export function scopeSummary(scope: AdminScope): { all: boolean; storeIds: string[] } {
   return { all: scope.all, storeIds: scope.all ? [] : [...scope.storeIds] };
 }
+
+/**
+ * 係咪「欄位唔存在」（Postgres 42703）。
+ *
+ * 用途：`merchant_id` 係 migration 0024 先加嘅欄。生產 DB 未跑 0024 時，
+ * 查詢會回 42703 —— 呢個要**明確分辨**出嚟（503 + 指明 migration），
+ * 唔可以當成「冇資料」，否則用戶只會見到一片空白而無從排查。
+ */
+export function isMissingColumnError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const e = error as { code?: unknown; message?: unknown };
+  if (String(e.code ?? "") === "42703") return true;
+  return typeof e.message === "string" && /column .* does not exist/i.test(e.message);
+}
