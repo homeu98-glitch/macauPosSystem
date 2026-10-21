@@ -4,8 +4,11 @@ import {
   dedupeStoreIds,
   isMissingColumnError,
   isPlatformPermissions,
+  isUuidLike,
+  resolveBindingMerchantIds,
   scopedScope,
   type AdminScope,
+  type StoreBindingLike,
 } from "@/lib/admin-scope-core";
 import { getSupabaseAdminClient } from "@/lib/supabase-server";
 
@@ -57,6 +60,8 @@ export function clearAdminScopeCache(account?: string): void {
 }
 
 let warnedUnmappedStore = false;
+/** migration 0024 未跑只 warn 一次（每個 process）。 */
+let warnedSchemaDegraded = false;
 
 /**
  * 解析某個 admin 帳號嘅可見店舖範圍。
@@ -104,49 +109,67 @@ export async function resolveAdminScope(account: string): Promise<ScopeResult> {
   }
 
   // 店舖綁定 → merchant UUID
-  // 🔴 `merchant_id` 係 **migration 0024** 先加嘅欄（`admin_stores` 同 bindings 兩張表都要）。
-  //    實測 2026-10-21：生產 DB 從未跑 0024 ⇒ 呢兩個 select 直接 42703。
-  //    呢個時候**唔可以**靜靜當「冇店」——用戶只會見到一片空白、以為冇數據，
-  //    而真正原因係 DB 未升級。所以明確報 `unavailable`（→ 503 + log 指明邊個 migration）。
-  const [bindingsRes, storesRes] = await Promise.all([
-    supabase.from("admin_account_store_bindings").select("store_id, merchant_id").eq("account_id", row.id),
-    supabase.from("admin_stores").select("id, merchant_id"),
-  ]);
+  //
+  // 🔴 兩種 schema 都要行得通（實測 2026-10-21：生產 DB **從未跑 0024**）：
+  //   ① 跑咗 0024：bindings / admin_stores 有 `merchant_id`（最準）
+  //   ② 未跑：只有 `store_id`。若 `store_id` 本身係 merchant UUID
+  //      （= 0025 §5 建議做法：`admin_stores.id` 直接用 Ledger merchant UUID）都解析得到；
+  //      舊文本 id（`macau-store-a`）則照樣剔除（fail closed）。
+  //    呢個時候**唔可以**報 503 —— 0024 只係「多一個 anchor」，唔係功能前提。
+  const bindingsFirst = await supabase
+    .from("admin_account_store_bindings")
+    .select("store_id, merchant_id")
+    .eq("account_id", row.id);
 
-  if (isMissingColumnError(bindingsRes.error) || isMissingColumnError(storesRes.error)) {
-    console.error(
-      "[admin-scope] ⛔ 資料庫未升級：`admin_stores` / `admin_account_store_bindings` 未有 `merchant_id` 欄。" +
-        "請跑 supabase/migrations/0024_admin_store_id_align.sql（idempotent）。" +
-        "未跑之前，店舖級帳號一律視為「冇可見店舖」（平台帳號不受影響）。",
-    );
+  let bindings: StoreBindingLike[];
+  let schemaDegraded = false;
+
+  if (isMissingColumnError(bindingsFirst.error)) {
+    schemaDegraded = true;
+    const legacy = await supabase
+      .from("admin_account_store_bindings")
+      .select("store_id")
+      .eq("account_id", row.id);
+    if (legacy.error) {
+      console.error("[admin-scope] 讀取 bindings 失敗", legacy.error.message);
+      return { ok: false, reason: "unavailable" };
+    }
+    bindings = (legacy.data ?? []) as StoreBindingLike[];
+  } else if (bindingsFirst.error) {
+    console.error("[admin-scope] 讀取 bindings 失敗", bindingsFirst.error.message);
     return { ok: false, reason: "unavailable" };
-  }
-  if (bindingsRes.error) {
-    console.error("[admin-scope] 讀取 bindings 失敗", bindingsRes.error.message);
-    return { ok: false, reason: "unavailable" };
-  }
-  if (storesRes.error) {
-    // 店名對照讀唔到唔算致命：binding 自己有 merchant_id 就照用。
-    console.warn("[admin-scope] 讀取 admin_stores 失敗（只影響舊 binding 的 store_id→merchant 對照）：", storesRes.error.message);
+  } else {
+    bindings = (bindingsFirst.data ?? []) as StoreBindingLike[];
   }
 
-  const bindings = bindingsRes.data;
-  const stores = storesRes.data;
-
+  // `admin_stores.merchant_id` 只係「舊 binding 的 store_id → merchant」對照；
+  // 缺欄唔影響（①②③ 任何一條成功就夠）。
   const merchantByStoreId = new Map<string, string>();
-  for (const s of (stores ?? []) as Array<{ id?: string; merchant_id?: string | null }>) {
-    if (s.id && s.merchant_id) merchantByStoreId.set(String(s.id), String(s.merchant_id));
+  const storesFirst = await supabase.from("admin_stores").select("id, merchant_id");
+  if (isMissingColumnError(storesFirst.error)) {
+    schemaDegraded = true;
+    const legacyStores = await supabase.from("admin_stores").select("id");
+    for (const s of (legacyStores.data ?? []) as Array<{ id?: string }>) {
+      // 冇 merchant_id 欄 ⇒ 只有當 id 本身係 UUID 才有意義（②→③ 同一套判斷）
+      if (s.id && isUuidLike(s.id)) merchantByStoreId.set(String(s.id), String(s.id));
+    }
+  } else if (storesFirst.error) {
+    console.warn("[admin-scope] 讀取 admin_stores 失敗（只影響 store_id→merchant 對照）：", storesFirst.error.message);
+  } else {
+    for (const s of (storesFirst.data ?? []) as Array<{ id?: string; merchant_id?: string | null }>) {
+      if (s.id && s.merchant_id) merchantByStoreId.set(String(s.id), String(s.merchant_id));
+    }
   }
 
-  const unmapped: string[] = [];
-  const resolved: string[] = [];
-  for (const b of (bindings ?? []) as Array<{ store_id?: string | null; merchant_id?: string | null }>) {
-    const direct = b.merchant_id ? String(b.merchant_id) : "";
-    const viaStore = b.store_id ? merchantByStoreId.get(String(b.store_id)) ?? "" : "";
-    const merchantId = direct || viaStore;
-    if (merchantId) resolved.push(merchantId);
-    else if (b.store_id) unmapped.push(String(b.store_id));
+  if (schemaDegraded && !warnedSchemaDegraded) {
+    warnedSchemaDegraded = true;
+    console.warn(
+      "[admin-scope] migration 0024 未跑（冇 merchant_id 欄）→ 改用 store_id 解析。" +
+        "只接受本身係 UUID 嘅 store_id（0025 §5 建議做法）；文本 id 一律剔除。",
+    );
   }
+
+  const { ids: resolved, unmapped } = resolveBindingMerchantIds(bindings, merchantByStoreId);
 
   if (unmapped.length > 0 && !warnedUnmappedStore) {
     warnedUnmappedStore = true;

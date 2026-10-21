@@ -2,7 +2,11 @@ import "server-only";
 
 import { createHmac, timingSafeEqual } from "node:crypto";
 
-import { dedupeStoreIds, isMissingColumnError } from "@/lib/admin-scope-core";
+import {
+  isMissingColumnError,
+  resolveBindingMerchantIds,
+  type StoreBindingLike,
+} from "@/lib/admin-scope-core";
 import {
   isLocked,
   lockRemainingSec,
@@ -260,17 +264,23 @@ export async function authenticateAccountFromServer(account: string, pin: string
   ]);
 
   // ⛔ migration 0024 未跑 → bindings 冇 `merchant_id` 欄（42703）。
-  // 對平台帳號無影響（佢哋唔靠 bindings），但店舖級帳號會變「零可見店舖」，
-  // 所以一定要大聲講，唔可以靜靜當冇綁定。
+  // 對平台帳號無影響（佢哋唔靠 bindings），但店舖級帳號會變「零可見店舖」。
+  // ⇒ 降級只讀 `store_id`，並靠 `resolveBindingMerchantIds()` 嘅第 ③ 條
+  //   （store_id 本身係 UUID = 0025 §5 建議做法）解析。
+  let bindings: StoreBindingLike[] = (bindingsRes.data ?? []) as StoreBindingLike[];
   if (bindingsRes.error && isMissingColumnError(bindingsRes.error)) {
-    console.error(
-      "[admin-account] ⛔ bindings 未有 `merchant_id` 欄（migration 0024 未跑）⇒ 店舖級帳號會冇可見店舖。" +
-        "請跑 supabase/migrations/0024_admin_store_id_align.sql。",
+    console.warn(
+      "[admin-account] migration 0024 未跑（bindings 冇 merchant_id）→ 降級用 store_id 解析。" +
+        "只有本身係 UUID 嘅 store_id 才算有效。",
     );
+    const legacy = await supabase
+      .from("admin_account_store_bindings")
+      .select("account_id, store_id")
+      .eq("account_id", accountRow.id);
+    bindings = (legacy.data ?? []) as StoreBindingLike[];
   }
 
   const groups = groupsRes.data;
-  const bindings = bindingsRes.data;
 
   const role = (accountRow.role ?? "cashier") as UserRole;
   const permissionGroup = (groups ?? []).find((item) => item.id === accountRow.permission_group_id) as
@@ -284,14 +294,9 @@ export async function authenticateAccountFromServer(account: string, pin: string
     name: accountRow.name,
     role,
     active: Boolean(accountRow.active),
-    // 優先 merchant_id（＝POS store_id / Ledger merchant UUID）；舊資料冇就落 store_id。
-    // 用 dedupeStoreIds 去重 + 去 null（binding 只填 merchant_id 時 store_id 係 null）。
-    storeIds: dedupeStoreIds(
-      (bindings ?? []).map(
-        (item: { store_id?: string | null; merchant_id?: string | null }) =>
-          item.merchant_id ?? item.store_id,
-      ),
-    ),
+    // 優先 merchant_id；冇就靠 store_id（本身係 UUID 才算）。
+    // 詳見 `resolveBindingMerchantIds()` 的三級優先序。
+    storeIds: resolveBindingMerchantIds(bindings ?? []).ids,
     permissionGroupId: accountRow.permission_group_id ?? undefined,
     permissions: mergePermissions(role, permissionGroup, undefined),
     createdAt: accountRow.created_at,

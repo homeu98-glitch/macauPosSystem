@@ -296,11 +296,11 @@ if (canEnterAdmin && !isPlatform && storeIds.length === 0) → 403「未獲分�
 
 ### 13.4 上線次序
 
-0. 🔴 **跑 migration `0024`（`admin_store_id_align`）** —— **P1 硬依賴**
-   `admin_account_store_bindings.merchant_id` 同 `admin_stores.merchant_id`。
-   **實測 2026-10-21：生產 DB 從未跑過**（SQL 報 `42703 column "merchant_id" does not exist`）。
-   全檔 idempotent（`add column if not exists`）；尾段「阶段 2 drop table」係**註解**，唔會執行。
-   未跑之前：店舖級帳號一律 503（code 已加明確偵測 + log 指明 0024），**平台帳號不受影響**。
+0. （可選）migration `0024`（`admin_store_id_align`）—— 只係「多一個 `merchant_id` anchor」，
+   **唔係前提**。實測 2026-10-21：生產 DB **從未跑過**（SQL 報 `42703 column "merchant_id" does not exist`，
+   而且 `admin_stores` 係空表，0025 已清走 `macau-store-a/b`）。
+   Code 已支援兩種 schema：冇 `merchant_id` 欄時，只要 `admin_stores.id` 直接用 merchant UUID
+   （0025 §5 建議做法），scope 一樣解析得到。想跑就跑，idempotent（尾段「阶段 2」係註解）。
 1. 跑 migration `0069`（**POS 專案 `iyrywzormzisyppkokbi`** —— 即 `pos_orders` 所在嗰個，唔係 Ledger）。
    —— 未跑都唔會壞：`pos_orders_page_scoped` 唔存在 → 自動降級四條時間腿（功能正確、慢少少）。
 2. 部署 code。
@@ -337,25 +337,26 @@ on conflict (account) do update
   set pin_code = '1234', active = true, updated_at = now(),
       permission_group_id = (select id from admin_permission_groups where code='owner-test');
 
--- ③ 綁 A 店（只需 merchant_id；resolver 會優先讀佢）
+-- ③ 建店（實測 admin_stores 係**空表**，0025 已清走 macau-store-a/b）
+--    id 直接用 merchant UUID = 0025 §5 建議做法 ⇒ 唔需要 0024 都解析得到
+insert into admin_stores (id, name, active, note)
+values ('d564b932-0c91-45e9-86fd-0ec8e2711f13', '老饕牛肉麵 [示範]', true, '60000002')
+on conflict (id) do update set name = excluded.name, active = true, updated_at = now();
+
+-- ④ 綁 A 店（只需 store_id；resolver 三級優先序第 ③ 條會當佢係 merchant UUID）
 delete from admin_account_store_bindings
  where account_id = (select id from admin_account_users where account='60000099');
 
-insert into admin_account_store_bindings (account_id, merchant_id)
+insert into admin_account_store_bindings (account_id, store_id)
 select id, 'd564b932-0c91-45e9-86fd-0ec8e2711f13'
   from admin_account_users where account='60000099';
 ```
 
-> 若 `admin_account_store_bindings.store_id` 係 **NOT NULL**，改用：
-> ```sql
-> insert into admin_account_store_bindings (account_id, store_id, merchant_id)
-> select a.id,
->        coalesce((select s.id from admin_stores s
->                   where s.merchant_id='d564b932-0c91-45e9-86fd-0ec8e2711f13' limit 1),
->                 (select s.id from admin_stores limit 1)),
->        'd564b932-0c91-45e9-86fd-0ec8e2711f13'
->   from admin_account_users a where a.account='60000099';
-> ```
+> **migration 0024 唔係前提**：`resolveBindingMerchantIds()` 有三級優先序
+> ① `bindings.merchant_id` → ② `admin_stores.merchant_id` 對照 → ③ **`store_id` 本身係 UUID 就當 merchant UUID**。
+> 只要按 0025 §5 用 merchant UUID 做 `admin_stores.id`，②③ 都通。
+> 舊文本 id（`macau-store-a`）一律剔除並 warn（fail closed）。
+> 想跑 0024 亦無害（idempotent），跑完之後多一個 anchor 而已。
 
 **方案 B（唔想新增帳號）**：暫時把你現有平台帳號降級，測完還原
 

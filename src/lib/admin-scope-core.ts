@@ -113,3 +113,45 @@ export function isMissingColumnError(error: unknown): boolean {
   if (String(e.code ?? "") === "42703") return true;
   return typeof e.message === "string" && /column .* does not exist/i.test(e.message);
 }
+
+/** 36 字元 UUID（8-4-4-4-12）。用嚟分辨「舊文本 store id」同「merchant UUID」。 */
+export function isUuidLike(value: unknown): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+    String(value ?? "").trim(),
+  );
+}
+
+export type StoreBindingLike = { store_id?: string | null; merchant_id?: string | null };
+
+/**
+ * bindings → merchant UUID 清單（**0024 前後兩種 schema 都要啱**）。
+ *
+ * 解析優先序：
+ *   ① binding.merchant_id（跑咗 0024 就有，最準）
+ *   ② `admin_stores.merchant_id` 對照（舊 binding 只有 store_id 時）
+ *   ③ **`store_id` 本身係 UUID** ⇒ 當佢就係 merchant UUID
+ *      （0025 §5 建議做法：`admin_stores.id` 直接用 Ledger merchant UUID，
+ *        咁 `store_id` 同 POS `pos_orders.store_id` 就係同一套 id）
+ *   ④ 都唔係 ⇒ 放去 `unmapped`（呼叫端要 warn 並剔除，fail closed）
+ *
+ * ⚠️ ③ 只接受**真 UUID**：舊資料 `macau-store-a` 呢類文本 id 一定要剔除，
+ *    否則會用一個唔存在嘅 store_id 去查，靜靜回空數。
+ */
+export function resolveBindingMerchantIds(
+  bindings: StoreBindingLike[],
+  merchantByStoreId: ReadonlyMap<string, string> = new Map(),
+): { ids: string[]; unmapped: string[] } {
+  const ids: string[] = [];
+  const unmapped: string[] = [];
+
+  for (const b of bindings) {
+    const storeId = String(b.store_id ?? "").trim();
+    const direct = String(b.merchant_id ?? "").trim();
+    const viaStore = storeId ? merchantByStoreId.get(storeId) ?? "" : "";
+    const merchantId = direct || viaStore || (isUuidLike(storeId) ? storeId : "");
+    if (merchantId) ids.push(merchantId);
+    else if (storeId) unmapped.push(storeId);
+  }
+
+  return { ids: dedupeStoreIds(ids), unmapped };
+}

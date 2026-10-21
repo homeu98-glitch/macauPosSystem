@@ -6,7 +6,9 @@ import {
   dedupeStoreIds,
   isMissingColumnError,
   isPlatformPermissions,
+  isUuidLike,
   platformScope,
+  resolveBindingMerchantIds,
   scopeAllows,
   scopeSummary,
   scopedScope,
@@ -109,5 +111,45 @@ describe("admin-scope-core ── 其他", () => {
     assert.equal(isMissingColumnError(null), false);
     assert.equal(isMissingColumnError(undefined), false);
     assert.equal(isMissingColumnError("boom"), false);
+  });
+});
+
+describe("admin-scope-core ── bindings → merchant UUID（0024 前後兩種 schema）", () => {
+  const A = "d564b932-0c91-45e9-86fd-0ec8e2711f13";
+  const B = "8291f843-9def-4956-9d0b-1cfef2598306";
+
+  it("isUuidLike 只認 36 字元 UUID", () => {
+    assert.equal(isUuidLike(A), true);
+    assert.equal(isUuidLike(A.toUpperCase()), true);
+    assert.equal(isUuidLike("macau-store-a"), false);
+    assert.equal(isUuidLike(""), false);
+    assert.equal(isUuidLike(null), false);
+  });
+
+  it("① 有 merchant_id 就用佢（最準）", () => {
+    const r = resolveBindingMerchantIds([{ store_id: "macau-store-a", merchant_id: A }]);
+    assert.deepEqual(r, { ids: [A], unmapped: [] });
+  });
+
+  it("② 冇 merchant_id 但有 admin_stores 對照 → 用對照", () => {
+    const map = new Map([["macau-store-a", A]]);
+    const r = resolveBindingMerchantIds([{ store_id: "macau-store-a" }], map);
+    assert.deepEqual(r, { ids: [A], unmapped: [] });
+  });
+
+  it("③ 完全冇 mapping，但 store_id 本身係 UUID（0025 §5 做法）→ 直接當 merchant UUID", () => {
+    const r = resolveBindingMerchantIds([{ store_id: A }]);
+    assert.deepEqual(r, { ids: [A], unmapped: [] });
+  });
+
+  it("🔴 舊文本 store_id（macau-store-a）冇 mapping → 剔除（唔可以攞去查，會靜靜回空數）", () => {
+    const r = resolveBindingMerchantIds([{ store_id: "macau-store-a" }, { store_id: A }]);
+    assert.deepEqual(r.ids, [A]);
+    assert.deepEqual(r.unmapped, ["macau-store-a"]);
+  });
+
+  it("重複 binding 去重（同一店綁兩次唔會令 storeIds 重複）", () => {
+    const r = resolveBindingMerchantIds([{ store_id: A }, { merchant_id: A }, { store_id: B }]);
+    assert.deepEqual(r.ids, [A, B]);
   });
 });
