@@ -40,6 +40,9 @@ function buildSession(account: AccountUser): AuthSession {
     storeIds: account.storeIds,
     permissionGroupId: account.permissionGroupId,
     permissions: account.permissions,
+    // 首登強制改 PIN（P2）：由 `admin_account_users.must_change_pin` 帶上嚟，
+    // 前端靠呢個開彈窗；`normalizeAuthSession()` 亦會保留。
+    mustChangePin: account.mustChangePin === true ? true : undefined,
     loggedInAt: new Date().toISOString(),
   };
 }
@@ -124,6 +127,22 @@ function verifyAdminPin(row: Record<string, unknown>, pin: string, pepper: strin
 
 /** 落 DB 失敗只 log 一次（0068 未跑 → 42703；**唔可以**因此令登入失敗）。 */
 let warnedLockoutWriteSkip = false;
+
+/**
+ * 供「帳號管理」（P2）寫入新 PIN hash 用。
+ * @returns `null` = 冇設 `AUTH_PIN_PEPPER` ⇒ 呼叫端必須 fail closed（唔可以存明文）。
+ */
+export function hashAdminPinForStorage(account: string, pin: string): string | null {
+  const pepper = process.env.AUTH_PIN_PEPPER?.trim() ?? "";
+  if (!pepper) return null;
+  return deriveAdminPinHash(account, pin, pepper);
+}
+
+/** 驗證「舊 PIN」用（改自己 PIN 時要驗）：hash 優先、明文回退，同登入同一套邏輯。 */
+export function verifyAdminPinForStorage(row: Record<string, unknown>, pin: string): boolean {
+  const pepper = process.env.AUTH_PIN_PEPPER?.trim() ?? "";
+  return verifyAdminPin(row, pin, pepper) !== null;
+}
 
 /**
  * 把鎖定狀態寫返 DB（2026-10-21 · P0-2）。
@@ -294,6 +313,8 @@ export async function authenticateAccountFromServer(account: string, pin: string
     name: accountRow.name,
     role,
     active: Boolean(accountRow.active),
+    // 首登強制改 PIN（P2）；欄位未加（0070 未跑）時為 undefined = 唔強制。
+    mustChangePin: accountRow.must_change_pin === true ? true : undefined,
     // 優先 merchant_id；冇就靠 store_id（本身係 UUID 才算）。
     // 詳見 `resolveBindingMerchantIds()` 的三級優先序。
     storeIds: resolveBindingMerchantIds(bindings ?? []).ids,

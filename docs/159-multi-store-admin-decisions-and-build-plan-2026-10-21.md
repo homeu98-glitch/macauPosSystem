@@ -394,10 +394,76 @@ delete from admin_account_store_bindings
 | 10 | 用返原本平台帳號做以上全部 | 全部照舊正常（`scope.all = true`） |
 | 11 | 停用 `60000099`（`active=false`）後，**用同一張舊 token** 再打 | **401**（唔使等 token 過期） |
 
-### 13.6 刻意未做（移到 P2）
+### 13.6 刻意未做（P2 已補一部分）
 
-- **前端店舖多選 UI**（`admin-shell` 店舖勾選、報表 `allStoresMode` → `storeIds`）。
-  原因：P2 之前冇正式嘅店舖級帳號（要靠 §13.5 嘅 SQL 造），UI 冇對象可測；
-  而且平台帳號仍然係「全部」，現有畫面行為完全正確。P2 建號 UI 會一次過做完。
+- **前端店舖多選 UI**：P2 已做「nav 按 scope 過濾 + 範圍徽章」；報表頁嘅「我的店舖」多選
+  仍然未做 —— 但店主帳號本身只會見到自己店（server 過濾），所以現階段「全部」對佢嚟講
+  就係「我的店舖」。UI 標籤優化留待 P3 同寫入通道一齊做。
 - **`merchants` 的 Ledger 查詢仍然 `select` 全表再 JS 過濾**（店主只收到自己嘅店，冇外洩，
   但多讀幾十行）。等 P3 寫入通道一齊改成 server 端 `.in()`（Ledger 表細，暫時唔急）。
+
+---
+
+## 14. P2 完成紀錄（2026-10-21 已改碼，未部署）
+
+### 14.1 角色收窄為「兩個權限組」
+
+| 權限組 code | 用途 | permissions |
+|---|---|---|
+| `admin-full` | 平台管理員 | `manageAccounts: true`、`scopeAllStores: true` |
+| `pos-owner`（0070 新增，固定 uuid） | 店主／店舖級 | `adminPanelAccess: true`、`manageAccounts: false`、`scopeAllStores: false` |
+
+刻意**唔做** per-account 權限覆寫：建號只揀兩個組之一，咁就永遠唔會出現
+「某個帳號同其他人有咩唔同」呢類查唔清嘅狀態。
+
+### 14.2 改咗咩
+
+| 檔案 | 內容 |
+|---|---|
+| `supabase/migrations/0070_admin_accounts_management.sql`（新） | `must_change_pin` / `created_by` 欄位；seed `pos-owner` 組；`admin-full` 補 `scopeAllStores` |
+| `src/lib/admin-accounts-core.ts`（新） | 純驗證：8 位帳號、4 位 PIN（**只接受字串**，防 `0123` 被 JSON number 吃掉）、店舖級 1–20 店、`60000000` 受保護 |
+| `src/lib/admin-accounts.server.ts`（新） | `listAdminAccounts()` / `createAdminAccount()` / `updateAdminAccount()` / `changeOwnPin()`；PIN 只存 hash（`AUTH_PIN_PEPPER` 未設 → 503，**唔會存明文**） |
+| `GET/POST /api/admin/accounts`（新） | 列表／建號（**平台專屬**） |
+| `PATCH /api/admin/accounts/[account]`（新） | 停用啟用／重設 PIN／改綁店（**平台專屬**；`60000000` 唔准停用） |
+| `POST /api/admin/me/pin`（新） | 改自己 PIN（驗舊 PIN；任何 admin 都可用） |
+| `/admin/accounts` 頁（新） | 帳號表 + 建號表單（店舖 checkbox、上限 20）+ 重設 PIN + 改綁店 + 停用 |
+| `admin-shell.tsx` | 拉 `/api/admin/me`：**按 scope 過濾 nav**（店舖級見唔到帳號管理／工作階段／用量／版本）；顯示範圍徽章；「修改 PIN」按鈕；`mustChangePin` 強制彈窗 |
+| `admin-change-pin-modal.tsx`（新） | 改 PIN 彈窗（`forced` 模式唔可以關） |
+| `admin/session` + `admin/me` | 回傳 `mustChangePin` |
+| `storage.ts` / `types.ts` | `AuthSession.mustChangePin`、`AccountUser.mustChangePin`（`normalizeAuthSession` 亦有帶返，否則 reload 後提示會消失） |
+
+**建號會順手建店**：`admin_account_store_bindings.store_id` 指向 `admin_stores.id`，
+而 0025 已清空 `admin_stores` ⇒ 建號時自動 upsert `admin_stores`（id = merchant UUID、
+名由 Ledger `merchants` 取）。管理員**唔需要**事先建店。
+
+**測試**：`admin-accounts-core.test.ts`（12）＋ 契約測試加 `accounts` 兩條 route 入 platform 清單。
+全量 **2557+ pass**、`tsc` 0 error、eslint 0 error。
+
+### 14.3 上線次序
+
+1. **跑 migration `0070`**（POS 專案）。⚠️ 未跑時：`must_change_pin` 欄唔存在 →
+   建號／重設 PIN 會報錯（`listAdminAccounts` 會提示「請先跑 0070」）；登入不受影響。
+2. 部署 code。
+3. 用平台帳號開 `/admin/accounts` → 建一個店主帳號 → 綁 1–2 間店。
+
+### 14.4 驗收
+
+| # | 動作 | 期望 |
+|---|---|---|
+| 1 | 平台帳號開 `/admin/accounts` | 見到帳號表；「新增帳號」可用 |
+| 2 | 建店主帳號（綁 2 店，初始 PIN 1234） | 成功；列表顯示「店舖級」「待改 PIN」 |
+| 3 | 用該帳號登入 `/admin` | **強制彈改 PIN 窗**（唔可以關）；改完之後正常 |
+| 4 | 該帳號 nav | **冇**「帳號管理／POS 工作階段／雲端用量／版本控制」 |
+| 5 | 該帳號手動打 `/admin/accounts` | 頁面載入但 API 403（`platform_only`） |
+| 6 | 平台帳號停用該店主 → 店主 reload | 立即 401 被踢返登入頁（唔使等 token 過期） |
+| 7 | 平台帳號重設某帳號 PIN | 該帳號下次登入被強制改 |
+| 8 | 嘗試停用 `60000000` | **400**，並解釋「停咗冇人管得到後台」 |
+| 9 | 建號時揀 21 間店 | 前端擋；後端亦 400 |
+
+### 14.5 刻意未做
+
+- **報表頁「我的店舖」多選**：店主帳號本身只會見到自己店（server 過濾），
+  所以現階段「全部」對佢嚟講就係「我的店舖」。UI 標籤優化留待 P3 一齊做。
+- **刪除帳號**：只做停用（`active=false`）。刪除會令審計紀錄失去對應帳號，
+  而且停用已經達到目的。
+- **自助找回 PIN**：4 位 PIN + 8 位帳號冇電郵／手機驗證，只能由平台重設。

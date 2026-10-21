@@ -107,6 +107,11 @@ export interface AccountUser {
   createdAt: string;
   updatedAt: string;
   lastLoginAt?: string;
+  /**
+   * 首登強制改 PIN（2026-10-21 · P2）。建號／重設 PIN 後為 true，
+   * 前端登入時要彈窗要求改，改完由 `POST /api/admin/me/pin` 清走。
+   */
+  mustChangePin?: boolean;
   note?: string;
 }
 

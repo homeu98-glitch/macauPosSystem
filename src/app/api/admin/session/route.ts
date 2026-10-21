@@ -164,6 +164,8 @@ export async function POST(request: Request) {
     account: result.session.account,
     name: result.session.name,
     role: result.session.role,
+    /** P2：首登／重設 PIN 後為 true → 前端要彈窗強制改。 */
+    mustChangePin: result.session.mustChangePin === true,
     /**
      * Scope 摘要（P0-5 / P1）：同 `resolveAdminScope()` 嘅判斷一致
      * （`manageAccounts` 為平台級過渡推導；P2 會改用明確 `scopeAllStores` flag）。

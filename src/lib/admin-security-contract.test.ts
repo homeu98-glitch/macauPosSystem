@@ -142,8 +142,10 @@ describe("/api/admin/** ── P1：每條 route 都要經 requireAdmin（唔可
 });
 
 describe("/api/admin/** ── P1：平台專屬 route", () => {
-  // D4（模組開關只有平台）+ 營運情報（工作階段／用量／版本）
+  // D4（模組開關只有平台）+ 營運情報（工作階段／用量／版本）+ 帳號管理（P2）
   const PLATFORM_ONLY = [
+    "accounts/route.ts",
+    "accounts/[account]/route.ts",
     "merchants/status/route.ts",
     "merchants/modules/route.ts",
     "sessions/route.ts",

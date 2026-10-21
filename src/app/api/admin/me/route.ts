@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/admin-guard.server";
 import { scopeSummary } from "@/lib/admin-scope-core";
 import { getLedgerServiceClient } from "@/lib/ledger/admin-server";
+import { getSupabaseAdminClient } from "@/lib/supabase-server";
 
 /**
  * GET /api/admin/me — 當前 admin 帳號嘅身份 + 可見範圍（2026-10-21 · P1）。
@@ -57,7 +58,21 @@ export async function GET(request: Request) {
     ok: true,
     account: claims.account,
     role: claims.role,
+    // P2：首登／重設 PIN 後為 true（前端 AdminShell 會強制彈改 PIN 窗）。
+    mustChangePin: await readMustChangePin(claims.account),
     scope: summary,
     stores,
   });
+}
+
+/** 讀 `must_change_pin`（0070 未跑 → 欄位唔存在，一律當 false，唔會阻登入）。 */
+async function readMustChangePin(account: string): Promise<boolean> {
+  const supabase = getSupabaseAdminClient();
+  if (!supabase) return false;
+  const { data } = await supabase
+    .from("admin_account_users")
+    .select("must_change_pin")
+    .eq("account", account)
+    .maybeSingle();
+  return (data as { must_change_pin?: boolean } | null)?.must_change_pin === true;
 }

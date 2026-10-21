@@ -1287,6 +1287,15 @@ export type AuthSession = {
   name: string;
   role: UserRole;
   storeIds?: string[];
+  /**
+   * 首登強制改 PIN（2026-10-21 · 多店控制台 P2）。
+   *
+   * 平台派發初始 PIN 之後，前端會強制彈「改 PIN」視窗；改完由
+   * `POST /api/admin/me/pin` 寫回 false，並重新登入或直接沿用 session。
+   * ⚠️ `normalizeAuthSession()` 要帶返呢個欄位，否則 reload 後提示消失
+   * （同 posDeviceToken 同一類「漏抄就靜靜失效」嘅坑）。
+   */
+  mustChangePin?: boolean;
   merchantId?: string;
   /** topUp SSO 8 位店舖編號（通常為店主電話，可能與 account 不同） */
   topUpShopId?: string;
@@ -1352,6 +1361,8 @@ function normalizeAuthSession(session: Partial<AuthSession> | null | undefined):
     ledgerAccessToken: session.ledgerAccessToken,
     ledgerRefreshToken: session.ledgerRefreshToken,
     adminSessionToken: session.adminSessionToken,
+    // ⚠️ 同 posDeviceToken 一樣：漏咗呢行，reload 之後「首登強制改 PIN」提示就會消失。
+    mustChangePin: session.mustChangePin === true ? true : undefined,
     posDeviceToken: session.posDeviceToken,
     // ⚠️ 一定要帶返呢個欄位，否則 reload 之後就會被剷走（同 posDeviceToken 嘅歷史教訓一樣）。
     // 只有「本身有值」才 normalize；undefined 要保持 undefined（= 全部開通）。
