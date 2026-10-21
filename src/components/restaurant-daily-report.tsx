@@ -2906,28 +2906,11 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
               </div>
             ) : null}
 
-            {/* 2026-09-07 修：admin 模式嘅 Ledger 數據可見性分兩層。
-                - 線上單（public.orders）：已經改用 service-role 跨店讀取（/api/admin/ledger/orders），
-                  人流 / 尖峰時段 / 線上單計數都會反映。
-                - 會員充值 / 扣點等彙總 KPI：來自 getMerchantReportSummary RPC，商戶由
-                  auth.uid() 推導、連 merchantId 參數都冇，admin 裝置冇商戶身份 → 仍顯示為空。 */}
-            {isAdminMode ? (
-              <div className="mb-3 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2.5 text-sm text-sky-900">
-                <div className="font-semibold">{t("ℹ️ 管理後台模式：線上單經 service-role 讀取已啟用")}</div>
-                <div className="mt-1 text-[13px] text-sky-800">
-                  {t(
-                    "人流、尖峰時段、線上單計數已包含 Ledger 線上單（跨店 / 指定商家均可）。但會員充值 / 扣點等彙總 KPI 來自需要商戶身份（JWT）的 RPC，管理後台帳號冇商戶身份，故此類數字暫時唔會顯示（並非冇數據）。",
-                  )}
-                </div>
-                <div className="mt-1 text-xs text-sky-700">
-                  {/* ⚠️ `p_merchant_id` 係 SQL 參數名（第 2 層，唔可以翻譯），
-                      所以拆成三段：文案 → code → 文案。 */}
-                  {t("要睇完整會員類 KPI，請用該店商戶帳號登入 POS 後開啟報表；或為 Ledger 加上支援")}
-                  <code className="mx-1 rounded bg-sky-100 px-1">p_merchant_id</code>
-                  {t("參數嘅 admin 版 RPC。")}
-                </div>
-              </div>
-            ) : null}
+            {/* 2026-10-21：移除原「管理後台模式：線上單經 service-role 讀取已啟用」
+                天藍色提示卡（J 要求）。原因：呢段係**內部實作說明**，唔應該出現喺
+                面向商戶/老闆嘅畫面；而且會員類 KPI 缺資料嘅真正處理方向（admin 版
+                RPC / 商戶身份）已轉去方案層處理，唔需要喺報表頁日日出一次。
+                相關 i18n key 亦一併清走（zh / en 兩邊）。 */}
 
             {/* DevTools debug panel：暫時由 UI 隱藏 */}
             {false}
