@@ -8,6 +8,8 @@
 - 「寫得入」≠「讀得出」：新欄位要端到端驗（入庫＋出站正規化＋每條讀取路徑）。
 - **後台表單靜默丟資料**係高頻 bug：打完嘅值喺 save 路徑被覆寫成 0／undefined，UI 零提示。改表單必問「呢個 state 有冇被 save 忽略」。
 - 加 `pos_orders` 欄位要改**四條**讀取路徑（pos-order-mapper／pos-order-row／`/api/pos/orders` 內聯 mapper／sync baseRecord）。
+- **刪「父組件」會連子節點陪葬**：2026-10-20 為刪「掃碼點餐模式卡」而刪 `scan-mode-panel.tsx`，QR 面板寫在同檔 ⇒ 商家完全冇入口印枱貼紙，兩日後才發現（2026-10-21 復原為 `scan-qr-section` + `kiosk-qr-panel` + `quick-scan-qr-panel` + `qr-svg`）。刪 UI 前先問「呢個檔仲有冇**其他**用途」。
+- 掃碼 QR **冇 storeId 唔可以出碼**：`scan-order-page.tsx` 冇 storeId 直接擋，貼紙會白印。
 
 ## 數字口徑
 - 實收＝毛＝`agg.paidTotal`；報表營業額＝淨額 `totalRevenueNetMop`；交班 `netPaidTotal`（＋未退）方向相反，唔可互抄。

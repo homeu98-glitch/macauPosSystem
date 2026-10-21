@@ -7,6 +7,7 @@ import { AppSidebar } from "@/components/app-sidebar";
 import { useLang, useT, useTShort } from "@/components/lang-provider";
 import { LANG_DISPLAY_NAME, UI_LANGS } from "@/lib/i18n";
 import { KioskModePanel } from "@/components/kiosk-mode-panel";
+import { ScanQrSection } from "@/components/scan-qr-section";
 import { ResponsiveModal } from "@/components/responsive-modal";
 import { RelayPairingPanel } from "@/components/relay-pairing-panel";
 import { NumberInput } from "@/components/number-input";
@@ -1299,6 +1300,9 @@ export function DeviceSettings() {
   {activeTab === "kiosk" ? (
     <div className="grid gap-3">
       <KioskModePanel />
+      {/* 掃碼點餐 QR（docs/115）：堂食＝每枱一碼／快餐＝全店一碼，按店級 scan_mode 二選一。
+          2026-10-20 曾連同「模式卡」一併刪走 ⇒ 商家冇入口重印貼紙，2026-10-21 復原（只復原 QR）。 */}
+      <ScanQrSection />
     </div>
   ) : null}
 

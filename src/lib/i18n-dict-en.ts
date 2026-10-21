@@ -561,6 +561,7 @@ export const EN_DICT: Record<string, string> = {
   "未取得店鋪編號，請先以商戶帳號登入 / 綁店。": "No store ID yet. Sign in or bind a store with a merchant account first.",
   複製網址: "Copy URL",
   掃碼點餐模式: "QR ordering mode",
+  "模式跟登入工作台走，要改請用對應模式重新登入。": "The mode follows the sign-in workbench; sign in again with the other mode to change it.",
   "快餐 · 全店一個碼": "Fast food · one code for all",
   "堂食 · 每枱一個碼": "Dine in · one code per table",
   "呢個模式跟登入模式自動設定，唔需要喺呢一頁揀：用「快餐」登入 = 全店一個碼；用「堂食」登入 = 每張桌台一個碼。": "This mode follows the sign-in mode automatically, so there is nothing to choose here: signing in as Fast food gives one code for the whole store; signing in as Dine in gives one code per table.",
