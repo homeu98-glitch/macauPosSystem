@@ -45,3 +45,9 @@
 
 ## 取證
 - `pos_bootstrap_config`／`pos_device_configs`／`pos_shifts` anon 401；`pos_store_status`、`pos_print_jobs` anon 可讀 ⇒ union store_id，再打公開 `/api/pos/bootstrap?storeId=` 核店名／菜品（唔需憑證）。
+
+## 部署（Vercel）
+- **生產網域：`https://macau-pos-system.vercel.app`**（Vercel 專案 `macau-pos-system`；deployment URL 受 SSO 保護會 302，唔適宜用嚟探測）。
+- **push 到 main 即自動部署**，唔需要手動 deploy；本機冇 vercel CLI／token。
+- 驗證「新 code 有冇上線」最快：打一條**新版本先有**嘅 endpoint —— 例如 `/api/admin/me`（舊版 → 404，新版 → 401 JSON）。其他 401 endpoint 冇辨識力。
+- 查部署狀態／commit 對應：用 GCM 取 GitHub token 打 `api.github.com/repos/homeu98-glitch/macauPosSystem/deployments`，再查 `.../deployments/{id}/statuses`（state + environment_url）。
