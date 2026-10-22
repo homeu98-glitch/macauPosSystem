@@ -34,6 +34,7 @@ import { LineChart } from "./charts/LineChart";
 import { InventoryTable } from "./inventory-table";
 import { ItemAnalysisView } from "./item-analysis-view";
 import { InventorySettingsPanel, type Supplier } from "./inventory-settings-panel";
+import { MobileQrModal } from "./mobile-qr-modal";
 import { formatReceiptStamp, isBackdatedReceipt, receiptStampLabel } from "@/lib/receipt-timestamp";
 import { compressImage } from "@/lib/image-compress";
 import { humanSize } from "@/lib/image-compress-plan";
@@ -1809,6 +1810,8 @@ export function InventoryView() {
   const [highlightSupplierId, setHighlightSupplierId] = useState<string | null>(null);
   /** 「庫存・設置」面板（供應商＋品類）。 */
   const [settingsOpen, setSettingsOpen] = useState(false);
+  /** 「手機版庫存表」二維碼彈窗（2026-10-22 · J 要求）。 */
+  const [mobileQrOpen, setMobileQrOpen] = useState(false);
   /** 進貨品類清單（來源：`PosLocalSettings.invCategories`）。 */
   const [categories, setCategories] = useState<string[]>([]);
   /**
@@ -2387,6 +2390,14 @@ export function InventoryView() {
             >
               設置
             </button>
+            {/* 手機版庫存表（2026-10-22 · J 要求）：彈窗出 QR，手機一掃即登入
+                expense-recorder 用手機版庫存表。見 docs/integration/mobile-inventory-qr-2026-10-22.md */}
+            <button
+              onClick={() => setMobileQrOpen(true)}
+              className="rounded-xl bg-white px-4 py-2.5 text-sm font-medium text-slate-700 ring-1 ring-slate-200"
+            >
+              手機版庫存表
+            </button>
             <button
               onClick={() => void loadAll()}
               className="rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-medium text-white"
@@ -2753,6 +2764,14 @@ export function InventoryView() {
         paymentWarning={masterWarning}
         highlightSupplierId={highlightSupplierId}
         onProductsChanged={() => setProductsVersion((n) => n + 1)}
+      />
+
+      <MobileQrModal
+        open={mobileQrOpen}
+        onClose={() => setMobileQrOpen(false)}
+        account={account}
+        merchantId={merchantId}
+        storeName={storeName}
       />
     </div>
   );
