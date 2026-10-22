@@ -1,6 +1,7 @@
 # 手機版庫存表 QR（庫存頁掣 → 掃碼 → 自動登入 expenseRecorder）
 
-> **日期**：2026-10-22 · **狀態**：✅ 已實作（兩個 repo 改動完成，待 SQL migration + 部署）
+> **日期**：2026-10-22 · **狀態**：✅ **已實作並已部署上雲**（POS `9d615e4`／expenseRecorder `670ad68`，兩個 Vercel build 均 success、新 endpoint 生產實測非 404）
+> **剩用戶兩步設定先生效**：① 跑 SQL migration（§5）；② 複製 secret 去 POS Vercel（§5）
 > **觸發實案**：J 要求 —— 「喺庫存頁面右上角加一個掣叫『手機版庫存表』，撿落去彈窗出
 > 二維碼，掃完會去 expense-recorder-sigma.vercel.app，而且直接登入，直接可以使用。」
 
