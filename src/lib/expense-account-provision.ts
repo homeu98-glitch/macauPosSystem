@@ -85,7 +85,17 @@ export async function provisionExpenseShopUser(
   const account = opts.loginId;
 
   // ① 先查：搵到就 return（鐵律 1：絕不 UPDATE 現有 row）
-  const existing = await store.selectByLoginId(account);
+  //
+  // 🔴 2026-10-22 修：呢個 select 原本喺 try/catch 外面。若 live 環境缺
+  // `external_shop_id` 欄（PostgREST `42703` / `PGRST204`），select 會 throw
+  // ⇒ 整個開通靜默失敗（連「已存在」都查唔到）。now：查詢失敗當「未搵到」，
+  // 交畀下面 INSERT + 23505 兜底，確保缺欄環境一樣開得到戶。
+  let existing: ShopUserRow | null = null;
+  try {
+    existing = await store.selectByLoginId(account);
+  } catch {
+    existing = null;
+  }
   if (existing) return { ok: true, userId: existing.id, created: false, account };
 
   const row: NewShopUser = {
@@ -145,6 +155,23 @@ function toDbError(err: unknown): { code?: string; message?: string } | null {
 }
 
 /**
+ * 「欄位不存在」判斷（schema 漂移專用）。
+ *
+ * 🔴 2026-10-22 修：原本只認 `42703`，但 PostgREST 對 `.insert()` 嘅未知欄多數回
+ * **`PGRST204`**（"Could not find the 'x' column of '…' in the schema cache"），
+ * 對 `.select()` 有時回 `42703`、有時回 `PGRST204`。只認一種就會令降級分支永不觸發，
+ * 開通靜默失敗。呢個 helper 同 `api/inventory/receipts` 嘅 `isMissingColumn()` 同一思路。
+ * ⚠️ 唔可以擴大到「任何錯誤」——網絡／權限錯要照 throw，唔可以當缺欄降級。
+ */
+function isMissingColumnError(err: unknown): boolean {
+  const db = toDbError(err);
+  if (!db) return false;
+  if (db.code === "42703" || db.code === "PGRST204") return true;
+  const m = db.message ?? "";
+  return /column .* does not exist/i.test(m) || /Could not find the '.*' column|schema cache/i.test(m);
+}
+
+/**
  * 真實 supabase 實作（server 端用）。
  *
  * 🔴 schema 漂移降級：live 環境 `external_shop_id` / `auth_source` 係後加欄
@@ -156,15 +183,25 @@ function toDbError(err: unknown): { code?: string; message?: string } | null {
 export function createExpenseShopUserStore(client: SupabaseClient): ShopUserStore {
   return {
     async selectByLoginId(loginId: string) {
-      const { data, error } = await client
+      const primary = await client
         .from("shop_users")
         .select("id, external_shop_id")
         .eq("login_id", loginId)
         .maybeSingle();
-      if (error) throw error;
-      return data
-        ? { id: String(data.id), external_shop_id: (data.external_shop_id as string | null) ?? null }
-        : null;
+      if (!primary.error) {
+        return primary.data
+          ? { id: String(primary.data.id), external_shop_id: (primary.data.external_shop_id as string | null) ?? null }
+          : null;
+      }
+      // 🔴 缺 external_shop_id 欄（舊環境）⇒ 降級只查 id，唔可以令整個開通失敗
+      if (!isMissingColumnError(primary.error)) throw primary.error;
+      const fallback = await client
+        .from("shop_users")
+        .select("id")
+        .eq("login_id", loginId)
+        .maybeSingle();
+      if (fallback.error) throw fallback.error;
+      return fallback.data ? { id: String(fallback.data.id), external_shop_id: null } : null;
     },
 
     async insert(row: NewShopUser) {
@@ -175,9 +212,9 @@ export function createExpenseShopUserStore(client: SupabaseClient): ShopUserStor
         if (error) throw error;
         return { id: String(data.id) };
       } catch (err) {
-        const db = toDbError(err);
-        if (db?.code === "42703") {
-          // 舊環境：external_shop_id / auth_source 欄唔存在 → 只寫基礎三欄
+        // 🔴 舊環境缺 external_shop_id / auth_source ⇒ 降級只寫基礎三欄。
+        //    用 isMissingColumnError（含 PGRST204），唔可以只認 42703。
+        if (isMissingColumnError(err)) {
           const { data: d2, error: e2 } = await client.from("shop_users").insert(base).select("id").single();
           if (e2) throw e2;
           return { id: String(d2.id) };

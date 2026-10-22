@@ -10,6 +10,8 @@
 - 加 `pos_orders` 欄位要改**四條**讀取路徑（pos-order-mapper／pos-order-row／`/api/pos/orders` 內聯 mapper／sync baseRecord）。
 - **刪「父組件」會連子節點陪葬**：2026-10-20 為刪「掃碼點餐模式卡」而刪 `scan-mode-panel.tsx`，QR 面板寫在同檔 ⇒ 商家完全冇入口印枱貼紙，兩日後才發現（2026-10-21 復原為 `scan-qr-section` + `kiosk-qr-panel` + `quick-scan-qr-panel` + `qr-svg`）。刪 UI 前先問「呢個檔仲有冇**其他**用途」。
 - 掃碼 QR **冇 storeId 唔可以出碼**：`scan-order-page.tsx` 冇 storeId 直接擋，貼紙會白印。
+- **缺欄檢測唔可以只認 `42703`**：PostgREST 對 `.insert()` 未知欄多回 **`PGRST204`**（"Could not find the 'x' column … schema cache"），對 `.select()` 兩種都可能。要同時認 code（42703/PGRST204）＋訊息 regex，否則降級分支永不觸發、靜默失敗（2026-10-22 庫存開通中招）。查詢本身亦要包 try/catch，唔可以假設「欄一定存在」。
+- **登入時觸發嘅副作用 ≠ 對已登入 session 生效**：POS session 存 localStorage，部署前已登入嘅商戶只按「重新整理」唔會再打 `/api/ledger/login` ⇒ 登入時開通／上報永遠唔 fire，要登出再登入。
 
 ## 數字口徑
 - 實收＝毛＝`agg.paidTotal`；報表營業額＝淨額 `totalRevenueNetMop`；交班 `netPaidTotal`（＋未退）方向相反，唔可互抄。

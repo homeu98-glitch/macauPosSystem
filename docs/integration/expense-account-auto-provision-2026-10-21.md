@@ -230,10 +230,29 @@ if (process.env.EXPENSE_AUTO_PROVISION !== "0") {
 
 | 層 | 動作 | 結果 |
 |---|---|---|
-| 單測 | `src/lib/expense-account-provision.test.ts`：15 條（已存在→created:false 唔 insert／create 成功／23505 race→created:false／external_shop_id 降級／雙 23505→409／account 唔合法→400／PIN 唔合法→400／保留號→400／其他錯→500／42703→500） | ✅ **15/15 pass** |
+| 單測 | `src/lib/expense-account-provision.test.ts`：**19 條**（已存在→created:false 唔 insert／create 成功／23505 race→created:false／external_shop_id 降級／雙 23505→409／account 唔合法→400／PIN 唔合法→400／保留號→400／其他錯→500／42703→500／初始 select 拋錯仍 INSERT／adapter 缺欄 42703 降級 select id／adapter 缺欄 PGRST204 降級 insert／非缺欄錯誤照 throw） | ✅ **19/19 pass** |
 | 型別 | `node node_modules/typescript/bin/tsc --noEmit` | ✅ **0 error** |
 | lint | `node node_modules/eslint/bin/eslint.js src/lib/expense-account-provision.ts src/lib/expense-account-provision.test.ts src/app/api/ledger/login/route.ts` | ✅ **0 error** |
 | 全測 | `node --test`（background） | ✅ **2589 pass / 0 fail** |
+
+---
+
+### 5.1 🔴 第二輪修補（2026-10-22 · 上線後商家仍報「庫存空白」）
+
+上線後商家（Brewlab Coffee，帳號 `68189891`）開庫存仍顯示「找不到相同帳號的店戶」。取證：
+生產 `GET /api/inventory/receipts?account=68189891` 回 `matched:false`（**非** 503，證明 expense client 已連上、`shop_users` 真係冇列）。
+
+發現**全域性** bug（任何環境都會中，同「migration 檔存在 ≠ 跑過」同源）：
+1. `provisionExpenseShopUser` 第一步 `selectByLoginId()` 喺 try/catch **外面**，而佢 select `id, external_shop_id`。若 live 缺 `external_shop_id` 欄 ⇒ PostgREST `42703` / `PGRST204` ⇒ throw ⇒ 整個開通靜默失敗（連「已存在」都查唔到）。
+2. `insert()` 只認 `db.code === "42703"`；但 PostgREST 對 `.insert()` 未知欄多數回 **`PGRST204`**（"Could not find the 'x' column … in the schema cache"）⇒ 降級分支永不觸發。
+
+修法：
+- 新增 `isMissingColumnError()`（認 `42703` / `PGRST204` / 訊息 regex，同 `api/inventory/receipts` 嘅 `isMissingColumn()` 同思路）；**非缺欄錯照 throw**，唔可以亂降級。
+- `selectByLoginId`：主 select 撞缺欄 ⇒ 降級只 `select("id")`。
+- `insert`：缺欄時降級只寫基礎三欄（改用上面 helper）。
+- `provisionExpenseShopUser`：初始 select 包 try/catch，查詢失敗當「未搵到」交 INSERT + 23505 兜底。
+
+⚠️ **仍有一個非程式問題**：開通只喺 `/api/ledger/login` 觸發。商家若喺部署前已登入（session 存 localStorage），之後只按「重新整理」係**唔會**再打 login ⇒ 開通永遠唔會 fire。對呢類已登入嘅店，**需登出再登入一次**先觸發（符合 J「第一次登入就開」嘅原本設計）。
 
 ---
 

@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 
 import {
   provisionExpenseShopUser,
+  createExpenseShopUserStore,
   validateAccountForProvision,
   validateLoginPin,
   type ShopUserStore,
@@ -163,5 +164,119 @@ describe("provisionExpenseShopUser", () => {
     const r = await provisionExpenseShopUser(store, opts);
     assert.equal(r.ok, false);
     if (!r.ok) assert.equal(r.status, 500);
+  });
+
+  it("初始 SELECT 拋錯 → 當未搵到，照 INSERT（唔可以令開通靜默失敗）", async () => {
+    let selectCalls = 0;
+    const store: ShopUserStore = {
+      async selectByLoginId() {
+        selectCalls += 1;
+        throw Object.assign(new Error("column does not exist"), { code: "42703" });
+      },
+      async insert() {
+        return { id: "u-after-throw" };
+      },
+    };
+    const r = await provisionExpenseShopUser(store, opts);
+    assert.deepEqual(r, { ok: true, userId: "u-after-throw", created: true, account: opts.loginId });
+    assert.equal(selectCalls, 1);
+  });
+});
+
+// ── adapter（createExpenseShopUserStore）降級測試 ─────────────────────────
+// 用最小 fake client 驗證 schema 漂移時嘅行為，唔使連真實 supabase。
+type FakeClient = Parameters<typeof createExpenseShopUserStore>[0];
+
+describe("createExpenseShopUserStore（schema 漂移降級）", () => {
+  it("selectByLoginId：缺 external_shop_id 欄（42703）→ 降級只 select id", async () => {
+    const cols: string[] = [];
+    const client = {
+      from: () => ({
+        select: (c: string) => {
+          cols.push(c);
+          return {
+            eq: () => ({
+              maybeSingle: async () =>
+                c.includes("external_shop_id")
+                  ? {
+                      data: null,
+                      error: {
+                        code: "42703",
+                        message: "column shop_users.external_shop_id does not exist",
+                      },
+                    }
+                  : { data: { id: "u1" }, error: null },
+            }),
+          };
+        },
+      }),
+    } as unknown as FakeClient;
+    const store = createExpenseShopUserStore(client);
+    const row = await store.selectByLoginId("68189891");
+    assert.deepEqual(row, { id: "u1", external_shop_id: null });
+    assert.equal(cols.length, 2);
+    assert.equal(cols[1], "id");
+  });
+
+  it("insert：缺欄回 PGRST204 → 降級只寫基礎三欄", async () => {
+    let n = 0;
+    const payloads: Record<string, unknown>[] = [];
+    const client = {
+      from: () => ({
+        insert: (p: Record<string, unknown>) => {
+          n += 1;
+          payloads.push(p);
+          const hasExt = "external_shop_id" in p;
+          return {
+            select: () => ({
+              single: async () =>
+                hasExt
+                  ? {
+                      data: null,
+                      error: {
+                        code: "PGRST204",
+                        message:
+                          "Could not find the 'external_shop_id' column of 'shop_users' in the schema cache",
+                      },
+                    }
+                  : { data: { id: "u-new" }, error: null },
+            }),
+          };
+        },
+      }),
+    } as unknown as FakeClient;
+    const store = createExpenseShopUserStore(client);
+    const r = await store.insert({
+      loginId: "68189891",
+      loginPin: "1234",
+      shopName: "Brewlab Coffee",
+      externalShopId: "uuid-1",
+      authSource: "macau-pos",
+    });
+    assert.deepEqual(r, { id: "u-new" });
+    assert.equal(n, 2);
+    assert.equal("external_shop_id" in payloads[1], false);
+  });
+
+  it("insert：非缺欄錯誤照 throw（唔可以當缺欄亂降級）", async () => {
+    const client = {
+      from: () => ({
+        insert: () => ({
+          select: () => ({
+            single: async () => ({ data: null, error: { code: "23503", message: "fk violation" } }),
+          }),
+        }),
+      }),
+    } as unknown as FakeClient;
+    const store = createExpenseShopUserStore(client);
+    await assert.rejects(() =>
+      store.insert({
+        loginId: "68189891",
+        loginPin: "1234",
+        shopName: "x",
+        externalShopId: null,
+        authSource: "macau-pos",
+      }),
+    );
   });
 });
