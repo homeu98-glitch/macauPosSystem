@@ -10,6 +10,8 @@ import { issuePosDeviceToken } from "@/lib/pos/pos-device-token";
 import { registerPosSession } from "@/lib/pos/session-registry-server";
 import { POS_BUILD_HEADER, POS_SESSION_HEADER, sanitizeBuildId, sanitizeSessionKey } from "@/lib/pos/session-record";
 import { loadMerchantGrants } from "@/lib/pos/merchant-modules-server";
+import { getExpenseSupabaseClient } from "@/lib/expense-supabase";
+import { provisionExpenseShopUser, createExpenseShopUserStore } from "@/lib/expense-account-provision";
 
 type LoginAttemptBucket = { count: number; resetAt: number };
 
@@ -224,6 +226,44 @@ export async function POST(request: Request) {
     appVersion: sanitizeBuildId(request.headers.get(POS_BUILD_HEADER)) ?? readServerBuildId(),
     source: "login",
   });
+
+  // ── 庫存帳戶自動開通（2026-10-22，J 要求）────────────────────────────
+  //
+  // macau-pos 登入成功、而 expenseRecorder 冇該 account 對應嘅 `shop_users` 時，
+  // 立即以**完全相同**嘅 account（8 位電話）＋ PIN 喺 expenseRecorder 開一間
+  // （帳號與 PIN 兩邊互用），令商家第一次開庫存就唔會空白。
+  //
+  // 🔴 鐵律（J 明確要求）：
+  //   ① 絕對唔可以令登入失敗：expenseRecorder 未設定／網絡錯／schema 未就緒 → 全部
+  //      靜默放過（同 `registerPosSession` / `reportPosClientPresence` 同一鐵律）。
+  //   ② 絕對唔改動／刪除 expenseRecorder 現有戶口：只 resolve-or-create，搵到就 return。
+  //   ③ PIN 直接採用 macau-ledger 嗰個（上面嘅 `pin`），唔係隨機生成。
+  // 🔴 可以經 `EXPENSE_AUTO_PROVISION=0` 完全關閉（kill switch，預設開）。
+  if (process.env.EXPENSE_AUTO_PROVISION !== "0") {
+    try {
+      const expense = getExpenseSupabaseClient();
+      if (expense) {
+        const result = await provisionExpenseShopUser(createExpenseShopUserStore(expense), {
+          loginId: phone,
+          loginPin: pin,
+          shopName: merchant?.name ?? `店號 ${phone}`,
+          externalShopId: staffRow.merchant_id,
+          authSource: "macau-pos",
+        });
+        if (result.ok && result.created) {
+          console.info("[ledger/login] 已為新店自動開通 expenseRecorder 庫存帳戶", {
+            account: phone,
+            storeId: staffRow.merchant_id,
+          });
+        }
+      }
+    } catch (e) {
+      console.warn(
+        "[ledger/login] expenseRecorder 庫存帳戶開通失敗（不影響登入）",
+        e instanceof Error ? e.message : String(e),
+      );
+    }
+  }
 
   return NextResponse.json({
     ok: true,

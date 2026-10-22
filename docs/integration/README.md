@@ -22,6 +22,7 @@
 | [pos-offline-report-v1-addendum-2026-09-26.md](./pos-offline-report-v1-addendum-2026-09-26.md) | **v1 增補**：加 `orders[]`（訂單明細）+ `dishes[]`（菜品排名）；caps 標頭、截斷、口徑 | 2026-09-26 之後嘅整合（可直接轉貼） |
 | [pos-offline-report-channel-addendum-2026-10-07.md](./pos-offline-report-channel-addendum-2026-10-07.md) | 🔴 **渠道增補 v2（最新）**：菜品分渠道、訂單來源、支付方式分項、渠道 KPI。**舊欄一個數字都唔改** | **要畀 Ledger 嘅就係呢份**（可直接轉貼） |
 | [ledger-purchase-report-api.md](./ledger-purchase-report-api.md) | 🆕 **Ledger → expenseRecorder 買貨報表契約 v1**：買貨單據、品項、供應商、幣別拆分。**定稿，可直接轉貼** | **要畀 Ledger 嘅就係呢份**（2026-10-11） |
+| [expense-account-auto-provision-2026-10-21.md](./expense-account-auto-provision-2026-10-21.md) | ✅ **庫存帳戶自動開通方案（login 觸發版，2026-10-22 已實作）**：POS 登入成功時若 expenseRecorder 冇該 account 對應 `shop_users`，即 resolve-or-create（帳號＋PIN 跟 macau-ledger 互用，絕不動現有戶口） | 實行／review 庫存自動開通前必讀 |
 
 > 📦 **畀 Ledger 嘅 offline-report 交付包**（三份一齊）：
 > ① [`pos-offline-report-api.md`](./pos-offline-report-api.md)（v1 主契約）
