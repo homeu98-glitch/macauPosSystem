@@ -137,6 +137,39 @@ export default function AdminDashboardPage() {
     void loadMerchants();
   }, [loadMerchants]);
 
+  /**
+   * 平台級身份（2026-10-23，J 回報）：「模組授權」／「啟用／停用」係**平台專屬**操作，
+   * 店主帳號（店舖級 scope）只係商家，唔可以改呢啲嘢。
+   *
+   * server 一早封咗（`requireAdmin(request, { platform: true })` ⇒ 403），
+   * 但舊版 UI **無條件 render** 兩個按鈕 ⇒ 店主「撳得出、儲存先死」，
+   * 令人誤以為自己有權限。而家改成一定要 `scope.all === true` 先 render。
+   *
+   * 🔴 fail-closed：初值 `null`（未載入）同 fetch 失敗一律當**非平台**，
+   * 操作欄連「操作」表頭一齊唔 render —— 撳唔到好過撳得出先死。
+   */
+  const [isPlatform, setIsPlatform] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const token = loadAuthSession()?.adminSessionToken;
+        const res = await fetch("/api/admin/me", {
+          headers: { Authorization: `Bearer ${token ?? ""}` },
+        });
+        const json = (await res.json()) as { ok?: boolean; scope?: { all?: boolean } };
+        if (cancelled) return;
+        setIsPlatform(res.ok && json.ok === true && json.scope?.all === true);
+      } catch {
+        if (!cancelled) setIsPlatform(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   async function toggleMerchant(m: AdminMerchant, e: React.MouseEvent) {
     // 問題 3（2026-09-06 修）：啟用/停用按鈕點擊時要 stopPropagation，避免冒泡到
     // <tr> 嘅「點擊跳轉營業報表」handler。
@@ -321,7 +354,9 @@ export default function AdminDashboardPage() {
                       <th className="px-4 py-2 text-right font-medium">7日單數</th>
                       <th className="px-4 py-2 text-right font-medium">7日營業額</th>
                       <th className="px-4 py-2 font-medium">最近落單</th>
-                      <th className="px-4 py-2 text-right font-medium">操作</th>
+                      {isPlatform === true ? (
+                        <th className="px-4 py-2 text-right font-medium">操作</th>
+                      ) : null}
                     </tr>
                   </thead>
                   <tbody>
@@ -353,38 +388,40 @@ export default function AdminDashboardPage() {
                           <td className="px-4 py-2.5 text-right tabular-nums">{m.stats.d7Orders}</td>
                           <td className="px-4 py-2.5 text-right tabular-nums">{fmtMop(m.stats.d7Revenue)}</td>
                           <td className="px-4 py-2.5 text-slate-600">{fmtTime(m.stats.lastOrderAt)}</td>
-                          <td className="px-4 py-2.5 text-right">
-                            <div className="flex items-center justify-end gap-1.5">
-                              {/* 模組授權 —— 決定呢間店 POS 登入後可揀嘅工作台 + 側欄模組。
-                                  ⚠️ 一定要 stopPropagation：<tr> 本身有「點擊跳去營業報表」。 */}
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setModulesMerchant(m);
-                                }}
-                                className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
-                              >
-                                模組
-                              </button>
-                              {m.status === "active" || m.status === "suspended" ? (
+                          {isPlatform === true ? (
+                            <td className="px-4 py-2.5 text-right">
+                              <div className="flex items-center justify-end gap-1.5">
+                                {/* 模組授權 —— 決定呢間店 POS 登入後可揀嘅工作台 + 側欄模組。
+                                    ⚠️ 一定要 stopPropagation：<tr> 本身有「點擊跳去營業報表」。 */}
                                 <button
                                   type="button"
-                                  disabled={busyMerchantId === m.id}
-                                  onClick={(e) => void toggleMerchant(m, e)}
-                                  className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors disabled:opacity-50 ${
-                                    m.status === "active"
-                                      ? "border border-red-200 text-red-600 hover:bg-red-50"
-                                      : "border border-green-200 text-green-700 hover:bg-green-50"
-                                  }`}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setModulesMerchant(m);
+                                  }}
+                                  className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-50"
                                 >
-                                  {busyMerchantId === m.id ? "處理中…" : m.status === "active" ? "停用" : "啟用"}
+                                  模組
                                 </button>
-                              ) : (
-                                <span className="text-xs text-slate-400">—</span>
-                              )}
-                            </div>
-                          </td>
+                                {m.status === "active" || m.status === "suspended" ? (
+                                  <button
+                                    type="button"
+                                    disabled={busyMerchantId === m.id}
+                                    onClick={(e) => void toggleMerchant(m, e)}
+                                    className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors disabled:opacity-50 ${
+                                      m.status === "active"
+                                        ? "border border-red-200 text-red-600 hover:bg-red-50"
+                                        : "border border-green-200 text-green-700 hover:bg-green-50"
+                                    }`}
+                                  >
+                                    {busyMerchantId === m.id ? "處理中…" : m.status === "active" ? "停用" : "啟用"}
+                                  </button>
+                                ) : (
+                                  <span className="text-xs text-slate-400">—</span>
+                                )}
+                              </div>
+                            </td>
+                          ) : null}
                         </tr>
                       );
                     })}
