@@ -94,12 +94,13 @@ external_shop_id 搵唔到 → 行 INSERT 路徑 → login_id 撞 UNIQUE（23505
 
 ## 5. 部署步驟（🔴 次序好重要，J 要做嘅只有 3 件）
 
-1. **跑 SQL**（expenseRecorder Supabase Dashboard → SQL Editor）：
-   `expenseRecorder/supabase_mobile_qr_sessions_v1.sql`
-   （實測 production 而家 `mobile_qr_sessions` 未存在 → PGRST205。）
+1. **跑 SQL**（expenseRecorder Supabase Dashboard → SQL Editor）—— **兩條都要跑**：
+   - `expenseRecorder/supabase_mobile_qr_sessions_v1.sql`（QR 短碼表；實測 production 原本未存在 → PGRST205）
+   - `expenseRecorder/supabase_shop_users_sso_columns_v1.sql`（補齊 `shop_users` 嘅 SSO 欄位；**2026-10-22 實測生產表由舊 schema 建成，缺 `auth_source` 等 5 欄 ⇒ 掃完碼登入 500**，見 §8）
 2. **設共享 secret**：expenseRecorder Vercel 已有 `MACAU_LEDGER_SSO_SECRET`；
    複製**同一值**去 POS Vercel Project → Environment Variables。
-   （未設 → 彈窗顯示「尚未啟用（伺服器未設定 MACAU_LEDGER_SSO_SECRET）」，功能优雅降級。）
+   （未設 → 彈窗顯示「尚未啟用（伺服器未設定 MACAU_LEDGER_SSO_SECRET）」，功能优雅降級。
+   ⚠️ **加／改完 env 必須重新部署** —— Vercel env 只對儲存後新建嘅部署生效，唔會回溯。）
 3. **Push**：兩個 repo 各自 push 上 main ⇒ Vercel 自動部署。
 
 > 舊 session 注意：部署前已登入嘅商戶（localStorage session）按「重新整理」唔會重打
@@ -125,3 +126,11 @@ external_shop_id 搵唔到 → 行 INSERT 路徑 → login_id 撞 UNIQUE（23505
 | expenseRecorder anon key 可讀 `shop_users.login_pin`（存量問題，2026-10-22 實測確認） | 🔴 **存量安全問題，非今次引入**：建議另開任務（RLS + server-side session + rotate PIN） |
 | `sso_token_logins` 表若從未跑過 schema v2 ⇒ 每次 SSO 500 | 本 migration 已順手 `CREATE IF NOT EXISTS` 補齊 |
 | 手機版著陸頁固定 `/`（expenseRecorder 首頁） | 如要直達某頁，改 claim `redirect.path` |
+
+## 8. 上線除錯記錄（2026-10-22 實戰）
+
+| 徵狀 | 根因 | 處理 |
+|---|---|---|
+| 彈窗報「尚未啟用（伺服器未設定 MACAU_LEDGER_SSO_SECRET）」 | Vercel env 只對「儲存後新建嘅部署」生效；用戶加 var 前最後部署已存在 | 推空 commit 觸發全新部署（`fa9d62c`）即修 |
+| 掃完碼顯示「建立/更新店舖失敗：Could not find the 'auth_source' column … schema cache」（PGRST204） | 生產 `shop_users` 由舊 schema 建成，未跑過 `supabase_schema_v2.sql` 嘅 ALTER 段 ⇒ 缺 `auth_source` 等 5 欄 | ① 跑 `supabase_shop_users_sso_columns_v1.sql`；② sso-login 加缺欄降級（PGRST204/42703 逐個剔走重試，核心欄位唔剔），commit `66c922e` |
+| 修完重試報「SSO token 已被使用」 | 失敗那次 jti 已寫入 `sso_token_logins`（防重放設計：先 claim 後寫店） | 屬預期 —— 回 POS 彈窗撳「重新產生」拿新 QR 再掃 |
