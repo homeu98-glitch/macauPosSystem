@@ -18,7 +18,8 @@ import {
   saveLastWorkbench,
   saveRememberWorkbenchEnabled,
 } from "@/lib/pos/workbench-preference";
-import { loadAuthSession, type AuthSession } from "@/lib/storage";
+import { clearAuthSession, loadAuthSession, type AuthSession } from "@/lib/storage";
+import { isTerminalUnlocked } from "@/lib/pos/terminal-lock";
 
 import { WorkbenchCardGroup } from "@/components/workbench-picker";
 import { signOutLedgerSession } from "@/lib/ledger/session";
@@ -71,6 +72,13 @@ export function SelectWorkbenchScreen() {
     const current = loadAuthSession();
     if (!current) {
       // 直接開呢條 URL（冇登入）→ 彈返登入頁。
+      window.location.replace("/login");
+      return;
+    }
+    // 冷啟（docs/162）：關掉瀏覽器再開會帶住上一手嘅 session。
+    // 呢一頁冇 `AuthGuard`，所以要自己攔一次，否則會見到上一個帳號嘅工作台。
+    if (!current.adminSessionToken && !isTerminalUnlocked()) {
+      clearAuthSession();
       window.location.replace("/login");
       return;
     }
