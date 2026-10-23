@@ -414,7 +414,7 @@ export function AppSidebar() {
                 : "bg-slate-800 text-slate-200 hover:bg-slate-700"
             }`}
             href="/operator"
-            title={operator ? `而家操作員：${operator.name}（撳一下切換）` : "店員簽到（工號 + PIN）"}
+            title={operator ? `而家操作員：${operator.name}（撳一下換人）` : "店員簽到（工號 + PIN）"}
           >
             <div className="text-[8px] leading-tight">{operator ? operator.name : t("簽到")}</div>
             <div

@@ -14,6 +14,11 @@ import {
   saveBindingFromLogin,
 } from "@/lib/pos/device-binding";
 import { saveOperatorSession } from "@/lib/pos/operator-session";
+import {
+  describeIdentityGap,
+  fetchLoginIdentities,
+  type LoginIdentity,
+} from "@/lib/pos/login-identities";
 import { applyWorkbenchSelection } from "@/lib/pos/apply-workbench";
 import {
   WORKBENCH_IDS,
@@ -93,15 +98,6 @@ function readRequestedWorkbench(): WorkbenchId | null {
   return findWorkbench(raw)?.id ?? null;
 }
 
-/** 登入第 2 步嘅身份卡（店主 或 已啟用店員）。 */
-type LoginIdentity = {
-  kind: "owner" | "staff";
-  id: string;
-  name: string;
-  staffNo?: string;
-  role: "owner" | "manager" | "cashier";
-};
-
 export function LoginScreen() {
   const [account, setAccount] = useState("");
   const [pin, setPin] = useState("");
@@ -175,40 +171,6 @@ export function LoginScreen() {
     staffTableMissing?: boolean;
   };
 
-  /**
-   * 打 `/api/pos/login/identities`。
-   *
-   * 兩種入參（docs/161）：`{deviceId, deviceSecret}`（已初始化）或 `{account}`。
-   * 回傳 `status` 畀呼叫端分辨「憑證失效（401，要清走 binding）」同「網絡問題」。
-   */
-  async function fetchIdentities(input: {
-    account?: string;
-    deviceId?: string;
-    deviceSecret?: string;
-  }): Promise<
-    | { ok: true; payload: IdentitiesPayload }
-    | { ok: false; error: string; status: number }
-  > {
-    try {
-      const response = await fetch("/api/pos/login/identities", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(input),
-      });
-      const payload = (await response.json().catch(() => null)) as IdentitiesPayload | null;
-      if (!response.ok || !payload?.ok) {
-        return {
-          ok: false,
-          status: response.status,
-          error: payload?.error ?? "讀取身份失敗，請再試一次。",
-        };
-      }
-      return { ok: true, payload };
-    } catch {
-      return { ok: false, status: 0, error: "網絡錯誤，請稍後再試。" };
-    }
-  }
-
   function applyIdentities(payload: IdentitiesPayload) {
     const list = payload.identities ?? [];
     setStoreName(payload.storeName ?? "");
@@ -236,23 +198,21 @@ export function LoginScreen() {
 
     let cancelled = false;
     void (async () => {
-      const result = await fetchIdentities({
+      const result = await fetchLoginIdentities({
         deviceId: binding.deviceId,
         deviceSecret: binding.secret,
       });
       if (cancelled) return;
 
       if (!result.ok) {
-        if (result.status === 401) {
-          // 憑證已被撤銷／舊版 row ⇒ 清走本機記錄，落返帳號模式
-          clearDeviceBinding();
-          setDeviceMode(false);
-          setBooting(false);
-          return;
-        }
-        // 網絡問題：仍然當裝置模式，但顯示錯誤，唔好逼人打帳號
-        setDeviceMode(true);
-        setStep("identity");
+        // 憑證已經冇用（撤銷／0073 未跑／0075 未升級）⇒ 清走本機票；
+        // 網絡問題就保留，下次開頁會再試。
+        if (result.status === 401 || result.tableMissing) clearDeviceBinding();
+        // 🔴 唔可以留住「裝置模式 + 空白身份清單」：清單係空嘅就等於死路
+        //    （用家見到咩都揀唔到，只會覺得個掣壞咗）。一律落返帳號模式，
+        //    至少仲有一條行得通嘅路。
+        setDeviceMode(false);
+        setStep("account");
         setError(result.error);
         setBooting(false);
         return;
@@ -283,7 +243,7 @@ export function LoginScreen() {
 
     setChecking(true);
     try {
-      const result = await fetchIdentities({ account: normalizedAccount });
+      const result = await fetchLoginIdentities({ account: normalizedAccount });
       if (!result.ok) {
         setError(result.error);
         return;
@@ -346,20 +306,13 @@ export function LoginScreen() {
    * 喺畫面上都係一模一樣嘅「店主 · 切換」，用家只會覺得個掣壞咗。
    */
   function identityHint(): string | null {
-    if (identities.length > 1) return null;
-    if (known === false) {
-      return "呢間店第一次用：店主用自己帳號登入一次之後，店員就會出現喺呢個清單。";
-    }
-    if (staffTableMissing) {
-      return "店員表未建立（migration 0072 未跑），所以暫時淨係得店主可以登入。";
-    }
-    if (staffTotal === 0) {
-      return "呢間店仲未加入店員。去「設定 → 員工權限」加咗店員，佢哋就會出現喺呢個清單。";
-    }
-    if (staffActive === 0) {
-      return "店員全部已停用，所以暫時淨係得店主可以登入。";
-    }
-    return null;
+    return describeIdentityGap({
+      identities,
+      known: known === true,
+      staffTotal,
+      staffActive,
+      staffTableMissing,
+    });
   }
 
   function submitPin() {
@@ -423,6 +376,7 @@ export function LoginScreen() {
       const payload = (await response.json()) as {
         ok: boolean;
         error?: string;
+        code?: string;
         session?: LoginPayloadSession;
         accessToken?: string;
         refreshToken?: string;
@@ -430,6 +384,20 @@ export function LoginScreen() {
       };
 
       if (!payload.ok || !payload.session) {
+        // 🔴 裝置憑證壞咗（撤銷／0073 未跑／0075 未升級）⇒ 唔可以淨係彈紅字
+        //    然後困喺 PIN 頁。用家喺呢一步**冇**帳號輸入框，紅字等於死路。
+        //    ⇒ 直接清走壞票、落返帳號模式，順手講清楚要做咩。
+        if (payload.code === "device_not_ready" || payload.code === "table_missing") {
+          clearDeviceBinding();
+          setDeviceMode(false);
+          setSelected(null);
+          setPin("");
+          setStep("account");
+          setError(
+            "呢部機嘅店主授權已失效（可能係 migration 0075 未跑，或者授權被撤銷）。請用 8 位店舖帳號＋PIN 登入一次。",
+          );
+          return;
+        }
         throw new Error(payload.error ?? "登入失敗");
       }
 
