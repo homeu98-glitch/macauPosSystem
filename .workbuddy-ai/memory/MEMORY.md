@@ -77,12 +77,15 @@ iPad(HTTPS) → Supabase Realtime(WSS) → Android Hub(LAN) → LAN printer(:910
 
 ## 員工權限／裝置授權（docs/160）
 - 三層：L1 店舖登入（Ledger）／L2 工號+PIN 簽到（`pos_staff`）／L0 裝置授權（`pos_bound_devices`，0073）。
-- `pos_bound_devices` 只存 secret 嘅 SHA-256 + **AES-256-GCM 加密嘅 Ledger refresh token**；金鑰由 `resolvePosTokenSecret()` 派生 ⇒ 換 secret 全部裝置失效。
-- 🔴 Supabase refresh token 會輪換：session route refresh 完即刻寫 DB，客戶端每次輪換要 PATCH 同步（`syncDeviceBindingRefreshToken()`）；漏咗第二日開機靜靜失敗。
-- 登出寫 `macau-pos/device-signed-out`，AuthGuard 見到就唔自動還原（避免「登出即登入」）。
+- `pos_bound_devices` 存 secret 嘅 SHA-256 + **AES-256-GCM 加密嘅店主 PIN**（0075）；金鑰由 `resolvePosTokenSecret()` 派生 ⇒ 換 secret 全部裝置失效。
+- 🔴 **裝置憑證唔可以存 refresh token**（2026-10-23 實測死過）：`signOut({scope:"local"})` 會撤銷該 session，而且 `autoRefreshToken:true` 背景輪換唔同步 DB ⇒ Supabase 判定 token 重用 ⇒ family 撤銷。改存 PIN 密文，每次開機 `signInWithPassword()` 簽**全新獨立** session。已刪 `syncDeviceBindingRefreshToken()` / `/api/pos/device/session` PATCH / `/bind` POST。
+- 授權喺 `/api/ledger/login` 成功嗰刻直接寫（唯一同時有 storeId + 已驗證 PIN 嘅位）。Secret 重用規則：客戶端出示得到就重用，出示唔到就發新（否則清 cache 後永久壞機）。
+- 登出寫 `macau-pos/device-signed-out`，AuthGuard 見到就唔自動還原（避免「登出即登入」）。登入頁仍然會列身份卡。
 - 綁定裝置嘅 session 一律 `role: cashier`（唔知邊個員工），真權限由 L2 `sv1` 決定。
-- 登入流程（docs/160 §11）：帳號 → 身份清單 → PIN。`pos_store_accounts`（0074）由店主登入時自動寫；未寫入前 `known:false` 走傳統登入。
-- 店員登入走 `/api/pos/login/identity`，用**裝置憑證**換 Ledger token（先驗 secret 後驗 PIN）。`/operator` 只剩「換班」用途。
+- 登入流程（docs/160 §11 + docs/161）：**已初始化嘅機唔問 8 位帳號**，一開頁直接身份卡（`/api/pos/login/identities` 支援 `{deviceId, deviceSecret}`）；未初始化才走帳號模式。`pos_store_accounts`（0074）由店主登入時自動寫。
+- 店員登入走 `/api/pos/login/identity`，用**裝置 PIN** 換 Ledger session（先驗 secret 後驗 PIN）。`/operator` 只剩「換班」用途。
+- 「裝置授權」面板已移除（J：自動化就夠），撤銷收成員工權限頁底部細字連結。
+- 🔴 bfcache：登入／登出後按瀏覽器「上一頁」會還原舊 DOM（見到上一個帳號嘅畫面）。`AuthGuard` 加 `pageshow` + `event.persisted` → reload。
 - 🔴 **`pos_staff.store_id` 必須 = 登入時嘅 `merchantId`**。唔一致 = 員工「加咗但唔見」：`/api/pos/login/identities` 回 `staffTotal:0`，登入頁永遠得店主。2026-10-23 真實踩過（記錄喺 `d564b932…`，登入店係 `8291f843…`）。
   員工權限面板標題列有「店舖 xxxxxxxx…」chip（完整 UUID 喺 title）可以直接同 SQL 對照。
 - ⚠️ `merchant_staff` 查詢（`/api/ledger/login`、`owner-guard.server.ts`）都係 `.limit(1)` **無 order**：一個 Auth 帳號若係多間店嘅員工，每次登入揀邊間店係唔確定嘅。
