@@ -74,3 +74,10 @@ iPad(HTTPS) → Supabase Realtime(WSS) → Android Hub(LAN) → LAN printer(:910
 - 兩個 Gradle build 唔好並行跑（`desugar_graph` AccessDeniedException）。
 - Kotlin 陷阱：`runCatching` lambda 最後 expression 如果本身係 `runCatching`，返回型變 `Result<Result<Unit>>`。改用 `try/catch`。
 - 寫咗 migration ≠ 跑咗 migration；本機冇 DB → 人手 Dashboard SQL Editor跑。
+
+## 員工權限／裝置授權（docs/160）
+- 三層：L1 店舖登入（Ledger）／L2 工號+PIN 簽到（`pos_staff`）／L0 裝置授權（`pos_bound_devices`，0073）。
+- `pos_bound_devices` 只存 secret 嘅 SHA-256 + **AES-256-GCM 加密嘅 Ledger refresh token**；金鑰由 `resolvePosTokenSecret()` 派生 ⇒ 換 secret 全部裝置失效。
+- 🔴 Supabase refresh token 會輪換：session route refresh 完即刻寫 DB，客戶端每次輪換要 PATCH 同步（`syncDeviceBindingRefreshToken()`）；漏咗第二日開機靜靜失敗。
+- 登出寫 `macau-pos/device-signed-out`，AuthGuard 見到就唔自動還原（避免「登出即登入」）。
+- 綁定裝置嘅 session 一律 `role: cashier`（唔知邊個員工），真權限由 L2 `sv1` 決定。
