@@ -81,3 +81,5 @@ iPad(HTTPS) → Supabase Realtime(WSS) → Android Hub(LAN) → LAN printer(:910
 - 🔴 Supabase refresh token 會輪換：session route refresh 完即刻寫 DB，客戶端每次輪換要 PATCH 同步（`syncDeviceBindingRefreshToken()`）；漏咗第二日開機靜靜失敗。
 - 登出寫 `macau-pos/device-signed-out`，AuthGuard 見到就唔自動還原（避免「登出即登入」）。
 - 綁定裝置嘅 session 一律 `role: cashier`（唔知邊個員工），真權限由 L2 `sv1` 決定。
+- 登入流程（docs/160 §11）：帳號 → 身份清單 → PIN。`pos_store_accounts`（0074）由店主登入時自動寫；未寫入前 `known:false` 走傳統登入。
+- 店員登入走 `/api/pos/login/identity`，用**裝置憑證**換 Ledger token（先驗 secret 後驗 PIN）。`/operator` 只剩「換班」用途。
