@@ -6,6 +6,7 @@ import { readClientBuildInfo } from "@/lib/build-info";
 import { reportPosClientPresence } from "@/lib/ledger/client-presence";
 import { getLedgerSupabaseClient } from "@/lib/ledger/supabase-client";
 import { decideLedgerSessionAction } from "@/lib/ledger/ledger-session-decision";
+import { syncDeviceBindingRefreshToken, markDeviceSignedOut } from "@/lib/pos/device-binding";
 import { decodeJwtPayload, readExpiryMs } from "@/lib/pos/realtime-auth-claims";
 
 /**
@@ -128,11 +129,17 @@ async function resolveLedgerSession(): Promise<string | null> {
     active.access_token !== stored.ledgerAccessToken ||
     (active.refresh_token && active.refresh_token !== stored.ledgerRefreshToken)
   ) {
+    const nextRefreshToken = active.refresh_token ?? stored.ledgerRefreshToken;
     saveAuthSession({
       ...stored,
       ledgerAccessToken: active.access_token,
-      ledgerRefreshToken: active.refresh_token ?? stored.ledgerRefreshToken,
+      ledgerRefreshToken: nextRefreshToken,
     });
+    // 🔴 裝置授權（docs/160 §10）：refresh token 一輪換，server 嗰張副本就即刻變廢票。
+    // 唔同步返去，第二日「免店主帳密開機」會靜靜失敗（授權已失效）。
+    if (nextRefreshToken && nextRefreshToken !== stored.ledgerRefreshToken) {
+      syncDeviceBindingRefreshToken(nextRefreshToken);
+    }
   }
 
   // 恢復 session 成功（＝店員重開分頁／PWA 重入）⇒ 補上「POS 端活躍」。
@@ -161,6 +168,10 @@ export function getLedgerAccessToken(): string | null {
 }
 
 export async function signOutLedgerSession(): Promise<void> {
+  // 裝置授權（docs/160 §10）：店主主動「登出」= 唔再自動開機。
+  // 冇呢個標記，頁面一 reload 就會用裝置憑證靜靜登入返，睇落似 bug。
+  // 要真正取消呢部機嘅授權，去「權限控制 › 裝置授權 › 撤銷」。
+  markDeviceSignedOut();
   const client = getLedgerSupabaseClient();
   if (client) {
     try {

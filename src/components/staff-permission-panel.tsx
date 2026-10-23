@@ -15,6 +15,14 @@ import {
   type PosStaffPermissions,
   type PosStaffRole,
 } from "@/lib/pos/staff-core";
+import {
+  bindThisDevice as bindDeviceApi,
+  clearDeviceBinding,
+  defaultDeviceLabel,
+  loadDeviceBinding,
+  loadOrCreateDeviceId,
+} from "@/lib/pos/device-binding";
+import type { BoundDeviceDto } from "@/lib/pos/device-binding-types";
 
 /**
  * 「權限控制」面板 —— 店主設定員工角色／可見頁面／操作權限。
@@ -45,6 +53,11 @@ type AuthProps = {
   ledgerRefreshToken?: string | null;
   /** 後台顯示店名（可選） */
   storeName?: string;
+  /**
+   * 顯示「授權呢部機」（2026-10-23，docs/160 §10）。
+   * 只有 POS 設定頁傳 true —— 後台 `/admin/staff` 授權嘅係管理員自己部電腦，冇意義。
+   */
+  enableDeviceBinding?: boolean;
 };
 
 type DraftState = {
@@ -86,7 +99,7 @@ function newDraft(): DraftState {
 }
 
 export function StaffPermissionPanel(props: AuthProps) {
-  const { storeId, adminToken, ledgerAccessToken, ledgerRefreshToken, storeName } = props;
+  const { storeId, adminToken, ledgerAccessToken, ledgerRefreshToken, storeName, enableDeviceBinding } = props;
 
   const [staff, setStaff] = useState<PosStaffDto[]>([]);
   const [loading, setLoading] = useState(true);
@@ -390,6 +403,14 @@ export function StaffPermissionPanel(props: AuthProps) {
         )}
       </section>
 
+      <DeviceBindingSection
+        adminToken={adminToken}
+        enableBind={Boolean(enableDeviceBinding)}
+        ledgerAccessToken={ledgerAccessToken}
+        ledgerRefreshToken={ledgerRefreshToken}
+        storeId={storeId}
+      />
+
       {draft ? (
         <StaffEditorSheet
           draft={draft}
@@ -667,5 +688,243 @@ function StaffEditorSheet(props: {
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * 裝置授權（2026-10-23，docs/160 §10）。
+ *
+ * 解決嘅問題：L2（工號 + PIN）依附 L1（店舖登入），而 L1 只有店主 Ledger 帳密
+ * ⇒ 新機／清 cache／登出之後，店員開機一定要店主到場。
+ *
+ * 店主喺呢部機登入一次並撳「授權呢部機」→ 之後開機自動恢復 session → 直接跳
+ * `/operator` 簽到。撤銷即刻生效（已開咗嘅 session 最長 12h）。
+ */
+function DeviceBindingSection(props: {
+  storeId: string;
+  adminToken?: string | null;
+  ledgerAccessToken?: string | null;
+  ledgerRefreshToken?: string | null;
+  enableBind: boolean;
+}) {
+  const { storeId, adminToken, ledgerAccessToken, ledgerRefreshToken, enableBind } = props;
+
+  const [devices, setDevices] = useState<BoundDeviceDto[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [tableReady, setTableReady] = useState(true);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [busy, setBusy] = useState("");
+  const [thisDeviceId, setThisDeviceId] = useState("");
+  const [label, setLabel] = useState("");
+  const [boundHere, setBoundHere] = useState(false);
+
+  const headers = useMemo(() => {
+    const h: Record<string, string> = { "Content-Type": "application/json" };
+    if (adminToken) h.Authorization = `Bearer ${adminToken}`;
+    if (ledgerAccessToken) h["x-pos-ledger-token"] = ledgerAccessToken;
+    if (ledgerRefreshToken) h["x-pos-ledger-refresh"] = ledgerRefreshToken;
+    return h;
+  }, [adminToken, ledgerAccessToken, ledgerRefreshToken]);
+
+  useEffect(() => {
+    const id = loadOrCreateDeviceId();
+    setThisDeviceId(id);
+    setLabel(defaultDeviceLabel());
+    const binding = loadDeviceBinding();
+    setBoundHere(Boolean(binding && binding.storeId === storeId));
+  }, [storeId]);
+
+  const load = useCallback(async () => {
+    if (!storeId) return;
+    setLoading(true);
+    setError("");
+    try {
+      const response = await fetch(`/api/pos/device/bind?storeId=${encodeURIComponent(storeId)}`, {
+        headers,
+        cache: "no-store",
+      });
+      const payload = (await response.json()) as {
+        ok?: boolean;
+        error?: string;
+        devices?: BoundDeviceDto[];
+        tableReady?: boolean;
+      };
+      if (payload.tableReady === false) {
+        setTableReady(false);
+        setDevices([]);
+        return;
+      }
+      if (!response.ok || !payload.ok) {
+        setError(payload.error ?? "讀取裝置授權失敗。");
+        return;
+      }
+      setTableReady(true);
+      setDevices(payload.devices ?? []);
+    } catch {
+      setError("網絡錯誤，請稍後再試。");
+    } finally {
+      setLoading(false);
+    }
+  }, [headers, storeId]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function handleBind() {
+    setBusy("bind");
+    setError("");
+    setNotice("");
+    const result = await bindDeviceApi({
+      storeId,
+      label,
+      adminToken,
+      ledgerAccessToken,
+      ledgerRefreshToken,
+    });
+    setBusy("");
+    if (!result.ok) {
+      setError(result.error);
+      return;
+    }
+    setBoundHere(true);
+    setNotice("已授權呢部機。之後店員用工號 + PIN 就可以開機，唔需要店主帳號密碼。");
+    void load();
+  }
+
+  async function handleRevoke(deviceId: string, isThisDevice: boolean) {
+    if (!window.confirm(isThisDevice ? "撤銷呢部機之後，店員開機就要店主重新登入授權。確定？" : "確定撤銷呢部裝置？")) {
+      return;
+    }
+    setBusy(deviceId);
+    setError("");
+    setNotice("");
+    try {
+      const response = await fetch("/api/pos/device/bind", {
+        method: "DELETE",
+        headers,
+        body: JSON.stringify({ storeId, deviceId }),
+      });
+      const payload = (await response.json()) as { ok?: boolean; error?: string; tableReady?: boolean };
+      if (!response.ok || !payload.ok) {
+        setError(payload.error ?? "撤銷失敗。");
+        return;
+      }
+      if (isThisDevice) {
+        clearDeviceBinding();
+        setBoundHere(false);
+      }
+      setNotice("已撤銷。");
+      void load();
+    } catch {
+      setError("網絡錯誤，請稍後再試。");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  return (
+    <section className="rounded-2xl border border-slate-200 bg-white p-4">
+      <div className="text-base font-semibold text-slate-900">裝置授權</div>
+      <div className="mt-1 text-sm leading-relaxed text-slate-500">
+        店主喺呢部機登入一次並授權之後，店員只需要「工號 + PIN」就可以開機，
+        唔需要知道店主帳號密碼。撤銷即刻生效（已開咗嘅機最長 12 小時後失效）。
+      </div>
+
+      {notice ? (
+        <div className="mt-3 rounded-xl bg-emerald-50 px-3 py-2 text-sm text-emerald-800">{notice}</div>
+      ) : null}
+      {error ? (
+        <div className="mt-3 rounded-xl bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>
+      ) : null}
+
+      {!tableReady ? (
+        <div className="mt-3 rounded-xl bg-amber-50 px-3 py-3 text-sm leading-relaxed text-amber-900">
+          <div className="font-semibold">裝置授權表未建立</div>
+          <div className="mt-1">
+            請喺 POS Supabase 專案嘅 SQL Editor 執行
+            <code className="mx-1 rounded bg-white px-1 py-0.5 text-xs">
+              supabase/migrations/0073_pos_bound_devices.sql
+            </code>
+            ，執行完重新整理呢一頁就可用。
+          </div>
+        </div>
+      ) : null}
+
+      {enableBind ? (
+        <div className="mt-3 rounded-xl border border-slate-200 p-3">
+          <div className="text-sm font-semibold text-slate-800">呢部機</div>
+          {boundHere ? (
+            <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+              <div className="text-sm text-emerald-700">已授權 —— 店員可以直接簽到開機。</div>
+              <button
+                className="min-h-[44px] rounded-full bg-red-50 px-4 text-red-700 disabled:opacity-60"
+                disabled={busy === thisDeviceId}
+                onClick={() => void handleRevoke(thisDeviceId, true)}
+                type="button"
+              >
+                <span className="text-sm font-semibold">撤銷呢部機</span>
+              </button>
+            </div>
+          ) : (
+            <div className="mt-2 grid gap-2 sm:grid-cols-[1fr_auto]">
+              <input
+                className="min-h-[44px] rounded-xl border border-slate-200 px-3 text-base text-slate-800 outline-none focus:border-orange-400"
+                maxLength={60}
+                onChange={(event) => setLabel(event.target.value)}
+                placeholder="裝置名稱（例如：收銀台 iPad）"
+                value={label}
+              />
+              <button
+                className="min-h-[44px] rounded-full bg-orange-500 px-5 text-white disabled:opacity-60"
+                disabled={busy === "bind"}
+                onClick={() => void handleBind()}
+                type="button"
+              >
+                <span className="text-sm font-semibold">{busy === "bind" ? "授權中…" : "授權呢部機"}</span>
+              </button>
+            </div>
+          )}
+        </div>
+      ) : null}
+
+      <div className="mt-3 overflow-hidden rounded-xl border border-slate-200">
+        {loading ? (
+          <div className="px-3 py-6 text-center text-sm text-slate-500">載入中…</div>
+        ) : devices.filter((item) => !item.revokedAt).length === 0 ? (
+          <div className="px-3 py-6 text-center text-sm text-slate-500">仲未有已授權裝置。</div>
+        ) : (
+          devices
+            .filter((item) => !item.revokedAt)
+            .map((item) => (
+              <div
+                className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-3 py-3 last:border-b-0"
+                key={`${item.storeId}:${item.deviceId}`}
+              >
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-semibold text-slate-800">
+                    {item.label || "未命名裝置"}
+                    {item.deviceId === thisDeviceId ? (
+                      <span className="ml-2 rounded-full bg-orange-50 px-2 py-0.5 text-xs text-orange-700">呢部機</span>
+                    ) : null}
+                  </div>
+                  <div className="mt-0.5 text-xs text-slate-500">
+                    授權 {formatTs(item.boundAt)} · 最後使用 {formatTs(item.lastSeenAt)}
+                  </div>
+                </div>
+                <button
+                  className="min-h-[44px] rounded-full bg-slate-100 px-4 text-slate-700 disabled:opacity-60"
+                  disabled={busy === item.deviceId}
+                  onClick={() => void handleRevoke(item.deviceId, item.deviceId === thisDeviceId)}
+                  type="button"
+                >
+                  <span className="text-sm font-semibold">撤銷</span>
+                </button>
+              </div>
+            ))
+        )}
+      </div>
+    </section>
   );
 }

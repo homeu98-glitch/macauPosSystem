@@ -132,12 +132,15 @@ admin 頁按 `resolveAdminScope()`（店主只見自己店、平台見全部）�
 ## 7. 上線步驟（**唔可以調亂**）
 
 1. **POS Supabase** → SQL Editor 貼 `supabase/migrations/0072_pos_staff_permissions.sql`。
-2. 確認 server env 有其中一條（簽 token 用）：
+2. **POS Supabase** → SQL Editor 貼 `supabase/migrations/0073_pos_bound_devices.sql`（§10 裝置授權）。
+3. 確認 server env 有其中一條（簽 token 用）：
    `POS_DEVICE_TOKEN_SECRET` ／ `ADMIN_SESSION_SECRET` ／ `SUPABASE_SERVICE_ROLE_KEY`。
    **改完 env 一定要重新部署**（env 只對新部署生效 —— memory 高頻坑）。
-3. Push 到 `main` → Vercel 自動部署。
-4. 店主登入 POS → 設定 › 權限控制 → 新增一位店長、一位收銀（各設 4 位 PIN）。
-5. 換部機（或登出 L1）測試 `/operator` 用工號 + PIN 簽到。
+   ⚠️ 同一條 secret 亦用嚟加密 `pos_bound_devices.refresh_token_enc`；**換 secret = 所有已授權裝置即刻失效**（要重新授權）。
+4. Push 到 `main` → Vercel 自動部署。
+5. 店主登入 POS → 設定 › 權限控制 → 新增一位店長、一位收銀（各設 4 位 PIN）。
+6. 同一頁 › 裝置授權 → **授權呢部機**（店主只需做一次）。
+7. 換部機（或登出 L1）測試 `/operator` 用工號 + PIN 簽到 —— 應該**唔需要**店主帳密。
 
 **驗收清單：**
 
@@ -149,6 +152,9 @@ admin 頁按 `resolveAdminScope()`（店主只見自己店、平台見全部）�
 - [ ] 非店主（Ledger `staff`）用 `x-pos-ledger-token` 打 `/api/pos/staff` → 403。
 - [ ] 店主 A 店帳號打 B 店 storeId → 403。
 - [ ] DB 查 `pos_staff`：**冇任何明文 PIN**。
+- [ ] 裝置授權：店主授權後清 localStorage（或換瀏覽器）→ 開機應自動還原 → 跳 `/operator`，**唔使**店主帳密。
+- [ ] 撤銷裝置後，該機再開機 → 回 `/login`，並提示要店主重新授權。
+- [ ] 店主按「登出」→ 唔會自動登入（回登入頁）；登入頁有「店員簽到」入口可復原。
 
 ---
 
@@ -191,3 +197,105 @@ admin 頁按 `resolveAdminScope()`（店主只見自己店、平台見全部）�
 - `src/lib/pos/pos-device-token.ts`（export `resolvePosTokenSecret`）
 - `src/lib/pos/order-only-terminal.ts`（`/operator` 加入白名單）
 - `src/lib/i18n-dict-en.ts` / `i18n-dict-zh.ts`（簽到／操作員／員工工號）
+
+---
+
+## 10. 裝置授權 —— 補 L1 缺口（2026-10-23 同日追加）
+
+### 10.1 問題（J 提出）
+
+> 「我而家首先要用店主帳號登入完，才能再用員工號登入，咁咪即係要知店主帳號密碼先開得機？」
+
+**完全正確，呢個係原設計嘅缺口。** L2（工號 + PIN）依附 L1（店舖登入），
+而 L1 唯一通道係 **店主嘅 Ledger 8 位帳號 + PIN**：
+
+```
+L1 店舖登入（Ledger，只有店主有）
+   └─ L2 店員簽到（工號 + PIN）
+```
+
+⇒ 新機、換瀏覽器、清 cache、店主按過「登出」之後，店員開機**一定要店主到場**。
+同「員工唔一定有 Ledger 戶口」嘅前提自相矛盾，亦令店主 PIN 變成「開機鑰匙」。
+
+> 補充邊界：同一部機、同一個瀏覽器、冇按「登出」嘅話，L1 session 本身冇 TTL，
+> `pv1` 12 小時過期亦會自動續期 ⇒ 日常運作唔會日日要店主。問題只喺「要重新建立
+> L1」嘅場景。
+
+### 10.2 解法：裝置授權（店主授權一次）
+
+```
+L0 裝置授權（pos_bound_devices，店主一次性）
+   └─ 開機：裝置 secret → 換返完整 L1 session → 直接跳 /operator
+        └─ L2 店員簽到（工號 + PIN）
+```
+
+| 動作 | 觸發 | 結果 |
+|---|---|---|
+| **授權** | 店主喺設定 › 權限控制 › 裝置授權 ›「授權呢部機」 | server 記一筆，回一個 32-byte secret（本機保存） |
+| **開機** | 冇 L1 session 但有本機授權 | `POST /api/pos/device/session` → 完整 session → `/operator` |
+| **續期** | 客戶端每次輪換 refresh token | `PATCH /api/pos/device/session` 同步返 server 副本 |
+| **撤銷** | 權限控制 › 裝置授權 ›「撤銷」 | 即刻唔可以再換 session（已開嘅機最長 12h） |
+| **登出** | 側欄「登出」 | 寫 `device-signed-out` 標記，**唔會**自動登入；登入頁有「店員簽到」入口 |
+
+### 10.3 資料模型（migration `0073_pos_bound_devices.sql`）
+
+`pos_bound_devices`（POS Supabase，service_role only）：
+
+| 欄 | 說明 |
+|---|---|
+| `id` | `${store_id}:${device_id}`（同 `pos_sessions` 同一手法） |
+| `device_id` | 客戶端 `crypto.randomUUID()`，存 `macau-pos/device-id` |
+| `secret_hash` | 客戶端 secret 嘅 SHA-256；**DB 冇明文 secret** |
+| `refresh_token_enc` | Ledger refresh token，**AES-256-GCM**（`v1.<iv>.<tag>.<ct>`） |
+| `bound_by` / `bound_at` / `last_seen_at` / `revoked_at` | 審計 + 軟刪除 |
+
+🔴 **金鑰**：由 `resolvePosTokenSecret()` 派生（`POS_DEVICE_TOKEN_SECRET` →
+`ADMIN_SESSION_SECRET` → service role key）。冇 secret = 授權 API fail closed（503）。
+**換 secret = 所有已授權裝置即刻失效**（解密失敗 ⇒ 要重新授權）。
+
+### 10.4 為何要存 refresh token（而唔係只簽 pv1）
+
+`pv1` 只證明「呢部機屬呢間店」。但會員、加值、報表、權限控制全部靠
+`ledgerAccessToken`（`src/lib/ledger/*` 十幾處 `ensureLedgerSession()`）。
+如果開機只簽 `pv1`，店員一開機就冇會員、冇加值、冇報表 —— 等於廢咗半個 POS。
+所以 server 要用 refresh token 換一對**真** token。
+
+### 10.5 🔴 Refresh token 輪換（最易靜靜壞嘅位）
+
+Supabase **每次 refresh 都輪換 refresh token**（舊票即刻失效）。所以：
+
+1. `/api/pos/device/session` refresh 完**即刻**寫新票落 DB；
+2. 客戶端自己再 refresh 時（`resolveLedgerSession()`），新票會經
+   `syncDeviceBindingRefreshToken()` → `PATCH /api/pos/device/session` 同步返 server。
+
+冇第 2 步嘅話：DB 嗰張票喺客戶端第一次 refresh 之後變廢票 ⇒
+**第二日開機「授權已失效」，而且查唔到原因**。呢個係本功能第一號陷阱。
+
+### 10.6 安全取捨（要同 J 講清楚）
+
+- **裝置持有 = 店主 Ledger session 持有**：本機 `ledgerAccessToken` 係店主嘅。
+  技術上，拿到部機 + 開發者工具嘅人可以抽走個 token。呢個風險**今日已經存在**
+  （任何登入咗嘅 POS 都係咁），本功能只係延長咗有效期（直到撤銷）。
+  ⇒ 員工離職／賣機**一定要**去「裝置授權」撤銷。
+- POS 端 `role` 一律降為 `cashier`：店主如果要用自己權限，正常登入一次。
+- 未做（可加）：授權 TTL（例如 90 日自動失效）、裝置指紋綁定、逐操作 server 驗 `sv1`。
+
+### 10.7 改動檔案（§10）
+
+**新增**
+
+- `supabase/migrations/0073_pos_bound_devices.sql`
+- `src/lib/pos/device-binding.ts`（客戶端：device id／本機授權／開機／token 同步）
+- `src/lib/pos/device-binding-server.ts`（server：加密、驗證、CRUD）
+- `src/lib/pos/device-binding-types.ts`（中立 DTO 型別，兩邊共用）
+- `src/app/api/pos/device/bind/route.ts`（POST 授權 / GET 列表 / DELETE 撤銷，店主限定）
+- `src/app/api/pos/device/session/route.ts`（POST 開機 / PATCH token 同步）
+
+**修改**
+
+- `src/components/auth-guard.tsx`（冇 session 時先試裝置還原，成功跳 `/operator`）
+- `src/components/operator-signin-screen.tsx`（`/operator` 唔經 AuthGuard，自己試還原）
+- `src/components/login-screen.tsx`（已授權提示 +「店員簽到」入口；登入成功清登出標記）
+- `src/components/staff-permission-panel.tsx`（裝置授權區塊）
+- `src/components/device-settings.tsx`（傳 `enableDeviceBinding`）
+- `src/lib/ledger/session.ts`（輪換後同步 server；登出寫 `device-signed-out`）

@@ -1359,6 +1359,7 @@ export function DeviceSettings() {
   {/* 權限控制（2026-10-23）：只店主見到。員工帳號存 POS 本地 ⇒ 員工唔需要 Ledger 戶口。 */}
   {activeTab === "staff" && ownerCtx?.isOwner && ownerCtx.storeId ? (
     <StaffPermissionPanel
+      enableDeviceBinding
       ledgerAccessToken={ownerCtx.ledgerAccessToken}
       ledgerRefreshToken={ownerCtx.ledgerRefreshToken}
       storeId={ownerCtx.storeId}

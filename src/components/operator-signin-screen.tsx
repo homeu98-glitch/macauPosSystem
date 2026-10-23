@@ -5,6 +5,11 @@ import { useCallback, useEffect, useState } from "react";
 
 import { findWorkbench, type WorkbenchId } from "@/lib/pos/module-catalog";
 import {
+  isDeviceSignedOut,
+  loadDeviceBinding,
+  restoreDeviceSession,
+} from "@/lib/pos/device-binding";
+import {
   clearOperatorSession,
   loadOperatorSession,
   saveOperatorSession,
@@ -47,8 +52,25 @@ export function OperatorSignInScreen() {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
+    let cancelled = false;
     const session = loadAuthSession();
     if (!session?.merchantId) {
+      // 免店主帳密開機（2026-10-23，docs/160 §10）：呢部機已授權就靜靜換返 session。
+      // `/operator` 唔經 AuthGuard（見 app/operator/page.tsx），所以要在呢度自己試。
+      if (loadDeviceBinding() && !isDeviceSignedOut()) {
+        setState("loading");
+        void restoreDeviceSession().then((result) => {
+          if (cancelled) return;
+          if (result.ok) {
+            window.location.reload();
+            return;
+          }
+          setState("no-session");
+        });
+        return () => {
+          cancelled = true;
+        };
+      }
       setState("no-session");
       return;
     }

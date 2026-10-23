@@ -1,10 +1,15 @@
 "use client";
 
-import { KeyboardEvent, useState } from "react";
+import { KeyboardEvent, useEffect, useState } from "react";
 
 import { AppDownloadButton } from "@/components/app-download-button";
 import { PwaInstallButton, isRunningInNativeShell } from "@/components/pwa-install-button";
 import { getLedgerSupabaseClient } from "@/lib/ledger/supabase-client";
+import {
+  clearDeviceSignedOut,
+  loadDeviceBinding,
+  restoreDeviceSession,
+} from "@/lib/pos/device-binding";
 import { applyWorkbenchSelection } from "@/lib/pos/apply-workbench";
 import {
   WORKBENCH_IDS,
@@ -92,6 +97,34 @@ export function LoginScreen() {
   const [isNativeShell] = useState<boolean>(() => isRunningInNativeShell());
 
   /**
+   * 裝置授權（2026-10-23，docs/160 §10）。
+   *
+   * 店主授權過呢部機之後，店員唔需要知店主帳密 —— 喺呢度撳一下就用裝置憑證
+   * 換返 session 再跳去 `/operator`。呢個亦係「店主按咗登出」之後嘅復原入口
+   * （登出會寫 `device-signed-out` 標記，唔會自動開機）。
+   */
+  const [deviceBinding, setDeviceBinding] = useState<{ label: string } | null>(null);
+  const [restoringDevice, setRestoringDevice] = useState(false);
+
+  useEffect(() => {
+    const binding = loadDeviceBinding();
+    if (binding) setDeviceBinding({ label: binding.label || "已授權裝置" });
+  }, []);
+
+  async function continueAsDevice() {
+    setError("");
+    setRestoringDevice(true);
+    clearDeviceSignedOut();
+    const result = await restoreDeviceSession();
+    if (result.ok) {
+      window.location.replace("/operator");
+      return;
+    }
+    setRestoringDevice(false);
+    setError(result.error);
+  }
+
+  /**
    * 落地：套用工作台副作用，然後整頁跳去對應首頁。
    *
    * ⚠️ 一律用 `window.location.replace()` 而唔係 SPA 跳轉：
@@ -164,6 +197,8 @@ export function LoginScreen() {
       };
 
       saveAuthSession(session);
+      // 店主／店員成功登入 ⇒ 清走「已登出」標記，之後 reload 可以再自動開機
+      clearDeviceSignedOut();
 
       // 統一行為：saveAuthSession 已經自動 dispatch `pos-auth-changed`。
       // 任何 React component 訂閱呢個事件都會自動 reset + 重 backfill。
@@ -287,6 +322,23 @@ export function LoginScreen() {
           >
             {loading ? "正在登入…" : "登入"}
           </button>
+
+          {deviceBinding ? (
+            <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
+              <div className="text-xs font-semibold text-white/80">呢部機已授權</div>
+              <div className="mt-1 text-xs leading-relaxed text-white/50">
+                {deviceBinding.label} · 店員可以直接用工號 + PIN 簽到，唔需要店主帳號密碼。
+              </div>
+              <button
+                className="mt-3 w-full rounded-xl border border-white/15 bg-white/10 px-4 py-3 text-sm font-semibold text-white hover:bg-white/15 disabled:opacity-60"
+                disabled={restoringDevice}
+                onClick={() => void continueAsDevice()}
+                type="button"
+              >
+                {restoringDevice ? "正在開機…" : "店員簽到"}
+              </button>
+            </div>
+          ) : null}
 
           {/*
             下載入口（2026-09-23）——裝置偵測決定文案：
