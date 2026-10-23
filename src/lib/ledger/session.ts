@@ -7,6 +7,7 @@ import { reportPosClientPresence } from "@/lib/ledger/client-presence";
 import { getLedgerSupabaseClient } from "@/lib/ledger/supabase-client";
 import { decideLedgerSessionAction } from "@/lib/ledger/ledger-session-decision";
 import { markDeviceSignedOut } from "@/lib/pos/device-binding";
+import { clearTerminalUnlocked } from "@/lib/pos/terminal-lock";
 import { decodeJwtPayload, readExpiryMs } from "@/lib/pos/realtime-auth-claims";
 
 /**
@@ -170,6 +171,9 @@ export async function signOutLedgerSession(): Promise<void> {
   // 冇呢個標記，頁面一 reload 就會用裝置憑證靜靜登入返，睇落似 bug。
   // 要真正取消呢部機嘅授權，去「權限控制 › 裝置授權 › 撤銷」。
   markDeviceSignedOut();
+  // 分頁解鎖標記一齊清（docs/162）：登出之後就算唔關 tab，
+  // 都唔應該靠一個殘留標記「認得」上一個人。
+  clearTerminalUnlocked();
   const client = getLedgerSupabaseClient();
   if (client) {
     try {

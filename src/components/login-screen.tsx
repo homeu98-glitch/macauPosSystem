@@ -22,6 +22,7 @@ import {
   type WorkbenchId,
 } from "@/lib/pos/module-catalog";
 import { resolveRememberedWorkbench } from "@/lib/pos/workbench-preference";
+import { markTerminalUnlocked } from "@/lib/pos/terminal-lock";
 import { readClientBuildInfo } from "@/lib/build-info";
 import { getPosSessionKey, rotatePosSessionKey } from "@/lib/pos/session-key";
 import { POS_BUILD_HEADER, POS_SESSION_HEADER } from "@/lib/pos/session-record";
@@ -251,6 +252,7 @@ export function LoginScreen() {
         }
         // 網絡問題：仍然當裝置模式，但顯示錯誤，唔好逼人打帳號
         setDeviceMode(true);
+        setStep("identity");
         setError(result.error);
         setBooting(false);
         return;
@@ -553,6 +555,10 @@ export function LoginScreen() {
 
   /** 登入成功後共通落地：bootstrap 對齊 → Supabase session → 工作台。 */
   async function finishLogin(session: AuthSession) {
+    // 標記「呢個分頁已經認過人」：分頁內重整唔會再問 PIN，
+    // 但關掉瀏覽器再開就會清走（docs/162）。
+    markTerminalUnlocked();
+
     const cachedBootstrap = loadBootstrapCache();
     if (cachedBootstrap && session.name) {
       saveBootstrapCache(applyLedgerMerchantToBootstrap(cachedBootstrap, session));

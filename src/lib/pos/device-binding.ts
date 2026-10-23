@@ -1,6 +1,7 @@
 "use client";
 
 import { saveAuthSession, type AuthSession } from "@/lib/storage";
+import { markTerminalUnlocked } from "@/lib/pos/terminal-lock";
 
 /**
  * 裝置授權（免店主帳密開機）—— 客戶端半邊（2026-10-23，docs/160 §10、docs/161）。
@@ -224,6 +225,9 @@ export async function restoreDeviceSession(): Promise<RestoreResult> {
 
     saveAuthSession(payload.session);
     clearDeviceSignedOut();
+    // 裝置還原成功 = 呢個分頁已經認過（終端層面）。`/operator` 靠呢個標記
+    // 唔會被 AuthGuard 踢返 `/login`（docs/162）。
+    markTerminalUnlocked();
     return { ok: true };
   } catch {
     return { ok: false, error: "網絡錯誤，請稍後再試。" };

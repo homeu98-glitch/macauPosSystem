@@ -1,14 +1,10 @@
 "use client";
 
 import { usePathname, useRouter } from "next/navigation";
-import { PropsWithChildren, useEffect, useRef, useState } from "react";
+import { PropsWithChildren, useEffect } from "react";
 
 import { restoreLedgerSession } from "@/lib/ledger/session";
-import {
-  isDeviceSignedOut,
-  loadDeviceBinding,
-  restoreDeviceSession,
-} from "@/lib/pos/device-binding";
+import { isTerminalUnlocked } from "@/lib/pos/terminal-lock";
 import { clearAuthSession, loadAuthSession, prepareStoreStorage } from "@/lib/storage";
 import { reconcileQueueScope } from "@/lib/pos/queue-outbox";
 import {
@@ -28,16 +24,22 @@ export function AuthGuard({ children, allowedRoles }: AuthGuardProps) {
   const session = loadAuthSession();
 
   /**
-   * 裝置授權自動開機（2026-10-23，docs/160 §10）。
+   * 冷啟要重新認人（2026-10-23，docs/162）。
    *
-   * 店主授權過呢部機之後，冇 L1 session 都唔應該踢去 `/login` ——
-   * 先試用本機裝置憑證換返 session，成功就直接去 `/operator` 簽到。
+   * `authSession` 存喺 localStorage（離線優先嘅代價），關 tab 唔會清。
+   * 舊行為：再開瀏覽器就直接沿用上一個用機嘅人 —— 店主離開之後，
+   * 店員一開機就有**店主權限**。實測撞到。
    *
-   * 🔴 `restoreStarted` 係必須嘅：下面個 effect 嘅 deps 包住 `session`（每次 render
-   *    都係新 object），冇呢個閂就會連環 POST `/api/pos/device/session`。
+   * 而家：`sessionStorage` 有個「呢個分頁已解鎖」標記。
+   *   · 冷啟（標記已隨 tab 消失）⇒ 清 session，去 `/login` 揀身份 + PIN
+   *   · 分頁內重整／跳頁（標記仍在）⇒ 照用，唔會不停問 PIN
+   *
+   * ⚠️ 後台 admin session（`adminSessionToken`）唔受呢條規則管：
+   *    佢有自己嘅登入頁（`/admin`），唔應該被踢去 POS 登入頁。
    */
-  const restoreStarted = useRef(false);
-  const [restoring, setRestoring] = useState(false);
+  const coldStartNeedsIdentity =
+    Boolean(session) && !session?.adminSessionToken && !isTerminalUnlocked();
+
   // 2026-09-06：admin 管理入口（/admin 登入）產生嘅 session 只有 adminSessionToken，
   // 冇 merchantId / ledgerAccessToken。舊邏輯 isLedgerSession 會即刻 clearAuthSession()
   // 踢返去 /login，令 admin 登入永遠入唔到後台 —— 現在 admin token session 同樣放行。
@@ -98,21 +100,15 @@ export function AuthGuard({ children, allowedRoles }: AuthGuardProps) {
 
   useEffect(() => {
     if (!session && pathname !== "/login") {
-      // 先試「裝置授權自動開機」：店主授權過呢部機就唔需要再打店主帳密。
-      if (!restoreStarted.current && loadDeviceBinding() && !isDeviceSignedOut()) {
-        restoreStarted.current = true;
-        setRestoring(true);
-        void restoreDeviceSession().then((result) => {
-          if (result.ok) {
-            // 直接去簽到頁：呢部機而家係「店舖終端」，要知邊個員工操作
-            window.location.replace("/operator");
-            return;
-          }
-          window.location.replace("/login");
-        });
-        return;
-      }
-      if (restoreStarted.current) return; // 還原中：等上面 promise 決定去向
+      // 2026-10-23（docs/162）：唔再自動用裝置憑證還原。
+      // 冷啟一律去 `/login` 揀身份 + PIN —— 店員唔使知店主帳密（登入頁會列身份卡），
+      // 但亦唔會有人靜靜接手上一手嘅權限。
+      window.location.replace("/login");
+      return;
+    }
+    if (coldStartNeedsIdentity && pathname !== "/login") {
+      // 冷啟：清走上一手嘅 session，重新認人
+      clearAuthSession();
       window.location.replace("/login");
       return;
     }
@@ -141,7 +137,16 @@ export function AuthGuard({ children, allowedRoles }: AuthGuardProps) {
     return () => {
       window.removeEventListener("pos-auth-changed", onAuthChanged);
     };
-  }, [isAdminSession, isLedgerSession, orderOnlyBlocked, pathname, roleBlocked, router, session]);
+  }, [
+    coldStartNeedsIdentity,
+    isAdminSession,
+    isLedgerSession,
+    orderOnlyBlocked,
+    pathname,
+    roleBlocked,
+    router,
+    session,
+  ]);
 
   if (orderOnlyBlocked) {
     return (
@@ -150,19 +155,6 @@ export function AuthGuard({ children, allowedRoles }: AuthGuardProps) {
           <div className="text-base font-semibold text-slate-900">此裝置為落單專用</div>
           <div className="mt-2 text-sm text-slate-500">
             正在返回店員點餐介面…如需改用其他工作台，請到「選擇工作台」。
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  if (restoring) {
-    return (
-      <div className="grid min-h-screen place-items-center bg-slate-100 px-6 text-center">
-        <div>
-          <div className="text-base font-semibold text-slate-900">正在還原裝置授權…</div>
-          <div className="mt-2 text-sm text-slate-500">
-            呢部機已由店主授權，唔需要輸入店主帳號密碼。
           </div>
         </div>
       </div>

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { loadAuthSession, saveAuthSession, type AuthSession } from "@/lib/storage";
+import { markTerminalUnlocked } from "@/lib/pos/terminal-lock";
 import { UserPermissions, UserRole } from "@/lib/types";
 
 /**
@@ -72,6 +73,9 @@ export default function AdminLoginPage() {
             adminSessionToken: payload.token,
           };
       saveAuthSession(next);
+      // 後台 session 唔受 POS 冷啟規則管，但仍然要標記「呢個分頁認過人」，
+      // 否則下次重整就會被 AuthGuard 當冷啟處理（docs/162）。
+      markTerminalUnlocked();
       router.replace("/admin/dashboard");
     } catch {
       setError("網絡錯誤，請重試。");
