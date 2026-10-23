@@ -66,16 +66,55 @@ type PosToolsMenuProps = {
   /**
    * 彈出層闊度（px）。預設 330。
    *
-   * 快餐模式（2026-10-17）：頁首空間窄，而且外層容器有 `overflow-hidden`，
-   * 330px 會被裁走 → 傳 240。
+   * 快餐模式（2026-10-17）：掣擺喺左欄（最窄 208px），彈出層唔想闊過成條左欄
+   * → 傳 240。
    */
   popupWidth?: number;
+  /**
+   * 彈出層水平展開方向。預設 `"right"`。
+   *
+   * - `"right"`（右邊界對齊掣）→ **向左**展開。適合靠右嘅掣（桌台總覽標題列）。
+   * - `"left"`（左邊界對齊掣）→ **向右**展開。適合靠左嘅掣（快餐模式左欄）。
+   *
+   * ── 點解要有呢個 prop（2026-10-23 J 回報）────────────────────────────
+   * 快餐模式嘅維修工具 icon 擺喺**左欄**（最窄 208px）頁首最右，
+   * 用 `right` 對齊會向左展開 → 撞出左欄嘅 `overflow-hidden`：
+   * 一邊被裁走（見到「動更新」「步健康」呢種斷字），一邊蓋住左邊側欄。
+   *
+   * ⚠️ 向右展開**必須**用 `position: fixed`：左欄 `overflow-hidden` 會裁走
+   * 任何 `absolute` 溢出。座標由 `getBoundingClientRect()` 即時量度，
+   * 並夾喺 viewport 內（窄機唔會爆出右邊）。
+   */
+  align?: "left" | "right";
 };
 
-export function PosToolsMenu({ busy, onManualUpdate, onSyncHealth, popupWidth = 330 }: PosToolsMenuProps) {
+/**
+ * 量度彈出層喺 `fixed` 座標系嘅位置（`align="left"` 用）。
+ *
+ * 放喺模組層：元件內定義會令 `useEffect` 依賴每次都變。
+ * 夾 viewport：`left` 唔可以細過 12px、亦唔可以令右邊爆出畫面。
+ */
+function measurePopupAnchor(button: HTMLButtonElement | null, width: number) {
+  if (!button) return null;
+  const rect = button.getBoundingClientRect();
+  const margin = 12;
+  const maxLeft = window.innerWidth - width - margin;
+  const left = Math.min(Math.max(rect.left, margin), Math.max(margin, maxLeft));
+  return { top: rect.bottom + 6, left };
+}
+
+export function PosToolsMenu({
+  busy,
+  onManualUpdate,
+  onSyncHealth,
+  popupWidth = 330,
+  align = "right",
+}: PosToolsMenuProps) {
   const t = useT();
   const [open, setOpen] = useState(false);
+  const [anchor, setAnchor] = useState<{ top: number; left: number } | null>(null);
   const wrapRef = useRef<HTMLDivElement | null>(null);
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
   const syncHealth = useSyncHealth();
 
   const blocked = syncHealth.level === "blocked";
@@ -111,6 +150,30 @@ export function PosToolsMenu({ busy, onManualUpdate, onSyncHealth, popupWidth = 
     action();
   }
 
+  /**
+   * 開／閂選單。`align="left"` 要喺**開嘅一刻**量座標（`fixed` 唔會自動跟掣走位）。
+   * 唔放喺 effect 入面計：避免「effect 直接 setState」嘅 lint 警告。
+   */
+  function toggle() {
+    const next = !open;
+    if (next && align === "left") setAnchor(measurePopupAnchor(buttonRef.current, popupWidth));
+    setOpen(next);
+  }
+
+  /** 視窗尺寸／捲動變咗就重新量（只喺 `align="left"` 需要）。 */
+  useEffect(() => {
+    if (!open || align !== "left") return;
+    function update() {
+      setAnchor(measurePopupAnchor(buttonRef.current, popupWidth));
+    }
+    window.addEventListener("resize", update);
+    window.addEventListener("scroll", update, true);
+    return () => {
+      window.removeEventListener("resize", update);
+      window.removeEventListener("scroll", update, true);
+    };
+  }, [open, align, popupWidth]);
+
   return (
     <div className="relative shrink-0" ref={wrapRef}>
       <button
@@ -118,7 +181,8 @@ export function PosToolsMenu({ busy, onManualUpdate, onSyncHealth, popupWidth = 
         aria-haspopup="menu"
         aria-label={t("維修工具：手動更新 / 同步健康")}
         className="relative flex h-[42px] w-[42px] items-center justify-center rounded-2xl bg-white text-slate-700 shadow-sm ring-1 ring-slate-200 hover:bg-slate-50"
-        onClick={() => setOpen((value) => !value)}
+        onClick={toggle}
+        ref={buttonRef}
         title={t("維修工具：手動更新 / 同步健康")}
         type="button"
       >
@@ -151,9 +215,24 @@ export function PosToolsMenu({ busy, onManualUpdate, onSyncHealth, popupWidth = 
 
       {open ? (
         <div
-          className="absolute right-0 top-[calc(100%+6px)] z-30 rounded-2xl border border-slate-200 bg-white p-1.5 shadow-xl"
+          className={
+            align === "left"
+              ? // 向右展開：`fixed` 才逃得出左欄嘅 `overflow-hidden`（`absolute` 會被裁走）
+                "fixed z-40 rounded-2xl border border-slate-200 bg-white p-1.5 shadow-xl"
+              : "absolute right-0 top-[calc(100%+6px)] z-30 rounded-2xl border border-slate-200 bg-white p-1.5 shadow-xl"
+          }
           role="menu"
-          style={{ width: popupWidth }}
+          style={
+            align === "left"
+              ? {
+                  width: popupWidth,
+                  top: anchor?.top ?? 0,
+                  left: anchor?.left ?? 0,
+                  // 未量到座標之前唔顯示，避免喺畫面左上角閃一下
+                  visibility: anchor ? "visible" : "hidden",
+                }
+              : { width: popupWidth }
+          }
         >
           <div className="px-3 pb-1 pt-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-400">
             {t("維修工具")}

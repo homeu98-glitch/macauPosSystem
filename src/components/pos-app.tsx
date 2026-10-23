@@ -6373,9 +6373,14 @@ export function PosApp() {
                       </span>
                     ) : null}
                     {/* 2026-10-17：快餐模式都要有「手動更新 ＋ 同步健康」（同桌台總覽同一粒）。
-                        `popupWidth={240}` —— 左欄最窄 208px（compact），330px 會被外層
-                        `overflow-hidden` 裁走；240px 連快捷操作欄都睇得完整。 */}
+                        `popupWidth={240}` —— 快餐模式嘅掣擺喺**左欄**（最窄 208px），
+                        彈出層唔想闊過成條左欄。
+                        🔴 `align="left"`（2026-10-23 J 回報）：呢粒掣喺頁首最右，
+                        預設嘅「右邊界對齊」會令彈出層**向左**展開 → 撞出左欄
+                        `overflow-hidden` 被裁走（見到「動更新」斷字），同時蓋住左邊側欄。
+                        改向右展開，彈出層落喺中間嘅菜單區上面。 */}
                     <PosToolsMenu
+                      align="left"
                       busy={manualSyncing || isBootstrapping}
                       onManualUpdate={() => void handleManualUpdate()}
                       onSyncHealth={() => setShowSyncHealth(true)}
