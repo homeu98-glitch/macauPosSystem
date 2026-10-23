@@ -302,6 +302,13 @@ export function StaffPermissionPanel(props: AuthProps) {
           <span className="rounded-full bg-slate-100 px-3 py-1">
             店主唔受呢度限制（Ledger owner 永遠全開）
           </span>
+          {/* 店舖 ID 一定要顯示：`pos_staff.store_id` 一旦同登入嗰間店唔一致，
+              員工就會「加咗但唔見」，而畫面完全睇唔出分別（2026-10-23 真實踩過）。 */}
+          {storeId ? (
+            <span className="rounded-full bg-slate-100 px-3 py-1 font-mono" title={storeId}>
+              店舖 {storeId.slice(0, 8)}…
+            </span>
+          ) : null}
         </div>
 
         {notice ? (
@@ -333,6 +340,11 @@ export function StaffPermissionPanel(props: AuthProps) {
             <div className="text-sm font-semibold text-slate-700">仲未有任何員工</div>
             <div className="mt-1 text-sm text-slate-500">
               新增之後，員工就可以喺收銀台用「工號 + PIN」簽到（唔需要 Ledger 戶口）。
+            </div>
+            <div className="mt-3 text-xs leading-relaxed text-slate-400">
+              如果你之前已經加過員工但呢度見唔到，通常係嗰筆記錄嘅
+              <code className="mx-1 rounded bg-slate-100 px-1 py-0.5 text-[11px]">store_id</code>
+              同呢間店唔一致。上面嘅「店舖」代號可以同 SQL 對照。
             </div>
           </div>
         ) : (
