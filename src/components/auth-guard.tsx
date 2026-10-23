@@ -77,6 +77,25 @@ export function AuthGuard({ children, allowedRoles }: AuthGuardProps) {
     }
   }, [session?.ledgerAccessToken, session?.ledgerRefreshToken]);
 
+  /**
+   * bfcache 防護（2026-10-23，docs/161 §5.3）。
+   *
+   * 症狀：店主登入 → 店員登入 → 撳瀏覽器「上一頁」⇒ 見到**店主**嘅畫面。
+   * 成因：瀏覽器由 bfcache 還原舊 DOM，React 完全冇重新 render，
+   *       所以 `session` 係還原嗰一刻嘅舊值（甚至係另一個帳號嘅）。
+   *       JS heap 都係舊嘅 —— 唔 reload 冇辦法補救。
+   *
+   * ⇒ 由 bfcache 還原（`event.persisted === true`）一律整頁重載，
+   *   令 AuthGuard 重新由 storage 讀當前 session。
+   */
+  useEffect(() => {
+    function onPageShow(event: PageTransitionEvent) {
+      if (event.persisted) window.location.reload();
+    }
+    window.addEventListener("pageshow", onPageShow);
+    return () => window.removeEventListener("pageshow", onPageShow);
+  }, []);
+
   useEffect(() => {
     if (!session && pathname !== "/login") {
       // 先試「裝置授權自動開機」：店主授權過呢部機就唔需要再打店主帳密。

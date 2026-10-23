@@ -1,15 +1,17 @@
 "use client";
 
-import { KeyboardEvent, useState } from "react";
+import { KeyboardEvent, useEffect, useState } from "react";
 
 import { AppDownloadButton } from "@/components/app-download-button";
 import { PwaInstallButton, isRunningInNativeShell } from "@/components/pwa-install-button";
 import { getLedgerSupabaseClient } from "@/lib/ledger/supabase-client";
 import {
-  bindThisDevice,
+  clearDeviceBinding,
   clearDeviceSignedOut,
   defaultDeviceLabel,
   loadDeviceBinding,
+  loadOrCreateDeviceId,
+  saveBindingFromLogin,
 } from "@/lib/pos/device-binding";
 import { saveOperatorSession } from "@/lib/pos/operator-session";
 import { applyWorkbenchSelection } from "@/lib/pos/apply-workbench";
@@ -136,6 +138,18 @@ export function LoginScreen() {
   const [staffTableMissing, setStaffTableMissing] = useState(false);
 
   /**
+   * 裝置模式（docs/161）：
+   *
+   *   部機已由店主初始化 ⇒ 唔使問 8 位店舖帳號（店員根本唔知），
+   *   一開頁就直接列身份卡。
+   *
+   * 未初始化（新機／撤銷過／清 cache）⇒ 落返帳號模式。
+   */
+  const [deviceMode, setDeviceMode] = useState(false);
+  /** 開頁時正在用裝置憑證查身份清單 —— 避免閃一下帳號輸入框。 */
+  const [booting, setBooting] = useState(true);
+
+  /**
    * 落地：套用工作台副作用，然後整頁跳去對應首頁。
    *
    * ⚠️ 一律用 `window.location.replace()` 而唔係 SPA 跳轉：
@@ -149,6 +163,113 @@ export function LoginScreen() {
     window.location.replace(findWorkbench(workbench)?.homePath ?? "/");
   }
 
+  type IdentitiesPayload = {
+    ok?: boolean;
+    error?: string;
+    known?: boolean;
+    storeName?: string;
+    identities?: LoginIdentity[];
+    staffTotal?: number;
+    staffActive?: number;
+    staffTableMissing?: boolean;
+  };
+
+  /**
+   * 打 `/api/pos/login/identities`。
+   *
+   * 兩種入參（docs/161）：`{deviceId, deviceSecret}`（已初始化）或 `{account}`。
+   * 回傳 `status` 畀呼叫端分辨「憑證失效（401，要清走 binding）」同「網絡問題」。
+   */
+  async function fetchIdentities(input: {
+    account?: string;
+    deviceId?: string;
+    deviceSecret?: string;
+  }): Promise<
+    | { ok: true; payload: IdentitiesPayload }
+    | { ok: false; error: string; status: number }
+  > {
+    try {
+      const response = await fetch("/api/pos/login/identities", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      });
+      const payload = (await response.json().catch(() => null)) as IdentitiesPayload | null;
+      if (!response.ok || !payload?.ok) {
+        return {
+          ok: false,
+          status: response.status,
+          error: payload?.error ?? "讀取身份失敗，請再試一次。",
+        };
+      }
+      return { ok: true, payload };
+    } catch {
+      return { ok: false, status: 0, error: "網絡錯誤，請稍後再試。" };
+    }
+  }
+
+  function applyIdentities(payload: IdentitiesPayload) {
+    const list = payload.identities ?? [];
+    setStoreName(payload.storeName ?? "");
+    setIdentities(list);
+    setKnown(payload.known === true);
+    setStaffTotal(Number(payload.staffTotal ?? 0));
+    setStaffActive(Number(payload.staffActive ?? 0));
+    setStaffTableMissing(payload.staffTableMissing === true);
+    return list;
+  }
+
+  /**
+   * 開頁：有裝置憑證就直接查身份清單。
+   *
+   * 🔴 唔可以喺 render 期間讀 localStorage（SSR 冇 window）；一定要 effect。
+   * 🔴 401 = 憑證已被撤銷／舊版 row ⇒ 清走本機記錄，落返帳號模式，
+   *    唔好留住一張永遠失敗嘅票。
+   */
+  useEffect(() => {
+    const binding = loadDeviceBinding();
+    if (!binding) {
+      setBooting(false);
+      return;
+    }
+
+    let cancelled = false;
+    void (async () => {
+      const result = await fetchIdentities({
+        deviceId: binding.deviceId,
+        deviceSecret: binding.secret,
+      });
+      if (cancelled) return;
+
+      if (!result.ok) {
+        if (result.status === 401) {
+          // 憑證已被撤銷／舊版 row ⇒ 清走本機記錄，落返帳號模式
+          clearDeviceBinding();
+          setDeviceMode(false);
+          setBooting(false);
+          return;
+        }
+        // 網絡問題：仍然當裝置模式，但顯示錯誤，唔好逼人打帳號
+        setDeviceMode(true);
+        setError(result.error);
+        setBooting(false);
+        return;
+      }
+
+      setDeviceMode(true);
+      applyIdentities(result.payload);
+      setStep("identity");
+      setBooting(false);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+    // 只喺開頁跑一次
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+
   /** 第 1 步 → 查身份。查唔到（新店／未跑 0074）就直接跳去 PIN（傳統店主登入）。 */
   async function goToIdentity() {
     setError("");
@@ -160,43 +281,22 @@ export function LoginScreen() {
 
     setChecking(true);
     try {
-      const response = await fetch("/api/pos/login/identities", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ account: normalizedAccount }),
-      });
-      const payload = (await response.json()) as {
-        ok?: boolean;
-        error?: string;
-        known?: boolean;
-        storeName?: string;
-        identities?: LoginIdentity[];
-        staffTotal?: number;
-        staffActive?: number;
-        staffTableMissing?: boolean;
-      };
-      if (!response.ok || !payload.ok) {
-        setError(payload.error ?? "讀取身份失敗，請再試一次。");
+      const result = await fetchIdentities({ account: normalizedAccount });
+      if (!result.ok) {
+        setError(result.error);
         return;
       }
 
-      const list = payload.identities ?? [];
-      setStoreName(payload.storeName ?? "");
-      setIdentities(list);
-      setKnown(payload.known === true);
-      setStaffTotal(Number(payload.staffTotal ?? 0));
-      setStaffActive(Number(payload.staffActive ?? 0));
-      setStaffTableMissing(payload.staffTableMissing === true);
+      const list = applyIdentities(result.payload);
 
       // 未有任何店主登入過（known:false）或得一個身份 → 唔需要揀，直接打 PIN
-      if (!payload.known || list.length <= 1) {
+      if (!result.payload.known || list.length <= 1) {
         setSelected(list[0] ?? { kind: "owner", id: "owner", name: "店主", role: "owner" });
         setStep("pin");
         return;
       }
+
       setStep("identity");
-    } catch {
-      setError("網絡錯誤，請稍後再試。");
     } finally {
       setChecking(false);
     }
@@ -209,16 +309,31 @@ export function LoginScreen() {
     setStep("pin");
   }
 
+  /**
+   * 「切換」＝返去揀身份。
+   *
+   * 裝置模式永遠有得返（身份卡係常態畫面）；
+   * 帳號模式就睇有冇第二個身份 —— 得店主一個就冇嘢可以切，返去改帳號。
+   */
   function backFromPin() {
     setPin("");
     setError("");
-    setStep(identities.length > 1 ? "identity" : "account");
+    setStep(deviceMode || identities.length > 1 ? "identity" : "account");
   }
 
   function backToAccount() {
     setPin("");
     setError("");
     setSelected(null);
+    setStep("account");
+  }
+
+  /** 裝置模式嘅逃生門：憑證出事時，店主仍然可以用帳號 + PIN 登入。 */
+  function switchToAccountMode() {
+    setPin("");
+    setError("");
+    setSelected(null);
+    setDeviceMode(false);
     setStep("account");
   }
 
@@ -256,10 +371,13 @@ export function LoginScreen() {
 
   async function loginAsOwner() {
     setError("");
+    const binding = loadDeviceBinding();
     const normalizedAccount = account.replace(/\D/g, "").slice(0, 8);
     const normalizedPin = pin.replace(/\D/g, "").slice(0, 4);
 
-    if (!/^\d{8}$/.test(normalizedAccount)) {
+    // 裝置模式唔會問帳號（店員／店主都唔應該要記住 8 位數字），
+    // server 由裝置憑證反查；PIN 仍然要自己打，安全前提冇變。
+    if (!binding && !/^\d{8}$/.test(normalizedAccount)) {
       setError("請輸入 8 位數字帳號。");
       return;
     }
@@ -291,7 +409,14 @@ export function LoginScreen() {
       const response = await fetch("/api/ledger/login", {
         method: "POST",
         headers: loginHeaders,
-        body: JSON.stringify({ account: normalizedAccount, pin: normalizedPin }),
+        body: JSON.stringify({
+          // 裝置模式：冇帳號，server 由 `deviceSecret` 反查（docs/161）
+          account: normalizedAccount || undefined,
+          pin: normalizedPin,
+          deviceId: loadOrCreateDeviceId(),
+          deviceLabel: defaultDeviceLabel(),
+          deviceSecret: binding?.secret,
+        }),
       });
       const payload = (await response.json()) as {
         ok: boolean;
@@ -299,6 +424,7 @@ export function LoginScreen() {
         session?: LoginPayloadSession;
         accessToken?: string;
         refreshToken?: string;
+        deviceBinding?: { deviceId: string; secret: string };
       };
 
       if (!payload.ok || !payload.session) {
@@ -321,17 +447,17 @@ export function LoginScreen() {
       // （bootstrap 對齊 / Supabase setSession / 工作台跳轉一律喺 finishLogin 做，
       //   店主同店員兩條路徑共用，避免兩份漂移。）
 
-      // 自動初始化呢部機（docs/160 §11）：店主登入一次之後，店員就可以喺
-      // 登入頁揀自己嘅身份 + PIN 開機，唔需要再經店主。
-      // 🔴 失敗唔可以阻登入（可能 0073 未跑）—— 只 log，下次登入再試。
-      if (session.merchantId) {
-        const init = await bindThisDevice({
+      // 裝置授權：server 喺登入成功嗰一刻已經寫入（docs/161）。
+      // `deviceBinding` 有值 = 呢部機第一次授權（要存新 secret）；
+      // 冇值 = 本來已經有有效授權，保留本機 secret 唔好覆蓋。
+      if (payload.deviceBinding && session.merchantId) {
+        saveBindingFromLogin({
           storeId: session.merchantId,
+          deviceId: payload.deviceBinding.deviceId,
+          secret: payload.deviceBinding.secret,
           label: defaultDeviceLabel(),
-          ledgerAccessToken: session.ledgerAccessToken,
-          ledgerRefreshToken: session.ledgerRefreshToken,
         });
-        if (!init.ok) console.warn("[login] 裝置自動初始化未完成:", init.error);
+        setDeviceMode(true);
       }
 
       await finishLogin(session);
@@ -355,7 +481,6 @@ export function LoginScreen() {
     if (!selected || selected.kind !== "staff") return;
     setError("");
 
-    const normalizedAccount = account.replace(/\D/g, "").slice(0, 8);
     const normalizedPin = pin.replace(/\D/g, "").slice(0, 4);
     if (!/^\d{4}$/.test(normalizedPin)) {
       setError("請輸入 4 位 PIN。");
@@ -364,7 +489,7 @@ export function LoginScreen() {
 
     const binding = loadDeviceBinding();
     if (!binding) {
-      // 呢部機從未由店主登入過（或 storage 被清）⇒ 冇憑證可以換 Ledger token
+      // 呢部機從未由店主登入過（或 storage 被清）⇒ 冇憑證可以換 Ledger session
       setError("呢部機未初始化，請店主先登入一次。");
       return;
     }
@@ -375,7 +500,7 @@ export function LoginScreen() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          account: normalizedAccount,
+          // 唔傳 account：店舖由裝置憑證決定（docs/161）
           staffNo: selected.staffNo,
           pin: normalizedPin,
           deviceId: binding.deviceId,
@@ -497,11 +622,18 @@ export function LoginScreen() {
             <div className="text-sm font-semibold tracking-widest text-orange-200/90">澳門會員通POS系統</div>
             <div className="mt-2 text-2xl font-semibold text-white">登入</div>
             <div className="mt-2 text-sm text-white/70">
-              輸入店舖帳號，再揀你嘅身份登入。
+              {deviceMode ? "揀你嘅身份，再打自己嘅 PIN。" : "輸入店舖帳號，再揀你嘅身份登入。"}
             </div>
           </div>
 
-          {step === "account" ? (
+          {booting ? (
+            <div className="mt-8 grid gap-2 text-center">
+              <div className="text-sm text-white/70">正在讀取可用身份…</div>
+              <div className="text-xs text-white/40">呢部機已由店主初始化，唔需要輸入店舖帳號。</div>
+            </div>
+          ) : null}
+
+          {!booting && step === "account" ? (
             <div className="mt-6 grid gap-3">
               <label className="grid gap-1">
                 <span className="text-xs font-semibold text-white/70">帳號（8 位數字）</span>
@@ -524,7 +656,7 @@ export function LoginScreen() {
             </div>
           ) : null}
 
-          {step === "identity" ? (
+          {!booting && step === "identity" ? (
             <div className="mt-6 grid gap-2">
               <div className="text-xs text-white/60">
                 {storeName ? `${storeName} · ` : ""}揀你要用嘅身份
@@ -549,17 +681,18 @@ export function LoginScreen() {
                   <span className="shrink-0 text-lg text-white/30">›</span>
                 </button>
               ))}
+              {/* 裝置模式冇「帳號」可以改，逃生門係「用店主帳號登入」 */}
               <button
                 className="mt-1 min-h-[44px] text-xs text-white/50 hover:text-white/80"
-                onClick={backToAccount}
+                onClick={deviceMode ? switchToAccountMode : backToAccount}
                 type="button"
               >
-                返回，改帳號
+                {deviceMode ? "用店主帳號登入" : "返回，改帳號"}
               </button>
             </div>
           ) : null}
 
-          {step === "pin" ? (
+          {!booting && step === "pin" ? (
             <div className="mt-6 grid gap-3">
               <div className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
                 <div className="min-w-0">
@@ -577,7 +710,7 @@ export function LoginScreen() {
                   onClick={backFromPin}
                   type="button"
                 >
-                  {identities.length > 1 ? "切換" : "改帳號"}
+                  {deviceMode || identities.length > 1 ? "切換" : "改帳號"}
                 </button>
               </div>
 
@@ -613,7 +746,7 @@ export function LoginScreen() {
             </div>
           ) : null}
 
-          {step === "account" ? (
+          {booting ? null : step === "account" ? (
             <button
               className="mt-5 w-full rounded-2xl bg-orange-500 px-4 py-3 text-sm font-semibold text-white hover:bg-orange-600 disabled:opacity-60"
               disabled={checking}

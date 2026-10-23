@@ -6,7 +6,7 @@ import { readClientBuildInfo } from "@/lib/build-info";
 import { reportPosClientPresence } from "@/lib/ledger/client-presence";
 import { getLedgerSupabaseClient } from "@/lib/ledger/supabase-client";
 import { decideLedgerSessionAction } from "@/lib/ledger/ledger-session-decision";
-import { syncDeviceBindingRefreshToken, markDeviceSignedOut } from "@/lib/pos/device-binding";
+import { markDeviceSignedOut } from "@/lib/pos/device-binding";
 import { decodeJwtPayload, readExpiryMs } from "@/lib/pos/realtime-auth-claims";
 
 /**
@@ -135,11 +135,9 @@ async function resolveLedgerSession(): Promise<string | null> {
       ledgerAccessToken: active.access_token,
       ledgerRefreshToken: nextRefreshToken,
     });
-    // 🔴 裝置授權（docs/160 §10）：refresh token 一輪換，server 嗰張副本就即刻變廢票。
-    // 唔同步返去，第二日「免店主帳密開機」會靜靜失敗（授權已失效）。
-    if (nextRefreshToken && nextRefreshToken !== stored.ledgerRefreshToken) {
-      syncDeviceBindingRefreshToken(nextRefreshToken);
-    }
+    // 2026-10-23（docs/161）：唔再需要同步裝置憑證。
+    // 裝置而家存嘅係店主 PIN 密文，每次開機由 server 即場簽一個全新 session，
+    // DB 冇 refresh token 要保鮮（舊做法喺店主登出時會被撤銷，憑證即死）。
   }
 
   // 恢復 session 成功（＝店員重開分頁／PWA 重入）⇒ 補上「POS 端活躍」。

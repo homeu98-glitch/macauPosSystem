@@ -1,18 +1,24 @@
 "use client";
 
-import { loadAuthSession, saveAuthSession, type AuthSession } from "@/lib/storage";
+import { saveAuthSession, type AuthSession } from "@/lib/storage";
 
 /**
- * 裝置授權（免店主帳密開機）—— 客戶端半邊（2026-10-23，docs/160 §10）。
+ * 裝置授權（免店主帳密開機）—— 客戶端半邊（2026-10-23，docs/160 §10、docs/161）。
  *
  * ## 解決咩問題
  *
  * L2（工號 + PIN）依附 L1（店舖登入），而 L1 唯一通道係**店主** Ledger 帳密。
  * ⇒ 新機／清 cache／登出之後，店員開機一定要店主到場。
  *
- * 店主喺呢部機登入一次並「授權呢部機」→ 之後開機只需要：
+ * 店主喺呢部機登入一次 → server 自動寫入裝置憑證 → 之後開機只需要：
  *   localStorage 有 `{storeId, deviceId, secret}` → `POST /api/pos/device/session`
- *   → server 用加密保存嘅 Ledger refresh token 換一個完整 session → 直接跳 `/operator`。
+ *   → server 用裝置內嘅店主 PIN 即場簽一個全新 Ledger session → 直接跳 `/operator`。
+ *
+ * ## 🔴 2026-10-23 改版：憑證唔再係 refresh token
+ *
+ * 舊版存店主 session 嘅 refresh token，結果店主一登出（`signOut({scope:"local"})`
+ * 撤銷該 session）憑證即死 —— 店員永遠登入唔到，而且報錯訊息完全誤導。
+ * 而家存嘅係 PIN 密文，每次開機都係新 session，同任何登出／輪換無關。
  *
  * ## 存喺邊
  *
@@ -23,8 +29,8 @@ import { loadAuthSession, saveAuthSession, type AuthSession } from "@/lib/storag
  * | `macau-pos/device-signed-out` | 店主主動登出嘅時間戳 | 同上 |
  *
  * ⚠️ `device-signed-out` 存在時**唔會**自動開機 —— 否則店主按「登出」之後
- *    頁面一 reload 又即刻登入，睇落似 bug。店主下次登入（或店員喺登入頁撳
- *    「店員簽到」）就會清走呢個標記。
+ *    頁面一 reload 又即刻登入，睇落似 bug。登入頁會照樣列出身份卡，
+ *    只係唔會「未經選擇就自動入」。
  */
 
 const DEVICE_ID_KEY = "macau-pos/device-id";
@@ -149,76 +155,31 @@ export type BindResult =
   | { ok: false; error: string; tableMissing?: boolean };
 
 /**
- * 授權呢部機。
+ * 店主登入成功後，記低 server 發返落嚟嘅裝置憑證。
  *
- * ⚠️ 需要**店主 session**（Ledger access token 或 admin token），
- *    而且一定要有 `ledgerRefreshToken` —— 開機之後靠佢續 Ledger session。
+ * ## 為何唔再係「客戶端主動 POST 授權」
+ *
+ * 2026-10-23 改版（docs/161）：授權喺 `/api/ledger/login` 成功嗰一刻由 server
+ * 直接完成 —— 嗰度係唯一同時知道「storeId + 已驗證嘅 PIN」嘅地方。
+ * 客戶端只需要將回傳嘅 `{deviceId, secret}` 寫入 localStorage。
+ *
+ * 少一次 round-trip、少一次 PIN 傳輸、少一個失敗點。
  */
-export async function bindThisDevice(input: {
+export function saveBindingFromLogin(input: {
   storeId: string;
+  deviceId: string;
+  secret: string;
   label?: string;
-  ledgerAccessToken?: string | null;
-  ledgerRefreshToken?: string | null;
-  adminToken?: string | null;
-}): Promise<BindResult> {
-  const storeId = String(input.storeId ?? "").trim();
-  if (!storeId) return { ok: false, error: "缺少店舖資料。" };
-
-  const session = loadAuthSession();
-  // 🔴 一定要用 **storage 最新** 嗰張 refresh token：props 係 mount 時影嘅快照，
-  //    期間可能已經輪換過（`ensureLedgerSession()`）。存錯舊票 ⇒ 下次開機即失效。
-  const refreshToken = session?.ledgerRefreshToken ?? input.ledgerRefreshToken ?? "";
-  const accessToken = session?.ledgerAccessToken ?? input.ledgerAccessToken ?? "";
-  if (!refreshToken) {
-    return { ok: false, error: "搵唔到 Ledger 憑證，請重新登入店主帳號再試。" };
-  }
-
-  const deviceId = loadOrCreateDeviceId();
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (input.adminToken) headers.Authorization = `Bearer ${input.adminToken}`;
-  if (accessToken) headers["x-pos-ledger-token"] = accessToken;
-  if (refreshToken) headers["x-pos-ledger-refresh"] = refreshToken;
-
-  try {
-    const response = await fetch("/api/pos/device/bind", {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        storeId,
-        deviceId,
-        label: (input.label ?? defaultDeviceLabel()).slice(0, 60),
-        refreshToken,
-      }),
-    });
-    const payload = (await response.json()) as {
-      ok?: boolean;
-      error?: string;
-      secret?: string;
-      tableReady?: boolean;
-    };
-    if (payload.tableReady === false) {
-      return {
-        ok: false,
-        tableMissing: true,
-        error: "裝置授權表未建立：請先執行 migration 0073_pos_bound_devices.sql。",
-      };
-    }
-    if (!response.ok || !payload.ok || !payload.secret) {
-      return { ok: false, error: payload.error ?? "授權裝置失敗。" };
-    }
-
-    saveDeviceBinding({
-      storeId,
-      deviceId,
-      secret: payload.secret,
-      label: input.label ?? defaultDeviceLabel(),
-      boundAt: new Date().toISOString(),
-    });
-    clearDeviceSignedOut();
-    return { ok: true };
-  } catch {
-    return { ok: false, error: "網絡錯誤，請稍後再試。" };
-  }
+}): void {
+  if (!input.storeId || !input.deviceId || !input.secret) return;
+  saveDeviceBinding({
+    storeId: input.storeId,
+    deviceId: input.deviceId,
+    secret: input.secret,
+    label: input.label ?? defaultDeviceLabel(),
+    boundAt: new Date().toISOString(),
+  });
+  clearDeviceSignedOut();
 }
 
 export type RestoreResult =
@@ -270,44 +231,9 @@ export async function restoreDeviceSession(): Promise<RestoreResult> {
 }
 
 /**
- * 客戶端輪換咗 refresh token → 同步返 server 副本。
+ * 2026-10-23（docs/161）：`syncDeviceBindingRefreshToken()` 已刪除。
  *
- * 🔴 冇呢一步，server 嗰張票會喺客戶端第一次 refresh 之後變成廢票，
- *    第二日開機就會「授權已失效」，而且查唔到原因。
- *
- * 失敗一律靜默（純保鮮，唔可以阻任何業務）；下次 refresh 會再試。
+ * 舊版要將客戶端輪換後嘅 refresh token 同步返 DB，因為裝置憑證就係嗰張票。
+ * 而家裝置存嘅係店主 PIN 密文，每次開機由 server 即場簽一個**全新** session
+ * ⇒ DB 冇 token 要保鮮，呢個函數同 `/api/pos/device/session` 嘅 `PATCH` 一齊消失。
  */
-let tokenSyncInFlight: Promise<void> | null = null;
-let lastSyncedToken = "";
-
-export function syncDeviceBindingRefreshToken(refreshToken: string): void {
-  if (typeof window === "undefined") return;
-  const token = String(refreshToken ?? "").trim();
-  if (!token || token === lastSyncedToken) return;
-
-  const binding = loadDeviceBinding();
-  if (!binding) return;
-
-  if (tokenSyncInFlight) return;
-  lastSyncedToken = token;
-
-  tokenSyncInFlight = (async () => {
-    try {
-      await fetch("/api/pos/device/session", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          storeId: binding.storeId,
-          deviceId: binding.deviceId,
-          secret: binding.secret,
-          refreshToken: token,
-        }),
-      });
-    } catch {
-      // 靜默：下次 refresh 會再同步
-      lastSyncedToken = "";
-    } finally {
-      tokenSyncInFlight = null;
-    }
-  })();
-}

@@ -11,6 +11,7 @@ import { registerPosSession } from "@/lib/pos/session-registry-server";
 import { POS_BUILD_HEADER, POS_SESSION_HEADER, sanitizeBuildId, sanitizeSessionKey } from "@/lib/pos/session-record";
 import { loadMerchantGrants } from "@/lib/pos/merchant-modules-server";
 import { rememberStoreAccount } from "@/lib/pos/store-account-server";
+import { upsertBoundDevice, verifyBoundDeviceByDeviceId } from "@/lib/pos/device-binding-server";
 import { getExpenseSupabaseClient } from "@/lib/expense-supabase";
 import { provisionExpenseShopUser, createExpenseShopUserStore } from "@/lib/expense-account-provision";
 
@@ -57,8 +58,39 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, error: "登入嘗試過於頻繁，請稍後再試。" }, { status: 429 });
   }
 
-  const payload = (await request.json()) as { account?: string; pin?: string; phone?: string };
-  const phone = normalizePhone(payload.phone ?? payload.account ?? "");
+  const payload = (await request.json()) as {
+    account?: string;
+    pin?: string;
+    phone?: string;
+    /** 呢部機嘅穩定識別碼（客戶端生成）—— 有就順手初始化裝置授權（docs/161）。 */
+    deviceId?: string;
+    deviceLabel?: string;
+    /** 已初始化嘅機：唔使再打 8 位帳號，由裝置憑證反查（docs/161）。 */
+    deviceSecret?: string;
+  };
+  let phone = normalizePhone(payload.phone ?? payload.account ?? "");
+  const deviceId = String(payload.deviceId ?? "").trim();
+  const deviceSecret = String(payload.deviceSecret ?? "").trim();
+
+  // ── 裝置模式：店主喺已初始化嘅機登入，唔使打帳號 ──────────────────────
+  //
+  // 🔴 安全前提：仍然要店主**自己嘅 PIN**（下面照樣行 Ledger 驗證）。
+  //    裝置 secret 只係用嚟「知呢部機屬邊個帳號」，唔可以代替 PIN。
+  //    ⇒ 冇 PIN 一樣入唔到，唔會因為有 secret 就等於有店主權限。
+  if (!phone && /^[A-Za-z0-9._:-]{8,128}$/.test(deviceId) && deviceSecret) {
+    const device = await verifyBoundDeviceByDeviceId(deviceId, deviceSecret);
+    if (!device.ok) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: "呢部機嘅授權已失效，請用店舖帳號登入一次。",
+          code: device.tableMissing ? "table_missing" : "device_not_ready",
+        },
+        { status: 401 },
+      );
+    }
+    phone = normalizePhone(device.device.account);
+  }
   const pin = String(payload.pin ?? "").trim();
 
   if (!isValidMacauPhone(phone)) {
@@ -280,6 +312,41 @@ export async function POST(request: Request) {
     }
   }
 
+  // ── 裝置授權初始化（2026-10-23，docs/161）──────────────────────────────
+  //
+  // 店主喺呢部機登入成功 ＝ 呢部機從此可以「免店主在場」開機。
+  // 喺**呢一刻**做，因為：
+  //   ① 呢度係唯一同時知道「storeId + 已驗證嘅 PIN」嘅地方；
+  //   ② 唔使客戶端另外打一次 API，亦唔使再驗一次 PIN（少一個失敗點）。
+  //
+  // 存嘅係**PIN 嘅密文**，唔係 refresh token —— 舊做法存 token，
+  // 店主一登出（`signOut({scope:"local"})` 撤銷該 session）憑證就即刻死。
+  // 詳見 docs/161。
+  //
+  // 🔴 鐵律：失敗一律靜默（0075 未跑 / DB 打嗝），絕對唔可以令店主登入唔到。
+  //    只有 `staff_role = owner` 才初始化 —— 普通店員用自己帳號登入唔應該綁機。
+  let deviceBinding: { deviceId: string; secret: string } | null = null;
+  if (role === "admin" && /^[A-Za-z0-9._:-]{8,128}$/.test(deviceId)) {
+    const bound = await upsertBoundDevice({
+      storeId: staffRow.merchant_id,
+      deviceId,
+      label: String(payload.deviceLabel ?? "").trim().slice(0, 60) || "POS 終端",
+      boundBy: phone,
+      account: phone,
+      pin,
+      // 出示得到現有 secret 就重用（唔會令本機憑證無故失效）；
+      // 出示唔到（清過 cache）就發新嘅。
+      deviceSecret: deviceSecret || undefined,
+    });
+    if (bound.ok) {
+      // `secret: null` = 呢部機本來已經有有效授權，保留原本 secret
+      // （客戶端唔好覆蓋自己 localStorage 嗰個）
+      if (bound.secret) deviceBinding = { deviceId, secret: bound.secret };
+    } else {
+      console.warn("[ledger/login] 裝置初始化未完成（可忽略）:", bound.error);
+    }
+  }
+
   return NextResponse.json({
     ok: true,
     source: "ledger",
@@ -299,5 +366,7 @@ export async function POST(request: Request) {
     },
     accessToken: authData.session.access_token,
     refreshToken: authData.session.refresh_token,
+    // 客戶端收到就寫入 localStorage（`saveDeviceBinding()`）
+    deviceBinding: deviceBinding ?? undefined,
   });
 }

@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 
 import { mintSessionFromBoundDevice } from "@/lib/pos/device-session.server";
-import { updateBoundDeviceToken, verifyBoundDevice } from "@/lib/pos/device-binding-server";
 import { issuePosDeviceToken } from "@/lib/pos/pos-device-token";
 import { clientIp, rateLimit } from "@/lib/pos/rate-limit";
 
@@ -11,19 +10,24 @@ import { clientIp, rateLimit } from "@/lib/pos/rate-limit";
  * | 方法 | 用途 | 鑑權 |
  * |---|---|---|
  * | POST | 用裝置 secret 換一個完整 POS session（含真 Ledger token） | 裝置 secret |
- * | PATCH | 客戶端輪換咗 refresh token → 同步返 server 副本 | 裝置 secret |
  *
  * ## 為何唔可以只簽 pv1
  *
  * `pv1` 只證明「呢部機屬呢間店」，但會員、加值、報表、權限控制全部要
- * `ledgerAccessToken`（見 `src/lib/ledger/*`）。換 token 嘅實作收喺
+ * `ledgerAccessToken`（見 `src/lib/ledger/*`）。換 session 嘅實作收喺
  * `device-session.server.ts`，同「登入頁揀身份」共用（避免兩份漂移）。
+ *
+ * ## 2026-10-23：PATCH 已移除（docs/161）
+ *
+ * 舊版有 `PATCH` 用嚟同步「客戶端輪換後嘅 refresh token」。而家裝置改存
+ * 店主 PIN 密文、每次開機都簽一個全新 session ⇒ **冇 token 要保鮮**，
+ * 呢個 endpoint 同 `syncDeviceBindingRefreshToken()` 一齊刪走。
  *
  * ## 失敗語義
  *
  * · 表未建 / 未配置 → `tableReady:false`（200），客戶端靜靜落返登入頁
  * · secret 錯 / 已撤銷 → 401（客戶端會清走本機授權，唔會無限重試）
- * · refresh token 已死 → 401 + `code:"binding_expired"`
+ * · 店主改咗 Ledger PIN → 401 + `code:"owner_pin_invalid"`
  */
 
 const DEVICE_ID_PATTERN = /^[A-Za-z0-9._:-]{8,128}$/;
@@ -97,42 +101,4 @@ export async function POST(request: Request) {
       posDeviceToken,
     },
   });
-}
-
-export async function PATCH(request: Request) {
-  if (!rateLimit(`pos-device-token-sync:${clientIp(request)}`, 120, 60_000)) {
-    return bad("請求過於頻繁，請稍後再試。", 429, "rate_limited");
-  }
-
-  const body = (await request.json().catch(() => null)) as {
-    storeId?: string;
-    deviceId?: string;
-    secret?: string;
-    refreshToken?: string;
-  } | null;
-
-  const storeId = readText(body?.storeId);
-  const deviceId = readText(body?.deviceId);
-  const secret = readText(body?.secret);
-  const refreshToken = readText(body?.refreshToken);
-  if (!storeId || !DEVICE_ID_PATTERN.test(deviceId) || !secret || !refreshToken) {
-    return bad("參數不完整。", 400, "invalid_params");
-  }
-
-  const verified = await verifyBoundDevice(storeId, deviceId, secret);
-  if (!verified.ok) {
-    return NextResponse.json(
-      { ok: false, error: verified.error, tableReady: verified.tableMissing ? false : undefined },
-      { status: verified.status },
-    );
-  }
-
-  const saved = await updateBoundDeviceToken({ storeId, deviceId, refreshToken });
-  if (!saved.ok) {
-    return NextResponse.json(
-      { ok: false, error: saved.error, tableReady: saved.tableMissing ? false : undefined },
-      { status: saved.status },
-    );
-  }
-  return NextResponse.json({ ok: true });
 }

@@ -1,7 +1,10 @@
 import { NextResponse } from "next/server";
 
 import { mintSessionFromBoundDevice } from "@/lib/pos/device-session.server";
-import { verifyBoundDevice } from "@/lib/pos/device-binding-server";
+import {
+  verifyBoundDevice,
+  verifyBoundDeviceByDeviceId,
+} from "@/lib/pos/device-binding-server";
 import { issuePosDeviceToken } from "@/lib/pos/pos-device-token";
 import { issueOperatorToken } from "@/lib/pos/staff-operator-token";
 import { normalizeStaffNo } from "@/lib/pos/staff-core";
@@ -20,17 +23,21 @@ import { clientIp, rateLimit } from "@/lib/pos/rate-limit";
  * ## 店員冇 Ledger 戶口，點會有 ledgerAccessToken？
  *
  * 會員／加值／報表全部要 Ledger token。呢部機如果**已由店主登入過**（自動初始化），
- * server 就有加密保存嘅 refresh token，可以代店員換一對新 token
+ * server 就存住店主 PIN 嘅密文，可以即場簽一個**全新獨立** session
  * （`mintSessionFromBoundDevice`）。未初始化 → 明確提示店主先登入一次。
+ *
+ * 🔴 2026-10-23 改版（docs/161）：以前存 refresh token，店主一登出就撤銷咗嗰個
+ *    session ⇒ 憑證即死（實測撞到）。而家改存 PIN 密文，每次開機都係新 session。
  *
  * ## 次序（🔴 唔可以調亂）
  *
  * ① 驗裝置憑證（無憑證連 PIN 都唔會驗 ⇒ 唔可以被當成 PIN 爆破通道）
  * ② 驗店員 PIN（per-IP 限流 + per-staff 5 次鎖 15 分鐘）
- * ③ 簽 sv1 操作員 token（真權限來源）＋ pv1 終端憑證（寫入用）
+ * ③ 用裝置 PIN 換一個全新 Ledger session
+ * ④ 簽 sv1 操作員 token（真權限來源）＋ pv1 終端憑證（寫入用）
  *
  * 店主分支**唔經呢度**：仍然用 `/api/ledger/login`（Ledger 驗身），
- * 成功後由客戶端靜靜初始化呢部機。
+ * 成功後 server 直接寫入裝置授權。
  */
 
 const DEVICE_ID_PATTERN = /^[A-Za-z0-9._:-]{8,128}$/;
@@ -58,29 +65,48 @@ export async function POST(request: Request) {
   const deviceId = String(body?.deviceId ?? "").trim();
   const deviceSecret = String(body?.deviceSecret ?? "").trim();
 
-  if (!account) return bad("請輸入 8 位數字帳號。", 400, "account_invalid");
   if (!staffNo) return bad("請選擇身份。", 400, "staff_required");
   if (!/^\d{4}$/.test(pin)) return bad("請輸入 4 位 PIN。", 400, "pin_invalid");
   if (!DEVICE_ID_PATTERN.test(deviceId) || !deviceSecret) {
     return bad("呢部機未初始化，請店主先登入一次。", 401, "device_not_ready");
   }
 
-  const resolved = await resolveStoreAccount(account);
-  if (!resolved) {
-    return bad("搵唔到呢個帳號嘅店舖，請店主先登入一次。", 400, "account_unknown");
+  // 店舖由**裝置**決定（docs/161）：已初始化嘅機唔應該再問店員 8 位店舖帳號。
+  // 冇 device 憑證時才退回「帳號 → storeId」嘅舊路徑（向後兼容舊 client）。
+  let storeId = "";
+  let storeName = "";
+  if (account) {
+    const resolved = await resolveStoreAccount(account);
+    if (!resolved) {
+      return bad("搵唔到呢個帳號嘅店舖，請店主先登入一次。", 400, "account_unknown");
+    }
+    storeId = resolved.storeId;
+    storeName = resolved.storeName;
+  } else {
+    const device = await verifyBoundDeviceByDeviceId(deviceId, deviceSecret);
+    if (!device.ok) {
+      return bad(
+        device.error,
+        device.status,
+        device.tableMissing ? "table_missing" : "device_not_ready",
+        { tableReady: device.tableMissing ? false : undefined },
+      );
+    }
+    storeId = device.device.storeId;
+    const resolved = await resolveStoreAccount(device.device.account);
+    storeName = resolved?.storeName ?? "";
   }
 
   // ① 先驗裝置憑證 —— 冇憑證就唔會驗 PIN，避免呢條 route 變成爆破通道
-  //    （呢度只做**便宜**嘅 secret 核對；真正換 token 留到 PIN 過咗之後，
-  //      否則每次打錯 PIN 都會輪換一次 refresh token，白白燒 Supabase call）
-  const gate = await verifyBoundDevice(resolved.storeId, deviceId, deviceSecret);
+  //    （呢度只做**便宜**嘅 secret 核對；真正換 session 留到 PIN 過咗之後）
+  const gate = await verifyBoundDevice(storeId, deviceId, deviceSecret);
   if (!gate.ok) {
     return bad(gate.error, gate.status, gate.tableMissing ? "table_missing" : "device_not_ready");
   }
 
   // ② 驗店員 PIN（含 per-staff 鎖定）
   const auth = await authenticatePosStaff({
-    storeId: resolved.storeId,
+    storeId,
     staffNo,
     pin,
   });
@@ -97,9 +123,9 @@ export async function POST(request: Request) {
     );
   }
 
-  // ③ 換 Ledger token（refresh token 會輪換 → 即刻寫返 DB）
+  // ③ 換 Ledger session（用裝置內嘅店主 PIN 即場簽一個**全新** session）
   const minted = await mintSessionFromBoundDevice({
-    storeId: resolved.storeId,
+    storeId,
     deviceId,
     secret: deviceSecret,
   });
@@ -107,9 +133,9 @@ export async function POST(request: Request) {
     return bad(minted.error, minted.status, minted.code);
   }
 
-  // ③ 簽 sv1（真權限）＋ pv1（終端寫入）
+  // ④ 簽 sv1（真權限）＋ pv1（終端寫入）
   const operatorToken = issueOperatorToken({
-    storeId: resolved.storeId,
+    storeId,
     staffId: auth.staff.id,
     staffNo: auth.staff.staffNo,
     name: auth.staff.name,
@@ -121,7 +147,7 @@ export async function POST(request: Request) {
   }
 
   const posDeviceToken = issuePosDeviceToken({
-    storeId: resolved.storeId,
+    storeId,
     account: `staff:${auth.staff.staffNo}`,
     role: auth.staff.role === "manager" ? "manager" : "cashier",
   });
@@ -133,12 +159,12 @@ export async function POST(request: Request) {
     ok: true,
     session: {
       account: `staff:${auth.staff.staffNo}`,
-      name: minted.storeName || resolved.storeName || "店舖終端",
+      name: minted.storeName || storeName || "店舖終端",
       // 店長 → manager、收銀 → cashier（同 Ledger 角色口徑一致）。
       // 🔴 真權限一律由 operator（sv1）決定，呢個 role 只影響頁面白名單。
       role: auth.staff.role === "manager" ? "manager" : "cashier",
-      merchantId: resolved.storeId,
-      storeIds: [resolved.storeId],
+      merchantId: storeId,
+      storeIds: [storeId],
       permissions: {
         refundOrder: auth.staff.permissions.actions.refundOrder,
         voidItem: auth.staff.permissions.actions.voidItem,
