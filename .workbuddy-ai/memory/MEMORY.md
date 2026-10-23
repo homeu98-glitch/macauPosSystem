@@ -83,3 +83,7 @@ iPad(HTTPS) → Supabase Realtime(WSS) → Android Hub(LAN) → LAN printer(:910
 - 綁定裝置嘅 session 一律 `role: cashier`（唔知邊個員工），真權限由 L2 `sv1` 決定。
 - 登入流程（docs/160 §11）：帳號 → 身份清單 → PIN。`pos_store_accounts`（0074）由店主登入時自動寫；未寫入前 `known:false` 走傳統登入。
 - 店員登入走 `/api/pos/login/identity`，用**裝置憑證**換 Ledger token（先驗 secret 後驗 PIN）。`/operator` 只剩「換班」用途。
+- 🔴 **`pos_staff.store_id` 必須 = 登入時嘅 `merchantId`**。唔一致 = 員工「加咗但唔見」：`/api/pos/login/identities` 回 `staffTotal:0`，登入頁永遠得店主。2026-10-23 真實踩過（記錄喺 `d564b932…`，登入店係 `8291f843…`）。
+  員工權限面板標題列有「店舖 xxxxxxxx…」chip（完整 UUID 喺 title）可以直接同 SQL 對照。
+- ⚠️ `merchant_staff` 查詢（`/api/ledger/login`、`owner-guard.server.ts`）都係 `.limit(1)` **無 order**：一個 Auth 帳號若係多間店嘅員工，每次登入揀邊間店係唔確定嘅。
+- `/api/pos/login/identities` 回 `staffTotal` / `staffActive` / `staffTableMissing` 做診斷；三者分唔清就會以為壞咗。
