@@ -70,7 +70,10 @@ function isMissingTable(error: { code?: string; message?: string } | null | unde
 function tableMissingFailure(): DeviceBindingFailure {
   return {
     ok: false,
-    error: "裝置授權表未建立：請先執行 migration 0073_pos_bound_devices.sql（同 0075）。",
+    // 兩個成因都走呢條：① 0073 未跑（表都冇）② 0075 未跑（冇 owner_pin_enc 欄）
+    // ⇒ 訊息一定要同時提兩個 migration，否則商家跑完 0073 會以為已經搞完。
+    error:
+      "裝置授權表未建立或未升級：請喺 POS Supabase SQL Editor 依序執行 0073_pos_bound_devices.sql 同 0075_pos_device_pin.sql。",
     status: 200,
     tableMissing: true,
   };
