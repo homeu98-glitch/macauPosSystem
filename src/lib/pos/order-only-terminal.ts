@@ -59,6 +59,9 @@ const ORDER_ONLY_KEY_PREFIX = "pos.orderOnlyTerminal.";
 export const ORDER_ONLY_ALLOWED_PATHS: readonly string[] = [
   "/staff",
   "/login",
+  // 2026-10-23：店員手機／落單專用終端都要簽到（L2）。冇呢條，
+  // 店員一撳「簽到」就會被彈返 /staff，等於簽到入口消失。
+  "/operator",
   "/select-workbench",
 ];
 

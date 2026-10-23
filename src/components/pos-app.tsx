@@ -107,6 +107,7 @@ import {
   type SelfOrderNoticeItem,
 } from "@/lib/pos/self-order-notice";
 import { discountAmountFromRate, discountedUnitPrice, findDiscountPreset, orderItemDiscountTotal } from "@/lib/pos/discount";
+import { loadOperatorSession } from "@/lib/pos/operator-session";
 import { isTerminalOrderStatus, filterResurrectedOrders, getOrderStatusBadge } from "@/lib/pos-order-filters";
 import { defaultDeviceConfig } from "@/lib/mock-data";
 import {
@@ -769,8 +770,21 @@ export function PosApp() {
   const quickOrderProcessingRef = useRef<Set<string>>(new Set());
 
   const isQuickMode = operatingMode === "quick";
-  const canRefundOrder = authSession?.permissions.refundOrder ?? true;
-  const canVoidItem = authSession?.permissions.voidItem ?? true;
+  /**
+   * 權限來源（2026-10-23）：
+   * - 有 L2 操作員簽到 → **一律**用操作員權限（店主喺「權限控制」勾嘅）；
+   * - 冇 → 沿用 L1 session（Ledger owner → 全開；staff → 收緊）。
+   *
+   * ⚠️ 呢度淨係 UX gate（收起／攔住粒掣）。真正安全邊界喺伺服器；
+   *    高風險操作嘅伺服器端二次校驗屬 Phase 2（見 docs/160）。
+   */
+  const [operatorSession] = useState(() => loadOperatorSession(authSession?.merchantId ?? null));
+  const canRefundOrder = operatorSession
+    ? operatorSession.permissions.actions.refundOrder
+    : (authSession?.permissions.refundOrder ?? true);
+  const canVoidItem = operatorSession
+    ? operatorSession.permissions.actions.voidItem
+    : (authSession?.permissions.voidItem ?? true);
 
   function showPermissionDenied(actionLabel: string) {
     /**

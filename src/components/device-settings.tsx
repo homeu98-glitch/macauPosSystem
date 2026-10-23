@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
 import { AppSidebar } from "@/components/app-sidebar";
+import { StaffPermissionPanel } from "@/components/staff-permission-panel";
 import { useLang, useT, useTShort } from "@/components/lang-provider";
 import { LANG_DISPLAY_NAME, UI_LANGS } from "@/lib/i18n";
 import { KioskModePanel } from "@/components/kiosk-mode-panel";
@@ -82,8 +83,46 @@ export function DeviceSettings() {
   const [status, setStatus] = useState(cachedConfig ? "已載入本機設定。" : "尚未同步設定。");
 
   const [activeTab, setActiveTab] = useState<
-    "device" | "menu-print" | "menu" | "tables" | "payments" | "online-orders" | "notes" | "discounts" | "kiosk" | "language"
+    | "device"
+    | "menu-print"
+    | "menu"
+    | "tables"
+    | "payments"
+    | "online-orders"
+    | "notes"
+    | "discounts"
+    | "kiosk"
+    | "language"
+    | "staff"
   >("device");
+
+  /**
+   * 店主身份（2026-10-23）——「權限控制」分頁**只限店主**見到。
+   *
+   * 為何用 `useEffect` 而唔係 render 期直接 `loadAuthSession()`：
+   * 呢個分頁嘅出現會改變 DOM 結構 ⇒ 如果 server render 讀唔到 localStorage
+   * （必定讀唔到）而 client 讀得到，就會 hydration mismatch。
+   * 先 render「冇呢個分頁」，mount 之後再亮出，兩邊首次 render 完全一致。
+   *
+   * ⚠️ 判斷依據係 **L1 裝置登入嘅角色**（Ledger `staff_role = owner` → `admin`），
+   *    唔係 L2 操作員 —— 店員簽到之後，老闆部機仍然要有權限控制入口。
+   */
+  const [ownerCtx, setOwnerCtx] = useState<{
+    storeId: string;
+    ledgerAccessToken: string | null;
+    ledgerRefreshToken: string | null;
+    isOwner: boolean;
+  } | null>(null);
+
+  useEffect(() => {
+    const session = loadAuthSession();
+    setOwnerCtx({
+      storeId: session?.merchantId ?? "",
+      ledgerAccessToken: session?.ledgerAccessToken ?? null,
+      ledgerRefreshToken: session?.ledgerRefreshToken ?? null,
+      isOwner: session?.role === "admin",
+    });
+  }, []);
   const [menuDraft, setMenuDraft] = useState(() => normalizeBootstrapPayload(cachedBootstrap));
   const [menuSaving, setMenuSaving] = useState(false);
   const [ledgerImportOpen, setLedgerImportOpen] = useState(false);
@@ -1268,7 +1307,7 @@ export function DeviceSettings() {
 
         <div className="mx-auto max-w-[1600px] px-4 py-3 md:pl-[88px]">
         <div className="mb-3 flex flex-wrap gap-2">
-          {[
+          {([
             ["device", "打印機"],
             ["menu-print", "菜品打印設置"],
             ["menu", "菜單"],
@@ -1279,7 +1318,14 @@ export function DeviceSettings() {
             ["discounts", "折扣"],
             ["kiosk", "掃碼點餐"],
             ["language", "語言設置"],
-          ].map(([key, label]) => (
+            // 店主專屬（2026-10-23）：員工角色／可見頁面／操作權限。
+            // ⚠️ 放喺最後 —— 唔好插喺中間，否則現有分頁位置會位移，
+            //    商家已經記熟位置（同側欄模組同一原則）。
+            // ⚠️ 亦要 storeId：純後台 admin session 冇 merchantId，設定落唔到店。
+            ...(ownerCtx?.isOwner && ownerCtx.storeId
+              ? [["staff", "權限控制"] as [string, string]]
+              : []),
+          ] as Array<[string, string]>).map(([key, label]) => (
             <button
               key={key}
               className={`rounded-full px-4 py-2 text-sm font-semibold ${
@@ -1309,6 +1355,15 @@ export function DeviceSettings() {
   {/* 語言設置：獨立 tab（2026-10-13）—— 原先 LanguageSection 係「打印機」tab 底部一節，
       太難搵；依家升做頂層 tab，入設置頁一眼見到。 */}
   {activeTab === "language" ? <LanguageSection /> : null}
+
+  {/* 權限控制（2026-10-23）：只店主見到。員工帳號存 POS 本地 ⇒ 員工唔需要 Ledger 戶口。 */}
+  {activeTab === "staff" && ownerCtx?.isOwner && ownerCtx.storeId ? (
+    <StaffPermissionPanel
+      ledgerAccessToken={ownerCtx.ledgerAccessToken}
+      ledgerRefreshToken={ownerCtx.ledgerRefreshToken}
+      storeId={ownerCtx.storeId}
+    />
+  ) : null}
 
         {activeTab === "device" ? (
           <>

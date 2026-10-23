@@ -12,6 +12,18 @@
 - 掃碼 QR **冇 storeId 唔可以出碼**：`scan-order-page.tsx` 冇 storeId 直接擋，貼紙會白印。
 - **缺欄檢測唔可以只認 `42703`**：PostgREST 對 `.insert()` 未知欄多回 **`PGRST204`**（"Could not find the 'x' column … schema cache"），對 `.select()` 兩種都可能。要同時認 code（42703/PGRST204）＋訊息 regex，否則降級分支永不觸發、靜默失敗（2026-10-22 庫存開通中招）。查詢本身亦要包 try/catch，唔可以假設「欄一定存在」。
 - **登入時觸發嘅副作用 ≠ 對已登入 session 生效**：POS session 存 localStorage，部署前已登入嘅商戶只按「重新整理」唔會再打 `/api/ledger/login` ⇒ 登入時開通／上報永遠唔 fire，要登出再登入。
+- **新增 `t("…")` key 必須同時加落 `i18n-dict-zh.ts` 同 `i18n-dict-en.ts`**：只加英文 → `i18n-layer-guard.test.ts` 報「孤兒 key + 繁中缺 key」連續 fail 兩輪（2026-10-23 權限控制踩）。
+- **新頁面若店員手機要開得到，必須加入 `ORDER_ONLY_ALLOWED_PATHS`**（`src/lib/pos/order-only-terminal.ts`）：落單專用終端白名單會無聲擋走，直接彈返 `/staff`（2026-10-23 `/operator` 中招）。
+- **`/admin/*` 冇 `LangProvider`**：該區組件用 `useT()` 會 throw 白屏 ⇒ admin 專用面板文案直接寫繁中，唔好 `t()`。
+
+## 員工權限（2026-10-23 上線，docs/160）
+- **Ledger 冇權限模型**（契約級）：`merchant_staff.staff_role` 只有 `owner|staff`，RPC 閘只有 `is_merchant_staff()` boolean ⇒ 權限一律 POS 本地做，勿再打 Ledger 主意。
+- 分層：L1 裝置登入（Ledger 8 位電話+PIN）／L2 操作員簽到（POS 本地 `staff_no`+4 位 PIN，簽 `sv1` token 12h）。`sv1` 同 `pv1` 共用 secret 但 kind 互不通用。
+- 權限真源 `src/lib/pos/staff-core.ts`：加頁面／操作必須同步加落 `POS_STAFF_PAGE_IDS`／`POS_STAFF_ACTION_IDS`（白名單，漏加＝UI 勾咗但讀出被剷）。頁面 id 有契約測試對齊 `module-catalog.ts` 側欄。
+- 操作員 session 存**獨立 key** `macau-pos/operator/{storeId}`，唔塞 `AuthSession`（`normalizeAuthSession()` 白名單會剷欄位、換班亦唔應整頁 reload）。
+- 權限 gate 係雙層：`operatorSession ? operator.permissions.x : authSession.permissions.x` —— 冇操作員時沿用 L1，**不可寫 `?? true`**（fail-open）。
+- 管理 API 已 server 驗 owner（`requireStoreOwner()` 雙通道：admin session scope／Ledger `owner`）；**逐個 POS 操作驗 `sv1` 仍未做**（Phase 2）。
+- 表：`pos_staff`（migration `0072`，service_role only）；PIN = PBKDF2-SHA256 120k + per-row salt + 5 次鎖 15 分鐘。
 
 ## 數字口徑
 - 實收＝毛＝`agg.paidTotal`；報表營業額＝淨額 `totalRevenueNetMop`；交班 `netPaidTotal`（＋未退）方向相反，唔可互抄。
@@ -26,7 +38,7 @@
 - temp-reopen 枱只寫本機 ⇒ 跨機返結失聯（未修，已知）。
 
 ## 鑑權／Realtime／打印
-- `posRouteAuthGuard()` 放 early-return 之後；`POS_REQUIRE_DEVICE_AUTH` 未設＝開閘。
+- `posRouteAuthGuard()` 放 early-return 之後；`POS_REQUIRE_DEVICE_AUTH` **未設＝fail-closed 強制鑑權**（2026-10-22 查碼糾正：顯式 `0` 先至全域開閘，緊急回滾用；之前記憶寫「未設＝開閘」係誤讀）。
 - anon 時間窗 RLS（pos_orders 72h／pos_print_jobs 24h）係刻意；收緊＝出紙 1–3 秒變 180 秒。
 - 入隊只准 `appendPrintJobsWithSync()`；`pushEvents()` base 要 `loadQueue()`；去重靠 `onceKey`。
 - Realtime hook 四件套：subscribe 首行 `if (cancelled || channel !== ch) return;`／`removeChannel` 後再判 cancelled／CLOSED 唔可刪／同 topic 一頁一條 channel（守衛 `realtime-resubscribe-loop.test.ts`）。
@@ -51,5 +63,6 @@
 ## 部署（Vercel）
 - **生產網域：`https://macau-pos-system.vercel.app`**（Vercel 專案 `macau-pos-system`；deployment URL 受 SSO 保護會 302，唔適宜用嚟探測）。
 - **push 到 main 即自動部署**，唔需要手動 deploy；本機冇 vercel CLI／token。
+- 🔴 **env var 只對「儲存後新建嘅部署」生效**，唔會回溯補落現有部署 —— 加／改完 var 必須**重新部署**先讀到（空 commit push 或 dashboard Redeploy 都得）。2026-10-22 手機版庫存表 QR  deploy 完先至加 `MACAU_LEDGER_SSO_SECRET` ⇒ 彈窗報「尚未啟用」，枉查咗一陣 SQL／程式碼。
 - 驗證「新 code 有冇上線」最快：打一條**新版本先有**嘅 endpoint —— 例如 `/api/admin/me`（舊版 → 404，新版 → 401 JSON）。其他 401 endpoint 冇辨識力。
 - 查部署狀態／commit 對應：用 GCM 取 GitHub token 打 `api.github.com/repos/homeu98-glitch/macauPosSystem/deployments`，再查 `.../deployments/{id}/statuses`（state + environment_url）。

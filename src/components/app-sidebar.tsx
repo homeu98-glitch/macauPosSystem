@@ -6,7 +6,7 @@ import Link from "next/link";
 
 import { usePathname } from "next/navigation";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 
 
@@ -23,6 +23,12 @@ import { useTopupPendingCount } from "@/lib/topup/use-topup-pending-count";
 import { useSyncHealth } from "@/lib/pos/sync-acks";
 import { retryReconcileNow } from "@/lib/pos/sync-reconcile-daemon";
 import { SIDEBAR_MODULES } from "@/lib/pos/module-catalog";
+import {
+  loadOperatorSession,
+  operatorCanOpenSettings,
+  operatorVisiblePages,
+  type OperatorSession,
+} from "@/lib/pos/operator-session";
 import { useStoreOpenToggle } from "@/lib/pos/use-store-open-toggle";
 
 
@@ -118,11 +124,37 @@ export function AppSidebar() {
 
   const [session] = useState(() => loadAuthSession());
 
+  /**
+   * L2 操作員（2026-10-23）。`null` = 冇簽到（店主／直接用 L1 登入嘅店員）。
+   *
+   * ⚠️ 用 `useEffect` 而唔係 render 期讀：server render 冇 localStorage，
+   *    直接讀會令側欄項目數目唔同 ⇒ hydration mismatch。
+   */
+  const [operator, setOperator] = useState<OperatorSession | null>(null);
+  useEffect(() => {
+    setOperator(loadOperatorSession(session?.merchantId ?? null));
+  }, [session?.merchantId]);
+
   const { hasPending, configured: topupConfigured } = useTopupPendingCount();
 
 
 
-  const navItems = resolveNavItems(session?.allowedModules?.sidebarModules);
+  /**
+   * 兩層過濾：
+   * ① 商戶模組授權（平台開通；
+   * ② L2 操作員可見頁面（店主喺「權限控制」勾嘅）。
+   *
+   * ⚠️ 冇操作員（`operatorVisiblePages` 回 `null`）= 唔過濾，沿用舊行為。
+   */
+  const navItems = (() => {
+    const base = resolveNavItems(session?.allowedModules?.sidebarModules);
+    const visible = operatorVisiblePages(operator);
+    if (!visible) return base;
+    const allowed = new Set(visible);
+    return base.filter((item) => allowed.has(item.id));
+  })();
+
+  const canOpenSettings = operatorCanOpenSettings(operator);
 
 
 
@@ -372,21 +404,40 @@ export function AppSidebar() {
               入口而家喺 `device-settings.tsx` 嘅 `.hctrl`（「線上訂單 · 營業中」左邊），
               仍然係 `href="/select-workbench"` 直接跳 —— 逃生門冇消失，只係深一層。 */}
 
+          {/* L2 店員簽到／切換操作員（2026-10-23）。
+              收銀機全日開住 L1，換班只換操作員 —— 唔需要登出再打 8 位帳號。
+              ⚠️ 字級寫喺 `<div>`（唔係 Link 本身）—— 同商店名卡同一個理由。 */}
           <Link
-
-            className={`rounded-2xl px-2 py-2 text-center text-xs font-semibold transition ${
-
-              pathname === "/settings" ? "bg-orange-500 text-white" : "bg-slate-800 text-slate-200 hover:bg-slate-700"
-
+            className={`rounded-2xl px-1.5 py-2 text-center transition ${
+              pathname === "/operator"
+                ? "bg-orange-500 text-white"
+                : "bg-slate-800 text-slate-200 hover:bg-slate-700"
             }`}
-
-            href="/settings"
-
+            href="/operator"
+            title={operator ? `而家操作員：${operator.name}（撳一下切換）` : "店員簽到（工號 + PIN）"}
           >
-
-            {t("設置")}
-
+            <div className="text-[8px] leading-tight">{operator ? operator.name : t("簽到")}</div>
+            <div
+              className={`mt-1 text-[6px] leading-tight ${
+                pathname === "/operator" ? "text-white/80" : "text-slate-400"
+              }`}
+            >
+              {operator ? t("操作員") : t("員工工號")}
+            </div>
           </Link>
+
+          {canOpenSettings ? (
+            <Link
+              className={`rounded-2xl px-2 py-2 text-center text-xs font-semibold transition ${
+                pathname === "/settings"
+                  ? "bg-orange-500 text-white"
+                  : "bg-slate-800 text-slate-200 hover:bg-slate-700"
+              }`}
+              href="/settings"
+            >
+              {t("設置")}
+            </Link>
+          ) : null}
 
         </div>
 
@@ -400,7 +451,9 @@ export function AppSidebar() {
 
           {[
             ...navItems,
-            { href: "/settings", label: "設置", short: "設" },
+            // 店員簽到／切換操作員（2026-10-23）—— 手機店員都要搵得到入口
+            { href: "/operator", label: "簽到", short: "簽" },
+            ...(canOpenSettings ? [{ href: "/settings", label: "設置", short: "設" }] : []),
           ].map((item) => {
 
             const active = pathname === item.href || (item.href === "/members" && pathname.startsWith("/members"));

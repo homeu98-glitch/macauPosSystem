@@ -115,6 +115,8 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
   const navItems = [
     { href: "/admin/dashboard", label: "店舖總覽", platformOnly: false },
     { href: "/admin/reports", label: "營業報表", platformOnly: false },
+    // 2026-10-23：店主／平台都可見（店主只會見到自己店）。
+    { href: "/admin/staff", label: "權限控制", platformOnly: false },
     // P2：帳號管理（平台專屬）
     { href: "/admin/accounts", label: "帳號管理", platformOnly: true },
     { href: "/admin/sessions", label: "POS 工作階段", platformOnly: true },

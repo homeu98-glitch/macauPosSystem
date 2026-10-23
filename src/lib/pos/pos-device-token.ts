@@ -56,6 +56,17 @@ function resolveSecret(): string | null {
   return serviceKey?.trim() || null;
 }
 
+/**
+ * 對外公開同一條 secret 解析次序（2026-10-23）。
+ *
+ * 操作員 token（`sv1`，見 `staff-operator-token.ts`）要同 `pv1` 用**同一條**
+ * secret，否則會出現「終端簽得到、但另一邊驗唔到」。呢個 wrapper 只係
+ * 唔想兩份檔各自抄一次解析次序（抄兩份必然漂移）。
+ */
+export function resolvePosTokenSecret(): string | null {
+  return resolveSecret();
+}
+
 function base64url(input: Buffer | string): string {
   return Buffer.from(input).toString("base64url");
 }
