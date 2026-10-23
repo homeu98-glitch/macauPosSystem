@@ -10,6 +10,7 @@ import { issuePosDeviceToken } from "@/lib/pos/pos-device-token";
 import { registerPosSession } from "@/lib/pos/session-registry-server";
 import { POS_BUILD_HEADER, POS_SESSION_HEADER, sanitizeBuildId, sanitizeSessionKey } from "@/lib/pos/session-record";
 import { loadMerchantGrants } from "@/lib/pos/merchant-modules-server";
+import { rememberStoreAccount } from "@/lib/pos/store-account-server";
 import { getExpenseSupabaseClient } from "@/lib/expense-supabase";
 import { provisionExpenseShopUser, createExpenseShopUserStore } from "@/lib/expense-account-provision";
 
@@ -143,6 +144,20 @@ export async function POST(request: Request) {
   }
 
   const role = mapLedgerStaffRole(staffRow.staff_role as string | undefined);
+
+  // ── 帳號 → 店舖對照（2026-10-23，migration 0074）────────────────────────
+  //
+  // 新登入流程第 2 步要用「8 位店舖帳號」列出可用身份（店主＋店員）。
+  // 未登入時 Ledger 冇任何方法反查（契約明文禁止 check_phone RPC），
+  // 所以喺**唯一權威知道 merchantId 嘅地方**（就係呢度）寫一筆。
+  //
+  // 🔴 鐵律：失敗一律靜默（未跑 0074 / DB 打嗝），絕對唔可以令店主登入唔到。
+  //    下一次登入會再寫。
+  await rememberStoreAccount({
+    account: phone,
+    storeId: staffRow.merchant_id,
+    storeName: merchant?.name ?? null,
+  });
 
   // ── 商戶模組授權（migration 0037）──
   // 「登入後揀工作台」要知呢間店開通咗邊幾個模組，所以喺**簽發 session 嗰一刻**就帶落去，

@@ -16,9 +16,7 @@ import {
   type PosStaffRole,
 } from "@/lib/pos/staff-core";
 import {
-  bindThisDevice as bindDeviceApi,
   clearDeviceBinding,
-  defaultDeviceLabel,
   loadDeviceBinding,
   loadOrCreateDeviceId,
 } from "@/lib/pos/device-binding";
@@ -716,7 +714,6 @@ function DeviceBindingSection(props: {
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState("");
   const [thisDeviceId, setThisDeviceId] = useState("");
-  const [label, setLabel] = useState("");
   const [boundHere, setBoundHere] = useState(false);
 
   const headers = useMemo(() => {
@@ -730,7 +727,6 @@ function DeviceBindingSection(props: {
   useEffect(() => {
     const id = loadOrCreateDeviceId();
     setThisDeviceId(id);
-    setLabel(defaultDeviceLabel());
     const binding = loadDeviceBinding();
     setBoundHere(Boolean(binding && binding.storeId === storeId));
   }, [storeId]);
@@ -772,27 +768,6 @@ function DeviceBindingSection(props: {
     void load();
   }, [load]);
 
-  async function handleBind() {
-    setBusy("bind");
-    setError("");
-    setNotice("");
-    const result = await bindDeviceApi({
-      storeId,
-      label,
-      adminToken,
-      ledgerAccessToken,
-      ledgerRefreshToken,
-    });
-    setBusy("");
-    if (!result.ok) {
-      setError(result.error);
-      return;
-    }
-    setBoundHere(true);
-    setNotice("已授權呢部機。之後店員用工號 + PIN 就可以開機，唔需要店主帳號密碼。");
-    void load();
-  }
-
   async function handleRevoke(deviceId: string, isThisDevice: boolean) {
     if (!window.confirm(isThisDevice ? "撤銷呢部機之後，店員開機就要店主重新登入授權。確定？" : "確定撤銷呢部裝置？")) {
       return;
@@ -828,8 +803,9 @@ function DeviceBindingSection(props: {
     <section className="rounded-2xl border border-slate-200 bg-white p-4">
       <div className="text-base font-semibold text-slate-900">裝置授權</div>
       <div className="mt-1 text-sm leading-relaxed text-slate-500">
-        店主喺呢部機登入一次並授權之後，店員只需要「工號 + PIN」就可以開機，
-        唔需要知道店主帳號密碼。撤銷即刻生效（已開咗嘅機最長 12 小時後失效）。
+        店主喺呢部機用自己帳號登入一次，系統就會自動完成初始化；之後店員喺登入頁
+        揀自己嘅身份 + PIN 就入得，唔需要知道店主帳號密碼。撤銷即刻生效
+        （已開咗嘅機最長 12 小時後失效）。
       </div>
 
       {notice ? (
@@ -857,7 +833,9 @@ function DeviceBindingSection(props: {
           <div className="text-sm font-semibold text-slate-800">呢部機</div>
           {boundHere ? (
             <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
-              <div className="text-sm text-emerald-700">已授權 —— 店員可以直接簽到開機。</div>
+              <div className="text-sm text-emerald-700">
+                已初始化 —— 店員可以直接喺登入頁揀自己嘅身份。
+              </div>
               <button
                 className="min-h-[44px] rounded-full bg-red-50 px-4 text-red-700 disabled:opacity-60"
                 disabled={busy === thisDeviceId}
@@ -868,22 +846,8 @@ function DeviceBindingSection(props: {
               </button>
             </div>
           ) : (
-            <div className="mt-2 grid gap-2 sm:grid-cols-[1fr_auto]">
-              <input
-                className="min-h-[44px] rounded-xl border border-slate-200 px-3 text-base text-slate-800 outline-none focus:border-orange-400"
-                maxLength={60}
-                onChange={(event) => setLabel(event.target.value)}
-                placeholder="裝置名稱（例如：收銀台 iPad）"
-                value={label}
-              />
-              <button
-                className="min-h-[44px] rounded-full bg-orange-500 px-5 text-white disabled:opacity-60"
-                disabled={busy === "bind"}
-                onClick={() => void handleBind()}
-                type="button"
-              >
-                <span className="text-sm font-semibold">{busy === "bind" ? "授權中…" : "授權呢部機"}</span>
-              </button>
+            <div className="mt-2 text-sm leading-relaxed text-slate-600">
+              未初始化。店主用自己帳號登入一次就會自動完成，唔需要額外操作。
             </div>
           )}
         </div>

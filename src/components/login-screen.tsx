@@ -1,15 +1,17 @@
 "use client";
 
-import { KeyboardEvent, useEffect, useState } from "react";
+import { KeyboardEvent, useState } from "react";
 
 import { AppDownloadButton } from "@/components/app-download-button";
 import { PwaInstallButton, isRunningInNativeShell } from "@/components/pwa-install-button";
 import { getLedgerSupabaseClient } from "@/lib/ledger/supabase-client";
 import {
+  bindThisDevice,
   clearDeviceSignedOut,
+  defaultDeviceLabel,
   loadDeviceBinding,
-  restoreDeviceSession,
 } from "@/lib/pos/device-binding";
+import { saveOperatorSession } from "@/lib/pos/operator-session";
 import { applyWorkbenchSelection } from "@/lib/pos/apply-workbench";
 import {
   WORKBENCH_IDS,
@@ -88,6 +90,15 @@ function readRequestedWorkbench(): WorkbenchId | null {
   return findWorkbench(raw)?.id ?? null;
 }
 
+/** 登入第 2 步嘅身份卡（店主 或 已啟用店員）。 */
+type LoginIdentity = {
+  kind: "owner" | "staff";
+  id: string;
+  name: string;
+  staffNo?: string;
+  role: "owner" | "manager" | "cashier";
+};
+
 export function LoginScreen() {
   const [account, setAccount] = useState("");
   const [pin, setPin] = useState("");
@@ -97,32 +108,20 @@ export function LoginScreen() {
   const [isNativeShell] = useState<boolean>(() => isRunningInNativeShell());
 
   /**
-   * 裝置授權（2026-10-23，docs/160 §10）。
+   * 三步登入（2026-10-23，docs/160 §11）：
    *
-   * 店主授權過呢部機之後，店員唔需要知店主帳密 —— 喺呢度撳一下就用裝置憑證
-   * 換返 session 再跳去 `/operator`。呢個亦係「店主按咗登出」之後嘅復原入口
-   * （登出會寫 `device-signed-out` 標記，唔會自動開機）。
+   *   ① 輸入 8 位店舖帳號
+   *   ② 顯示呢個帳號可用嘅身份（店主 ＋ 已設定店員）
+   *   ③ 揀好身份 → 打 PIN → 登入
+   *
+   * 為何要咁做：舊流程店員一定要「店主先登入 → /operator 簽到」，
+   * 等於店員要知店主帳密。新流程店員自己揀自己、打自己 PIN 就入得。
    */
-  const [deviceBinding, setDeviceBinding] = useState<{ label: string } | null>(null);
-  const [restoringDevice, setRestoringDevice] = useState(false);
-
-  useEffect(() => {
-    const binding = loadDeviceBinding();
-    if (binding) setDeviceBinding({ label: binding.label || "已授權裝置" });
-  }, []);
-
-  async function continueAsDevice() {
-    setError("");
-    setRestoringDevice(true);
-    clearDeviceSignedOut();
-    const result = await restoreDeviceSession();
-    if (result.ok) {
-      window.location.replace("/operator");
-      return;
-    }
-    setRestoringDevice(false);
-    setError(result.error);
-  }
+  const [step, setStep] = useState<"account" | "identity" | "pin">("account");
+  const [identities, setIdentities] = useState<LoginIdentity[]>([]);
+  const [selected, setSelected] = useState<LoginIdentity | null>(null);
+  const [storeName, setStoreName] = useState("");
+  const [checking, setChecking] = useState(false);
 
   /**
    * 落地：套用工作台副作用，然後整頁跳去對應首頁。
@@ -138,7 +137,82 @@ export function LoginScreen() {
     window.location.replace(findWorkbench(workbench)?.homePath ?? "/");
   }
 
-  async function submit() {
+  /** 第 1 步 → 查身份。查唔到（新店／未跑 0074）就直接跳去 PIN（傳統店主登入）。 */
+  async function goToIdentity() {
+    setError("");
+    const normalizedAccount = account.replace(/\D/g, "").slice(0, 8);
+    if (!/^\d{8}$/.test(normalizedAccount)) {
+      setError("請輸入 8 位數字帳號。");
+      return;
+    }
+
+    setChecking(true);
+    try {
+      const response = await fetch("/api/pos/login/identities", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ account: normalizedAccount }),
+      });
+      const payload = (await response.json()) as {
+        ok?: boolean;
+        error?: string;
+        known?: boolean;
+        storeName?: string;
+        identities?: LoginIdentity[];
+      };
+      if (!response.ok || !payload.ok) {
+        setError(payload.error ?? "讀取身份失敗，請再試一次。");
+        return;
+      }
+
+      const list = payload.identities ?? [];
+      setStoreName(payload.storeName ?? "");
+      setIdentities(list);
+
+      // 未有任何店主登入過（known:false）或得一個身份 → 唔需要揀，直接打 PIN
+      if (!payload.known || list.length <= 1) {
+        setSelected(list[0] ?? { kind: "owner", id: "owner", name: "店主", role: "owner" });
+        setStep("pin");
+        return;
+      }
+      setStep("identity");
+    } catch {
+      setError("網絡錯誤，請稍後再試。");
+    } finally {
+      setChecking(false);
+    }
+  }
+
+  function chooseIdentity(identity: LoginIdentity) {
+    setSelected(identity);
+    setPin("");
+    setError("");
+    setStep("pin");
+  }
+
+  function backFromPin() {
+    setPin("");
+    setError("");
+    setStep(identities.length > 1 ? "identity" : "account");
+  }
+
+  function backToAccount() {
+    setPin("");
+    setError("");
+    setSelected(null);
+    setStep("account");
+  }
+
+  function submitPin() {
+    if (!selected) return;
+    if (selected.kind === "owner") {
+      void loginAsOwner();
+      return;
+    }
+    void loginAsStaff();
+  }
+
+  async function loginAsOwner() {
     setError("");
     const normalizedAccount = account.replace(/\D/g, "").slice(0, 8);
     const normalizedPin = pin.replace(/\D/g, "").slice(0, 4);
@@ -202,42 +276,23 @@ export function LoginScreen() {
 
       // 統一行為：saveAuthSession 已經自動 dispatch `pos-auth-changed`。
       // 任何 React component 訂閱呢個事件都會自動 reset + 重 backfill。
+      // （bootstrap 對齊 / Supabase setSession / 工作台跳轉一律喺 finishLogin 做，
+      //   店主同店員兩條路徑共用，避免兩份漂移。）
 
-      const cachedBootstrap = loadBootstrapCache();
-      if (cachedBootstrap && session.name) {
-        saveBootstrapCache(applyLedgerMerchantToBootstrap(cachedBootstrap, session));
-      }
-
-      const client = getLedgerSupabaseClient();
-      if (client && session.ledgerAccessToken && session.ledgerRefreshToken) {
-        await client.auth.setSession({
-          access_token: session.ledgerAccessToken,
-          refresh_token: session.ledgerRefreshToken,
+      // 自動初始化呢部機（docs/160 §11）：店主登入一次之後，店員就可以喺
+      // 登入頁揀自己嘅身份 + PIN 開機，唔需要再經店主。
+      // 🔴 失敗唔可以阻登入（可能 0073 未跑）—— 只 log，下次登入再試。
+      if (session.merchantId) {
+        const init = await bindThisDevice({
+          storeId: session.merchantId,
+          label: defaultDeviceLabel(),
+          ledgerAccessToken: session.ledgerAccessToken,
+          ledgerRefreshToken: session.ledgerRefreshToken,
         });
+        if (!init.ok) console.warn("[login] 裝置自動初始化未完成:", init.error);
       }
 
-      // ── 要唔要跳過「選擇工作台」？──
-      const granted: WorkbenchId[] = session.allowedModules?.workbenches ?? [...WORKBENCH_IDS];
-
-      const requested = readRequestedWorkbench();
-      if (requested && granted.includes(requested)) {
-        await enterWorkbench(requested, session);
-        return;
-      }
-
-      const remembered = resolveRememberedWorkbench(session.merchantId, granted);
-      if (remembered) {
-        await enterWorkbench(remembered, session);
-        return;
-      }
-
-      // 未揀過 / 冇記住 → 入**統一入口**（`/`＝工作台選擇頁）。
-      //
-      // ⚠️ 2026-09-17：由 `/select-workbench` 改為 `/`。
-      //    兩者 render 同一個元件，但 `/` 先係對外嘅唯一入口 ——
-      //    書籤、文件、PWA start_url 一律用 `/`，避免商家要記兩條路徑。
-      //    （`/select-workbench` 保留為相容別名＋落單專用終端嘅逃生門。）
-      window.location.replace("/");
+      await finishLogin(session);
     } catch (err) {
       setError(err instanceof Error ? err.message : "登入失敗");
     } finally {
@@ -245,10 +300,137 @@ export function LoginScreen() {
     }
   }
 
+  /**
+   * 店員登入（docs/160 §11）。
+   *
+   * 店員冇 Ledger 戶口，但會員／加值／報表要 Ledger token ⇒ 由 server 用
+   * 「呢部機已初始化」嘅憑證代為換一對新 token（`/api/pos/login/identity`）。
+   *
+   * 🔴 未初始化就明確叫店主先登入一次，唔可以靜靜降級 ——
+   *    否則店員開到機但冇會員／冇報表，更難查。
+   */
+  async function loginAsStaff() {
+    if (!selected || selected.kind !== "staff") return;
+    setError("");
+
+    const normalizedAccount = account.replace(/\D/g, "").slice(0, 8);
+    const normalizedPin = pin.replace(/\D/g, "").slice(0, 4);
+    if (!/^\d{4}$/.test(normalizedPin)) {
+      setError("請輸入 4 位 PIN。");
+      return;
+    }
+
+    const binding = loadDeviceBinding();
+    if (!binding) {
+      // 呢部機從未由店主登入過（或 storage 被清）⇒ 冇憑證可以換 Ledger token
+      setError("呢部機未初始化，請店主先登入一次。");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const response = await fetch("/api/pos/login/identity", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          account: normalizedAccount,
+          staffNo: selected.staffNo,
+          pin: normalizedPin,
+          deviceId: binding.deviceId,
+          deviceSecret: binding.secret,
+        }),
+      });
+      const payload = (await response.json()) as {
+        ok?: boolean;
+        error?: string;
+        session?: AuthSession;
+        token?: string;
+        expiresAt?: string;
+        operator?: {
+          staffId: string;
+          staffNo: string;
+          name: string;
+          role: "manager" | "cashier";
+          permissions: Parameters<typeof saveOperatorSession>[0]["permissions"];
+        };
+      };
+
+      if (!response.ok || !payload.ok || !payload.session || !payload.operator || !payload.token) {
+        setError(payload.error ?? "登入失敗，請再試一次。");
+        return;
+      }
+
+      const session = payload.session;
+      saveAuthSession(session);
+      clearDeviceSignedOut();
+
+      saveOperatorSession({
+        storeId: session.merchantId ?? "",
+        staffId: payload.operator.staffId,
+        staffNo: payload.operator.staffNo,
+        name: payload.operator.name,
+        role: payload.operator.role,
+        permissions: payload.operator.permissions,
+        token: payload.token,
+        signedInAt: new Date().toISOString(),
+        expiresAt: payload.expiresAt ?? "",
+      });
+
+      await finishLogin(session);
+    } catch {
+      setError("網絡錯誤，請稍後再試。");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  /** 登入成功後共通落地：bootstrap 對齊 → Supabase session → 工作台。 */
+  async function finishLogin(session: AuthSession) {
+    const cachedBootstrap = loadBootstrapCache();
+    if (cachedBootstrap && session.name) {
+      saveBootstrapCache(applyLedgerMerchantToBootstrap(cachedBootstrap, session));
+    }
+
+    const client = getLedgerSupabaseClient();
+    if (client && session.ledgerAccessToken && session.ledgerRefreshToken) {
+      await client.auth.setSession({
+        access_token: session.ledgerAccessToken,
+        refresh_token: session.ledgerRefreshToken,
+      });
+    }
+
+    // ── 要唔要跳過「選擇工作台」？──
+    const granted: WorkbenchId[] = session.allowedModules?.workbenches ?? [...WORKBENCH_IDS];
+
+    const requested = readRequestedWorkbench();
+    if (requested && granted.includes(requested)) {
+      await enterWorkbench(requested, session);
+      return;
+    }
+
+    const remembered = resolveRememberedWorkbench(session.merchantId, granted);
+    if (remembered) {
+      await enterWorkbench(remembered, session);
+      return;
+    }
+
+    // 未揀過 / 冇記住 → 入**統一入口**（`/`＝工作台選擇頁）。
+    //
+    // ⚠️ 2026-09-17：由 `/select-workbench` 改為 `/`。
+    //    兩者 render 同一個元件，但 `/` 先係對外嘅唯一入口 ——
+    //    書籤、文件、PWA start_url 一律用 `/`，避免商家要記兩條路徑。
+    //    （`/select-workbench` 保留為相容別名＋落單專用終端嘅逃生門。）
+    window.location.replace("/");
+  }
+
   function handleEnter(event: KeyboardEvent<HTMLInputElement>) {
     if (event.key !== "Enter") return;
     event.preventDefault();
-    void submit();
+    if (step === "account") {
+      void goToIdentity();
+      return;
+    }
+    if (step === "pin") submitPin();
   }
 
   return (
@@ -270,43 +452,110 @@ export function LoginScreen() {
           <div className="text-center">
             <div className="text-sm font-semibold tracking-widest text-orange-200/90">澳門會員通POS系統</div>
             <div className="mt-2 text-2xl font-semibold text-white">登入</div>
-            <div className="mt-2 text-sm text-white/70">請使用 Ledger 商戶 8 位電話及 4 位 PIN。</div>
+            <div className="mt-2 text-sm text-white/70">
+              輸入店舖帳號，再揀你嘅身份登入。
+            </div>
           </div>
 
-          <div className="mt-6 grid gap-3">
-            <label className="grid gap-1">
-              <span className="text-xs font-semibold text-white/70">帳號（8 位數字）</span>
-              <input
-                className="rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-white outline-none ring-orange-500/40 placeholder:text-white/30 focus:ring-2"
-                inputMode="numeric"
-                maxLength={8}
-                onKeyDown={handleEnter}
-                onChange={(event) => {
-                  setError("");
-                  setAccount(event.target.value.replace(/\D/g, "").slice(0, 8));
-                }}
-                placeholder="商戶電話"
-                value={account}
-              />
-            </label>
+          {step === "account" ? (
+            <div className="mt-6 grid gap-3">
+              <label className="grid gap-1">
+                <span className="text-xs font-semibold text-white/70">帳號（8 位數字）</span>
+                <input
+                  className="rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-base text-white outline-none ring-orange-500/40 placeholder:text-white/30 focus:ring-2"
+                  inputMode="numeric"
+                  maxLength={8}
+                  onKeyDown={handleEnter}
+                  onChange={(event) => {
+                    setError("");
+                    setAccount(event.target.value.replace(/\D/g, "").slice(0, 8));
+                  }}
+                  placeholder="店舖電話"
+                  value={account}
+                />
+              </label>
+              <div className="text-xs leading-relaxed text-white/45">
+                下一步會顯示呢個帳號可以用嘅身份（店主／店員）。
+              </div>
+            </div>
+          ) : null}
 
-            <label className="grid gap-1">
-              <span className="text-xs font-semibold text-white/70">密碼（4 位 PIN）</span>
-              <input
-                className="rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-white outline-none ring-orange-500/40 placeholder:text-white/30 focus:ring-2"
-                inputMode="numeric"
-                maxLength={4}
-                onKeyDown={handleEnter}
-                onChange={(event) => {
-                  setError("");
-                  setPin(event.target.value.replace(/\D/g, "").slice(0, 4));
-                }}
-                placeholder="PIN"
-                type="password"
-                value={pin}
-              />
-            </label>
-          </div>
+          {step === "identity" ? (
+            <div className="mt-6 grid gap-2">
+              <div className="text-xs text-white/60">
+                {storeName ? `${storeName} · ` : ""}揀你要用嘅身份
+              </div>
+              {identities.map((identity) => (
+                <button
+                  className="flex min-h-[56px] w-full items-center justify-between gap-3 rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-left hover:border-orange-400/60 hover:bg-white/10"
+                  key={identity.id}
+                  onClick={() => chooseIdentity(identity)}
+                  type="button"
+                >
+                  <span className="min-w-0">
+                    <span className="block truncate text-sm font-semibold text-white">
+                      {identity.name}
+                    </span>
+                    <span className="mt-0.5 block text-xs text-white/50">
+                      {identity.kind === "owner"
+                        ? "店主 · Ledger 帳號"
+                        : `工號 ${identity.staffNo} · ${identity.role === "manager" ? "店長" : "收銀員"}`}
+                    </span>
+                  </span>
+                  <span className="shrink-0 text-lg text-white/30">›</span>
+                </button>
+              ))}
+              <button
+                className="mt-1 min-h-[44px] text-xs text-white/50 hover:text-white/80"
+                onClick={backToAccount}
+                type="button"
+              >
+                返回，改帳號
+              </button>
+            </div>
+          ) : null}
+
+          {step === "pin" ? (
+            <div className="mt-6 grid gap-3">
+              <div className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-semibold text-white">
+                    {selected?.name ?? "店主"}
+                  </div>
+                  <div className="mt-0.5 text-xs text-white/50">
+                    {selected?.kind === "owner"
+                      ? "店主 · Ledger PIN"
+                      : `工號 ${selected?.staffNo} · ${selected?.role === "manager" ? "店長" : "收銀員"}`}
+                  </div>
+                </div>
+                <button
+                  className="shrink-0 rounded-full border border-white/15 px-3 py-1.5 text-xs text-white/70 hover:bg-white/10"
+                  onClick={backFromPin}
+                  type="button"
+                >
+                  切換
+                </button>
+              </div>
+
+              <label className="grid gap-1">
+                <span className="text-xs font-semibold text-white/70">PIN（4 位數字）</span>
+                <input
+                  autoFocus
+                  className="rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-base text-white outline-none ring-orange-500/40 placeholder:text-white/30 focus:ring-2"
+                  inputMode="numeric"
+                  maxLength={4}
+                  onKeyDown={handleEnter}
+                  onChange={(event) => {
+                    setError("");
+                    setPin(event.target.value.replace(/\D/g, "").slice(0, 4));
+                  }}
+                  placeholder="PIN"
+                  type="password"
+                  value={pin}
+                />
+              </label>
+            </div>
+          ) : null}
 
           {error ? (
             <div className="mt-4 rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm font-semibold text-red-100">
@@ -314,31 +563,25 @@ export function LoginScreen() {
             </div>
           ) : null}
 
-          <button
-            className="mt-5 w-full rounded-2xl bg-orange-500 px-4 py-3 text-sm font-semibold text-white hover:bg-orange-600 disabled:opacity-60"
-            disabled={loading}
-            onClick={() => void submit()}
-            type="button"
-          >
-            {loading ? "正在登入…" : "登入"}
-          </button>
-
-          {deviceBinding ? (
-            <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
-              <div className="text-xs font-semibold text-white/80">呢部機已授權</div>
-              <div className="mt-1 text-xs leading-relaxed text-white/50">
-                {deviceBinding.label} · 店員可以直接用工號 + PIN 簽到，唔需要店主帳號密碼。
-              </div>
-              <button
-                className="mt-3 w-full rounded-xl border border-white/15 bg-white/10 px-4 py-3 text-sm font-semibold text-white hover:bg-white/15 disabled:opacity-60"
-                disabled={restoringDevice}
-                onClick={() => void continueAsDevice()}
-                type="button"
-              >
-                {restoringDevice ? "正在開機…" : "店員簽到"}
-              </button>
-            </div>
-          ) : null}
+          {step === "account" ? (
+            <button
+              className="mt-5 w-full rounded-2xl bg-orange-500 px-4 py-3 text-sm font-semibold text-white hover:bg-orange-600 disabled:opacity-60"
+              disabled={checking}
+              onClick={() => void goToIdentity()}
+              type="button"
+            >
+              {checking ? "查詢中…" : "下一步"}
+            </button>
+          ) : (
+            <button
+              className="mt-5 w-full rounded-2xl bg-orange-500 px-4 py-3 text-sm font-semibold text-white hover:bg-orange-600 disabled:opacity-60"
+              disabled={loading}
+              onClick={submitPin}
+              type="button"
+            >
+              {loading ? "正在登入…" : "登入"}
+            </button>
+          )}
 
           {/*
             下載入口（2026-09-23）——裝置偵測決定文案：

@@ -133,6 +133,7 @@ admin 頁按 `resolveAdminScope()`（店主只見自己店、平台見全部）�
 
 1. **POS Supabase** → SQL Editor 貼 `supabase/migrations/0072_pos_staff_permissions.sql`。
 2. **POS Supabase** → SQL Editor 貼 `supabase/migrations/0073_pos_bound_devices.sql`（§10 裝置授權）。
+3. **POS Supabase** → SQL Editor 貼 `supabase/migrations/0074_pos_store_accounts.sql`（§11 帳號 → 身份清單）。
 3. 確認 server env 有其中一條（簽 token 用）：
    `POS_DEVICE_TOKEN_SECRET` ／ `ADMIN_SESSION_SECRET` ／ `SUPABASE_SERVICE_ROLE_KEY`。
    **改完 env 一定要重新部署**（env 只對新部署生效 —— memory 高頻坑）。
@@ -299,3 +300,99 @@ Supabase **每次 refresh 都輪換 refresh token**（舊票即刻失效）。�
 - `src/components/staff-permission-panel.tsx`（裝置授權區塊）
 - `src/components/device-settings.tsx`（傳 `enableDeviceBinding`）
 - `src/lib/ledger/session.ts`（輪換後同步 server；登出寫 `device-signed-out`）
+
+---
+
+## 11. 登入流程改版（2026-10-23 同日追加）
+
+### 11.1 問題（J 提出）
+
+> 「『授權呢部機』這個動作好奇怪，其實應該係後面自己已經做咗。
+>  第一次商家用嘅時候就應該用店主號登入過；之後就算店主按咗登出，
+>  佢哋都能夠用員工號登入。」
+
+§10 雖然解決了「店員要知店主帳密」，但要店主**額外撳一次**「授權呢部機」，
+而且店員仍然要先去 `/operator` 簽到。J 要求改成：
+
+```
+① 輸入帳號 → ② 顯示可用身份（店主＋店員）→ ③ 揀身份 → ④ 打 PIN → 登入
+```
+
+### 11.2 方案
+
+| 步 | 做咩 | 實作 |
+|---|---|---|
+| ① | 輸入 8 位店舖帳號 | `POST /api/pos/login/identities` |
+| ② | 顯示可用身份 | 同上（店主 ＋ `pos_staff` 已啟用員工） |
+| ③ | 揀身份 | 純 UI（卡片） |
+| ④ | 打 PIN | 店主 → `/api/ledger/login`；店員 → `POST /api/pos/login/identity` |
+
+**「授權呢部機」按鈕已移除**：店主用自己帳號成功登入之後，客戶端會**自動**初始化
+呢部機（`bindThisDevice()`），UI 上冇任何額外步驟。
+
+### 11.3 為何要 `pos_store_accounts`（migration 0074）
+
+第 ② 步要用「帳號」查店舖，但未登入時：
+
+- Ledger 契約明文 **冇** `login` / `verify_pin` / `check_phone` RPC，亦禁止打 Ledger Web 登入頁；
+- POS 所有表都以 `store_id` 為主鍵，冇反查。
+
+⇒ 自己維護 `pos_store_accounts(account → store_id, store_name)`，
+**由 `/api/ledger/login` 成功時自動寫入**（唯一權威知道 `merchantId` 的地方，零額外請求）。
+
+⚠️ 所以**第一次**使用時（未有任何店主登入過），第 ② 步只有「店主」一張卡 ——
+`known:false` ⇒ 客戶端直接跳去傳統「帳號 + PIN」，唔會卡住。
+
+### 11.4 安全取捨
+
+| 風險 | 處理 |
+|---|---|
+| 身份清單 = 帳號枚舉面（知道 8 位號碼就見到員工姓名） | per-IP 10 次／分鐘；只回姓名／工號／角色，**永不**回 PIN／權限明細；只回 active |
+| 店員登入等於「用店主嘅 Ledger session」 | 同 §10.6 一致：裝置持有 = session 持有，員工離職／賣機要撤銷 |
+| 4 位 PIN 只有 10⁴ 組合 | per-IP 10 次／分鐘 ＋ per-staff 連續 5 次鎖 15 分鐘（`authenticatePosStaff`） |
+| 有人用呢條 route 做 PIN 爆破 | **先驗裝置 secret，後驗 PIN**；冇有效裝置憑證根本行不到 PIN 驗證 |
+
+如果商家介意「見到員工姓名」，可以改成只回工號（改 `identities` route 一行）。
+
+### 11.5 店員登入時點樣拿到 Ledger token
+
+店員冇 Ledger 戶口，但會員／加值／報表要 `ledgerAccessToken`。
+`/api/pos/login/identity` 會用 §10 嘅裝置憑證（`mintSessionFromBoundDevice()`）
+代為換一對新 token：
+
+- 部機**已初始化** → 成功，同時簽 `sv1`（真權限）＋ `pv1`（終端寫入）；
+- 部機**未初始化**（新機／storage 被清）→ 401 `device_not_ready`，提示「請店主先登入一次」。
+
+### 11.6 `/operator` 嘅角色改變
+
+- **唔再係店員開機必經之路**（登入頁已經直接揀身份）。
+- 保留做「**換班**」：店舖 L1 一直開住，換人時去 `/operator` 打工號 + PIN，
+  唔需要登出再登入。
+- 店員喺登入頁登入時，會**同時**寫入 operator session（`sv1`），所以入到 POS
+  就即刻係佢嘅權限。
+
+### 11.7 改動檔案（§11）
+
+**新增**
+
+- `supabase/migrations/0074_pos_store_accounts.sql`
+- `src/lib/pos/store-account-server.ts`（帳號對照讀寫，寫入永遠唔會 throw）
+- `src/lib/pos/device-session.server.ts`（由裝置憑證換 Ledger token；兩個入口共用）
+- `src/app/api/pos/login/identities/route.ts`（帳號 → 身份清單，IP 限流）
+- `src/app/api/pos/login/identity/route.ts`（店員身份 + PIN → 完整 session）
+
+**修改**
+
+- `src/app/api/ledger/login/route.ts`（成功時寫 `pos_store_accounts`，失敗靜默）
+- `src/app/api/pos/device/session/route.ts`（改用 `mintSessionFromBoundDevice`）
+- `src/components/login-screen.tsx`（三步登入；店主登入後自動初始化；移除「店員簽到」卡）
+- `src/components/staff-permission-panel.tsx`（移除「授權呢部機」按鈕，改成狀態顯示）
+
+### 11.8 驗收（§11 追加）
+
+- [ ] 店主第一次登入（0074 已跑）→ 再開 `/login` 輸入同一帳號 → 見到「店主 + 店員」清單。
+- [ ] 揀店員 + PIN → 直接入 POS，側欄係該店員權限（唔需要經 `/operator`）。
+- [ ] 店主按登出 → 再開 `/login` → 仍然可以揀店員登入（唔需要店主帳密）。
+- [ ] 揀店主 + 錯 PIN 5 次 → 鎖 15 分鐘；揀店員 + 錯 PIN 5 次 → 該員工鎖 15 分鐘。
+- [ ] 撤銷裝置 → 店員登入 → 提示「呢部機未初始化，請店主先登入一次」。
+- [ ] DB 查 `pos_store_accounts`：每個店主帳號一 row，`store_id` 正確。
