@@ -163,8 +163,17 @@ function QuickOrderActions({
 export function LocalOrdersPanel({
   dateFilter = "today",
   focusOrderId = null,
+  layout = "table",
   onFilteredOrdersChange,
 }: {
+  /**
+   * 列表版面（2026-10-23，純 UI）：
+   * - `"table"`（預設）＝原本 8 欄表格，全寬時用；
+   * - `"cards"` ＝ 3 行卡片，`/orders` 左右分欄（半欄闊度約 546px）時用。
+   * ⚠️ 只係換 render，**唔影響任何篩選／結帳／返結／自助單邏輯**（兩種版面共用同一批
+   *    `filteredOrders` 同 `renderRowActions()`）。
+   */
+  layout?: "table" | "cards";
   /** 時間篩選：key 字串或 `{ key, custom }`（2026-09-13 加「自訂」）。 */
   dateFilter?: DateFilterArg;
   /**
@@ -578,6 +587,107 @@ export function LocalOrdersPanel({
     }
   }
 
+  /**
+   * 每張單嘅操作掣（2026-10-23）。
+   *
+   * 由原本直接寫喺 `<td>` 入面抽成 function，只係為咗**表格版同卡片版共用同一份 JSX**
+   * —— 兩邊各自寫一份嘅話，日後加減一粒掣（例如新增「補打帳單」）一定會漏一邊，
+   * 到時同一個動作喺兩種版面行為唔同，最難查。
+   *
+   * ⚠️ 入面所有 handler（`router.push` 目的地、`setReopenTargetOrderId`、
+   *    `confirmSelfOrder`…）**同改動前逐字一樣**，呢次係純排版重構。
+   */
+  function renderRowActions(order: PosOrder) {
+    return (
+      <div className="flex flex-wrap items-center justify-end gap-1.5">
+        <button
+          className="whitespace-nowrap rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white"
+          onClick={() => {
+            if (order.status === "settled") {
+              // 完成狀態：堂食 + 外賣都彈收據預覽（按打印模板樣式），唔跳點餐介面
+              setReceiptPreviewOrderId(order.id);
+              return;
+            }
+            if (!order.tableId || order.tableId === "counter") {
+              // 快餐/外賣/無枱（未結）→ 保留小窗唯讀
+              setReopenReason("");
+              setViewingOrderId(order.id);
+            } else {
+              // 未結堂食單（本地枱單 + 已轉枱線上堂食單）→ 直接跳枱面編輯
+              //
+              // 🔴 2026-09-22 修：路徑一定要係 **`/pos`**。
+              // 2026-09-17 起 `/` 已經由「收銀台」改成「**統一入口／選擇工作台**」
+              // 頁（見 `src/app/page.tsx`），收銀台搬去 `/pos`。
+              // 舊寫法 push `/?tableId=…` ⇒ 撳「查看」會掉去「請選擇要進入嘅工作台」，
+              // 收銀員完全入唔到枱面（商家 2026-09-22 回報：「一按查看就跳去工作台」）。
+              router.push(
+                `/pos?tableId=${encodeURIComponent(order.tableId)}&orderId=${encodeURIComponent(order.id)}`,
+              );
+            }
+          }}
+          type="button"
+        >
+          {t("查看")}
+        </button>
+        {/* 🔴 2026-09-13：守門由 `status === "settled"` 放寬成 `isReopenable(order)`。
+            `isReopenable()` 本身就**已經接受 `paid`**（見 pos-orders.ts），
+            但呢度舊寫法多夾一個 `settled` 條件 → 排位後已付款嘅線上堂食單
+            （本地寫 `paid`）撳唔到返結，同被放寬嘅結帳入口唔一致。
+            口徑：`paid`（已結帳待收尾）同 `settled` 都要出返結掣。 */}
+        {isReopenable(order) ? (
+          <button
+            className="whitespace-nowrap rounded-xl bg-amber-600 px-3 py-2 text-xs font-semibold text-white"
+            onClick={() => {
+              setReopenReason("");
+              setReopenTargetOrderId(order.id);
+            }}
+            type="button"
+          >
+            {t("返結帳")}
+          </button>
+        ) : null}
+        <QuickOrderActions onChanged={handleQuickAction} order={order} />
+        {/* 「取消結帳」（2026-09-12）：客人落單後幾秒內反悔嘅逃生口。
+            只喺未收款單（draft / sent_to_kitchen）出現，收費單唔會混淆。 */}
+        {canCancelSettle(order) ? (
+          <button
+            className="whitespace-nowrap rounded-xl bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700 ring-1 ring-rose-200"
+            onClick={() => openCancelSettle(order)}
+            type="button"
+          >
+            {t("取消")}
+          </button>
+        ) : null}
+        {/* 自助單 draft → 顯示「接受 / 拒絕」掣（規格 6：開關熄咗時需人手接受，統一用 SelfOrderActionButtons 避免走樣） */}
+        {order.status === "draft" && isSelfOrder(order) ? (
+          <SelfOrderActionButtons
+            orderLabel={order.localOrderNo}
+            onConfirm={() => {
+              const result = confirmSelfOrder(order.id);
+              if (result.ok) {
+                setToast(t("已接受自助單 {no}", { no: order.localOrderNo }));
+                refresh();
+              } else {
+                setToast(result.error ?? "接受失敗");
+              }
+              return result;
+            }}
+            onReject={() => {
+              const result = rejectSelfOrder(order.id);
+              if (result.ok) {
+                setToast(t("已拒絕自助單 {no}", { no: order.localOrderNo }));
+                refresh();
+              } else {
+                setToast(result.error ?? "拒絕失敗");
+              }
+              return result;
+            }}
+          />
+        ) : null}
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="shrink-0 border-b border-slate-200 bg-white px-4 py-3">
@@ -597,11 +707,21 @@ export function LocalOrdersPanel({
               {t(dateFilterLabel(dateFilter))} · {activeTabLabel}{" "}
               {t("· 共 {total} 張 · 新單 {draft} 張", { total: filteredOrders.length, draft: draftCount })}</div>
           </div>
-          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+          {/* 卡片版（半欄闊度）：chips 要**獨佔一行**（`basis-full`）。
+              ⚠️ 唔可以用 `flex-1`：flex-basis 0 令佢永遠「塞得落」第一行，
+                 結果係被壓窄再橫向滾動，最尾兩粒 chip（已返結／已取消）被切走（實測）。
+              表格版（全寬）維持原本 `flex-1 flex-wrap`，外觀零改動。 */}
+          <div
+            className={`flex min-w-0 items-center gap-2 ${
+              layout === "cards" ? "order-3 basis-full flex-nowrap overflow-x-auto" : "flex-1 flex-wrap"
+            }`}
+          >
             {STATUS_TABS.map((tab) => (
               <button
                 key={tab.key}
-                className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
+                className={`shrink-0 whitespace-nowrap rounded-full font-semibold ${
+                  layout === "cards" ? "px-2 py-1 text-[11px]" : "px-3 py-1.5 text-xs"
+                } ${
                   tab.key === statusTab ? "bg-orange-500 text-white" : "bg-slate-100 text-slate-700"
                 }`}
                 onClick={() => setStatusTab(tab.key)}
@@ -611,7 +731,7 @@ export function LocalOrdersPanel({
               </button>
             ))}
           </div>
-          <div className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-2">
+          <div className={`ml-auto flex shrink-0 flex-wrap items-center justify-end gap-2 ${layout === "cards" ? "order-2" : ""}`}>
             {/*
               2026-09-15 J 要求：加一粒「**線下接單**」—— 同上一張卡（`online-orders.tsx`
               嘅「線上接單」）完全對稱：上卡「線上接單 ＋ 自動接單」，呢卡「線下接單 ＋ 自動接自助單」。
@@ -638,6 +758,91 @@ export function LocalOrdersPanel({
             {dateFilter === "today"
               ? t("今天暫無線下訂單")
               : t("{range}暫無線下訂單", { range: t(dateFilterLabel(dateFilter)) })}
+          </div>
+        ) : layout === "cards" ? (
+          /*
+            卡片版（2026-10-23，純 UI）：`/orders` 左右分欄後每邊只有約 546px，
+            8 欄表格一定逼爆。所以半欄闊度用 3 行卡片：
+            ① 單號／枱別／時間／狀態 ② 菜品／來源 ③ 金額／付款·差額／操作。
+            ⚠️ 所有 badge 同金額計算**同表格版逐個對應**（同一批 helper），
+               操作掣亦係同一支 `renderRowActions()`，唔會出現兩種版面行為唔同。
+          */
+          <div className="flex flex-col gap-2.5">
+            {filteredOrders.map((order) => {
+              const badge = getOrderStatusBadge(order);
+              const paymentBadge = getPaymentBadge(order);
+              const diffBadge = getDiffHandledBadge(order);
+              const itemSaving = orderItemDiscountTotal(order.items);
+              const wholeSaving = Math.max(0, order.discountAmount ?? 0);
+              const original = Math.round((order.total + itemSaving + wholeSaving) * 100) / 100;
+              return (
+                <article
+                  className="rounded-2xl border border-slate-200 bg-white px-3.5 py-3 shadow-sm"
+                  key={order.id}
+                >
+                  <div className="flex items-center gap-2">
+                    <div className="truncate text-base font-bold text-slate-900">{order.localOrderNo}</div>
+                    <ReopenBadge order={order} />
+                    <span className="shrink-0 rounded-md bg-slate-100 px-1.5 py-0.5 text-[11px] font-bold text-slate-600">
+                      {order.tableName}
+                    </span>
+                    <div className="ml-auto flex shrink-0 items-center gap-2">
+                      <span className="text-[11px] tabular-nums text-slate-400">
+                        {formatMacauDateTime(orderEventISO(order))}
+                      </span>
+                      <span
+                        className={`inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-0.5 text-xs font-semibold ${badge.bgClass} ${badge.textClass}`}
+                      >
+                        <span className={`h-2 w-2 rounded-full ${badge.dotClass}`} />
+                        {t(badge.label)}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="mt-1.5 flex items-center gap-2">
+                    <div className="min-w-0 flex-1 truncate text-[13px] text-slate-500">
+                      {order.items
+                        .slice(0, 3)
+                        .map((item) => `${item.name}×${item.quantity}`)
+                        .join(" · ")}
+                    </div>
+                    <OrderSourceBadge order={order} />
+                  </div>
+
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <div className="flex flex-col">
+                      <span className="text-[17px] font-bold leading-tight tabular-nums text-slate-900">
+                        {formatMoney(order.total, currency)}
+                      </span>
+                      {itemSaving + wholeSaving > 0 ? (
+                        <span className="mt-0.5 text-[11px] tabular-nums text-amber-700">
+                          {t("已優惠 -{amt}", { amt: formatMoney(itemSaving + wholeSaving, currency) })}
+                          <span className="ml-1 text-slate-400 line-through">
+                            {t("原 {amt}", { amt: formatMoney(original, currency) })}
+                          </span>
+                        </span>
+                      ) : null}
+                    </div>
+                    {isQuickCounterOrder(order) ? (
+                      <span
+                        className={`inline-flex shrink-0 items-center whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-semibold ${paymentBadge.bgClass} ${paymentBadge.textClass}`}
+                      >
+                        {t(paymentBadge.label)}
+                      </span>
+                    ) : null}
+                    {diffBadge ? (
+                      <span
+                        className={`inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-semibold ${diffBadge.bgClass} ${diffBadge.textClass}`}
+                      >
+                        <span className={`h-1.5 w-1.5 rounded-full ${diffBadge.dotClass}`} />
+                        {t(diffBadge.label)}
+                      </span>
+                    ) : null}
+                    <div className="ml-auto">{renderRowActions(order)}</div>
+                  </div>
+                </article>
+              );
+            })}
           </div>
         ) : (
           /*
@@ -758,97 +963,8 @@ export function LocalOrdersPanel({
                       <td className={TD_CELL}>
                         <OrderSourceBadge order={order} />
                       </td>
-                      <td className={`${TD_CELL} text-right`}>
-                        {/* 一行過（2026-09-11）：每粒掣都要 `whitespace-nowrap`，
-                            否則 2 字掣（查看／接受／拒絕）喺窄欄會被逐字拆成兩行
-                            （「拒／絕」），正正係用戶反映嘅症狀。 */}
-                        <div className="flex flex-wrap items-center justify-end gap-1.5">
-                          <button
-                            className="whitespace-nowrap rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white"
-                            onClick={() => {
-                              if (order.status === "settled") {
-                                // 完成狀態：堂食 + 外賣都彈收據預覽（按打印模板樣式），唔跳點餐介面
-                                setReceiptPreviewOrderId(order.id);
-                                return;
-                              }
-                              if (!order.tableId || order.tableId === "counter") {
-                                // 快餐/外賣/無枱（未結）→ 保留小窗唯讀
-                                setReopenReason("");
-                                setViewingOrderId(order.id);
-                              } else {
-                                // 未結堂食單（本地枱單 + 已轉枱線上堂食單）→ 直接跳枱面編輯
-                                //
-                                // 🔴 2026-09-22 修：路徑一定要係 **`/pos`**。
-                                // 2026-09-17 起 `/` 已經由「收銀台」改成「**統一入口／選擇工作台**」
-                                // 頁（見 `src/app/page.tsx`），收銀台搬去 `/pos`。
-                                // 舊寫法 push `/?tableId=…` ⇒ 撳「查看」會掉去「請選擇要進入嘅工作台」，
-                                // 收銀員完全入唔到枱面（商家 2026-09-22 回報：「一按查看就跳去工作台」）。
-                                router.push(
-                                  `/pos?tableId=${encodeURIComponent(order.tableId)}&orderId=${encodeURIComponent(order.id)}`,
-                                );
-                              }
-                            }}
-                            type="button"
-                          >
-                            {t("查看")}
-                          </button>
-                          {/* 🔴 2026-09-13：守門由 `status === "settled"` 放寬成 `isReopenable(order)`。
-                              `isReopenable()` 本身就**已經接受 `paid`**（見 pos-orders.ts），
-                              但呢度舊寫法多夾一個 `settled` 條件 → 排位後已付款嘅線上堂食單
-                              （本地寫 `paid`）撳唔到返結，同被放寬嘅結帳入口唔一致。
-                              口徑：`paid`（已結帳待收尾）同 `settled` 都要出返結掣。 */}
-                          {isReopenable(order) ? (
-                            <button
-                              className="whitespace-nowrap rounded-xl bg-amber-600 px-3 py-2 text-xs font-semibold text-white"
-                              onClick={() => {
-                                setReopenReason("");
-                                setReopenTargetOrderId(order.id);
-                              }}
-                              type="button"
-                            >
-                              {t("返結帳")}
-                            </button>
-                          ) : null}
-                          <QuickOrderActions onChanged={handleQuickAction} order={order} />
-                          {/* 「取消結帳」（2026-09-12）：客人落單後幾秒內反悔嘅逃生口。
-                              只喺未收款單（draft / sent_to_kitchen）出現，收費單唔會混淆。 */}
-                          {canCancelSettle(order) ? (
-                            <button
-                              className="whitespace-nowrap rounded-xl bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700 ring-1 ring-rose-200"
-                              onClick={() => openCancelSettle(order)}
-                              type="button"
-                            >
-                              {t("取消")}
-                            </button>
-                          ) : null}
-                          {/* 自助單 draft → 顯示「接受 / 拒絕」掣（規格 6：開關熄咗時需人手接受，統一用 SelfOrderActionButtons 避免走樣） */}
-                          {order.status === "draft" && isSelfOrder(order) ? (
-                            <SelfOrderActionButtons
-                              orderLabel={order.localOrderNo}
-                              onConfirm={() => {
-                                const result = confirmSelfOrder(order.id);
-                                if (result.ok) {
-                                  setToast(t("已接受自助單 {no}", { no: order.localOrderNo }));
-                                  refresh();
-                                } else {
-                                  setToast(result.error ?? "接受失敗");
-                                }
-                                return result;
-                              }}
-                              onReject={() => {
-                                const result = rejectSelfOrder(order.id);
-                                if (result.ok) {
-                                  setToast(t("已拒絕自助單 {no}", { no: order.localOrderNo }));
-                                  refresh();
-                                } else {
-                                  setToast(result.error ?? "拒絕失敗");
-                                }
-                                return result;
-                              }}
-                            />
-                          ) : null}
-                        </div>
-                      </td>
+                      {/* 操作掣抽成 `renderRowActions()`，同卡片版共用（見函數註釋）。 */}
+                      <td className={`${TD_CELL} text-right`}>{renderRowActions(order)}</td>
                     </tr>
                   );
                 })}

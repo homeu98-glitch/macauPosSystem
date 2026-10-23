@@ -1,0 +1,930 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>訂單頁 — 線上／線下改為左右分欄（實機稿）</title>
+<style>
+:root{
+  --orange-500:#f97316; --orange-600:#ea580c;
+  --slate-50:#f8fafc;  --slate-100:#f1f5f9; --slate-200:#e2e8f0;
+  --slate-300:#cbd5e1; --slate-400:#94a3b8; --slate-500:#64748b;
+  --slate-600:#475569; --slate-700:#334155; --slate-900:#0f172a;
+  --emerald-600:#059669;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{
+  background:#e8edf4;color:#0f172a;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang TC","Microsoft JhengHei","Microsoft YaHei",sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+
+/* ═══════════ 審稿工具列（唔屬產品介面） ═══════════ */
+.chrome{max-width:1240px;margin:0 auto;padding:20px 20px 8px}
+.chrome-h{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.chrome-title{font-size:15px;font-weight:700}
+.chrome-note{font-size:11px;font-weight:600;color:#64748b;background:#fff;border:1px solid #dbe3ec;border-radius:9999px;padding:3px 10px}
+.tabs{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+.tabs button{
+  border:1px solid #cbd5e1;background:#fff;border-radius:12px;padding:9px 14px;
+  font-family:inherit;font-size:13px;font-weight:600;color:#475569;cursor:pointer;
+  display:flex;flex-direction:column;gap:3px;align-items:flex-start;text-align:left;
+}
+.tabs button small{font-weight:500;font-size:11px;color:#94a3b8}
+.tabs button.on{background:#0f172a;border-color:#0f172a;color:#fff}
+.tabs button.on small{color:#94a3b8}
+
+/* ═══════════ 裝置外殼 + 等比縮放 ═══════════ */
+.stage{max-width:1240px;margin:16px auto 0;position:relative}
+.device{
+  width:1208px;height:848px;padding:14px;background:#0f172a;border-radius:30px;
+  box-shadow:0 22px 54px rgba(15,23,42,.28), inset 0 0 0 1px rgba(255,255,255,.06);
+  transform-origin:top left;
+}
+.canvas{position:relative;width:1180px;height:820px;background:#fff;border-radius:18px;overflow:hidden}
+
+/* 側欄（三個畫面共用，浮喺最上層） */
+.sbar{
+  position:absolute;left:0;top:0;bottom:0;width:72px;background:#0f172a;z-index:6;
+  display:flex;flex-direction:column;align-items:center;padding:10px 0 12px;gap:4px;
+}
+.navitem{
+  width:62px;border:0;background:transparent;color:#94a3b8;font-family:inherit;
+  display:flex;flex-direction:column;align-items:center;gap:3px;padding:5px 0;border-radius:12px;
+}
+.navitem .ic{width:36px;height:30px;display:grid;place-items:center;border-radius:10px;position:relative}
+.navitem span.lbl{font-size:10.5px;font-weight:600;letter-spacing:.4px}
+.navitem.on .ic{background:var(--orange-500);color:#fff}
+.navitem.on span.lbl{color:#fdba74}
+.navitem .cnt{
+  position:absolute;top:-4px;right:-2px;min-width:16px;height:16px;border-radius:9999px;
+  background:#ef4444;color:#fff;font-size:10px;font-weight:700;display:grid;place-items:center;padding:0 4px;
+}
+.sbar-spacer{flex:1}
+.sbar-net{
+  display:flex;flex-direction:column;align-items:center;gap:3px;margin-bottom:6px;
+}
+.netpill{background:#059669;color:#fff;font-size:10px;font-weight:700;border-radius:9999px;padding:3px 8px}
+.netpill.amber{background:#f59e0b}
+
+.main-wrap{position:absolute;left:72px;right:0;top:0;bottom:0}
+.screenwrap{position:absolute;inset:0;display:none;flex-direction:column;background:#fff}
+.screenwrap.on{display:flex}
+
+/* ═══════════ 頂欄 ═══════════ */
+.appbar{
+  flex:0 0 auto;display:flex;align-items:center;justify-content:space-between;gap:14px;
+  padding:11px 18px;border-bottom:1px solid var(--slate-200);background:#fff;
+}
+.ab-title{font-size:19px;font-weight:700;letter-spacing:.2px}
+.ab-sub{margin-top:3px;font-size:12px;color:var(--slate-500);white-space:nowrap}
+.ab-right{display:flex;align-items:center;gap:8px}
+.datepills{display:flex;gap:2px;background:var(--slate-100);border-radius:9999px;padding:3px}
+.dp{border:0;background:transparent;border-radius:9999px;padding:5px 12px;font-family:inherit;
+  font-size:12px;font-weight:600;color:var(--slate-600);white-space:nowrap}
+.dp.on{background:#fff;color:var(--slate-900);box-shadow:0 1px 2px rgba(15,23,42,.14)}
+.btn-dark{border:0;border-radius:9999px;padding:7px 12px;font-family:inherit;font-size:12px;
+  font-weight:700;background:var(--slate-900);color:#fff;white-space:nowrap}
+.btn-mid{border:0;border-radius:9999px;padding:7px 12px;font-family:inherit;font-size:12px;
+  font-weight:700;background:var(--slate-200);color:var(--slate-700);white-space:nowrap}
+
+/* ═══════════ ① 現狀：上下分欄 ═══════════ */
+.stack{flex:1;min-height:0;display:flex;flex-direction:column}
+.stack .pane{flex:1 1 0;min-height:0;display:flex;flex-direction:column;position:relative;overflow:hidden}
+.stack .pane + .pane{border-top:1px solid var(--slate-200)}
+.pane.online{background:var(--slate-50)}
+.pane.local{background:#fff}
+.phead{flex:0 0 auto;display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px;padding:10px 16px;border-bottom:1px solid var(--slate-200);background:#fff}
+.ph-t{font-size:14px;font-weight:700;white-space:nowrap}
+.ph-s{margin-top:3px;font-size:11.5px;color:var(--slate-500);white-space:nowrap;font-variant-numeric:tabular-nums}
+.ph-chips{display:flex;gap:6px;flex:1;min-width:0;flex-wrap:wrap}
+.chip{border:0;border-radius:9999px;padding:5px 12px;font-family:inherit;font-size:11.5px;
+  font-weight:600;background:var(--slate-100);color:var(--slate-700);white-space:nowrap}
+.chip.on{background:var(--orange-500);color:#fff}
+.ph-ctrls{display:flex;gap:6px;align-items:center;margin-left:auto}
+.pillwrap{display:flex;align-items:center;gap:6px;border-radius:9999px;background:var(--slate-100);padding:4px 10px}
+.pill-label{font-size:11px;font-weight:600;color:var(--slate-600);white-space:nowrap}
+.pillbtn{border:0;border-radius:9999px;padding:3px 11px;font-family:inherit;font-size:11px;font-weight:700;background:var(--emerald-600);color:#fff}
+.pillbtn.red{background:#dc2626}
+.mini-dark{border:0;border-radius:9999px;padding:5px 11px;font-family:inherit;font-size:11px;font-weight:700;background:var(--slate-900);color:#fff}
+
+.pbody{flex:1;min-height:0;padding:10px 16px;overflow:hidden}
+.empty{border:1px dashed var(--slate-200);background:#fff;border-radius:14px;padding:34px 0;text-align:center;font-size:12px;color:var(--slate-500)}
+
+/* 現狀表格（12px，同真實實作一致） */
+.tcard{border:1px solid var(--slate-200);border-radius:14px;background:#fff;overflow:hidden}
+.tcard table{width:100%;border-collapse:collapse;table-layout:fixed}
+.tcard th{background:var(--slate-50);padding:7px 8px;font-size:11px;font-weight:600;color:var(--slate-500);
+  text-align:left;border-bottom:1px solid var(--slate-200);white-space:nowrap}
+.tcard th.r{text-align:right}
+.tcard td{padding:7px 8px;height:40px;border-top:1px solid var(--slate-100);
+  font-size:12px;vertical-align:middle;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.cell-strong{font-weight:700;color:var(--slate-900)}
+.cell-dim{color:var(--slate-500);font-size:11.5px}
+.cell-time{color:var(--slate-400);font-variant-numeric:tabular-nums}
+.cell-money{text-align:right;font-weight:700;font-variant-numeric:tabular-nums}
+.bdg{display:inline-flex;align-items:center;gap:4px;border-radius:9999px;padding:2px 8px;
+  font-size:11px;font-weight:700;white-space:nowrap;line-height:1.5}
+.bdg .dot{width:5px;height:5px;border-radius:9999px;background:currentColor}
+.bdg-orange{background:#fff7ed;color:#c2410c;box-shadow:inset 0 0 0 1px #fed7aa}
+.bdg-blue{background:#eff6ff;color:#1d4ed8;box-shadow:inset 0 0 0 1px #bfdbfe}
+.bdg-amber{background:#fffbeb;color:#b45309;box-shadow:inset 0 0 0 1px #fde68a}
+.bdg-sky{background:#f0f9ff;color:#0369a1;box-shadow:inset 0 0 0 1px #bae6fd}
+.bdg-emerald{background:#ecfdf5;color:#047857;box-shadow:inset 0 0 0 1px #a7f3d0}
+.bdg-slate{background:#f8fafc;color:#475569;box-shadow:inset 0 0 0 1px #e2e8f0}
+.bdg-indigo{background:#eef2ff;color:#4338ca;box-shadow:inset 0 0 0 1px #c7d2fe}
+.actwrap{display:flex;gap:5px;justify-content:flex-end}
+.act{border:0;border-radius:9px;padding:5px 9px;font-family:inherit;font-size:11px;font-weight:700;white-space:nowrap}
+.act-dark{background:var(--slate-900);color:#fff}
+.act-orange{background:var(--orange-600);color:#fff}
+.act-gray{background:var(--slate-100);color:var(--slate-700)}
+
+/* 現狀嘅「浪費空間」標註 */
+.waste{
+  position:absolute;left:16px;right:16px;top:56px;bottom:12px;border:2px dashed #fbbf24;
+  border-radius:14px;background:transparent;display:grid;place-items:center;
+  pointer-events:none;
+}
+.waste span{background:#fffbeb;border:1px solid #fde68a;color:#b45309;border-radius:9999px;
+  padding:4px 14px;font-size:11.5px;font-weight:700}
+.tail-note{position:absolute;right:20px;bottom:14px;background:#fffbeb;border:1px dashed #fbbf24;
+  color:#b45309;border-radius:9999px;padding:4px 12px;font-size:11px;font-weight:700}
+
+/* ═══════════ ②③ 左右分欄 ═══════════ */
+.split{flex:1;min-height:0;display:flex}
+.col{flex:1 1 0;min-width:0;min-height:0;display:flex;flex-direction:column}
+.col.online{background:var(--slate-50)}
+.col.local{background:#fff}
+.vdiv{width:1px;background:var(--slate-200);flex:0 0 1px}
+
+.chead{flex:0 0 auto;padding:10px 14px 9px;border-bottom:1px solid var(--slate-200);background:#fff}
+.ch-r1{display:flex;align-items:center;gap:8px}
+.ch-title{font-size:15px;font-weight:700;white-space:nowrap}
+.ch-sub{font-size:11.5px;color:var(--slate-500);white-space:nowrap;font-variant-numeric:tabular-nums;
+  overflow:hidden;text-overflow:ellipsis}
+.ch-ctrls{margin-left:auto;display:flex;align-items:center;gap:6px;flex:0 0 auto}
+.ch-r2{display:flex;align-items:center;gap:6px;margin-top:9px}
+.ch-r2 .chips{display:flex;gap:6px;min-width:0;overflow:hidden}
+.linkbtn{margin-left:auto;border:0;background:transparent;font-family:inherit;font-size:11.5px;
+  font-weight:700;color:var(--slate-500);white-space:nowrap;flex:0 0 auto}
+
+.cbody{flex:1;min-height:0;overflow:hidden;padding:10px 12px;display:flex;flex-direction:column;gap:9px}
+
+/* 卡片（大字版） */
+.ocard{
+  flex:0 0 auto;background:#fff;border:1px solid var(--slate-200);border-radius:14px;
+  padding:11px 13px 11px;box-shadow:0 1px 2px rgba(15,23,42,.04);min-height:112px;
+  display:flex;flex-direction:column;justify-content:space-between;
+}
+.oc-r1{display:flex;align-items:center;gap:7px}
+.oc-code{font-size:16px;font-weight:700;letter-spacing:.2px;white-space:nowrap}
+.tchip{background:var(--slate-100);color:var(--slate-600);border-radius:6px;padding:2px 7px;
+  font-size:11px;font-weight:700;white-space:nowrap}
+.oc-r1 .bdg{margin-left:auto}
+.oc-time{font-size:11.5px;color:var(--slate-400);font-variant-numeric:tabular-nums;white-space:nowrap}
+.oc-cust{font-size:12.5px;color:var(--slate-500);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.oc-r1 .sp{flex:1 1 auto}
+.oc-items{margin-top:7px;font-size:13.5px;color:var(--slate-600);line-height:1.35;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.oc-r3{margin-top:9px;display:flex;align-items:center;gap:7px}
+.oc-amt{font-size:17px;font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap}
+.oc-r3 .acts{margin-left:auto;display:flex;gap:6px}
+.act-lg{border:0;border-radius:10px;padding:8px 13px;font-family:inherit;font-size:12.5px;font-weight:700;white-space:nowrap}
+.act-lg.dark{background:var(--slate-900);color:#fff}
+.act-lg.orange{background:var(--orange-600);color:#fff}
+.act-lg.ghost{background:var(--slate-100);color:var(--slate-700)}
+
+/* ③ 空欄收窄 */
+.col.rail{flex:0 0 204px;min-width:204px;background:var(--slate-50);padding:12px 12px}
+.rail-title{font-size:14px;font-weight:700}
+.rail-count{margin-top:6px;font-size:26px;font-weight:700;line-height:1;font-variant-numeric:tabular-nums}
+.rail-count small{font-size:12px;font-weight:600;color:var(--slate-500);margin-left:4px}
+.rail-sub{margin-top:6px;font-size:11.5px;color:var(--slate-500)}
+.rail-pills{margin-top:10px;display:flex;flex-direction:column;gap:6px;align-items:flex-start}
+.rail-empty{margin-top:12px;border:1px dashed var(--slate-300);border-radius:12px;background:#fff;
+  padding:18px 8px;text-align:center;font-size:11.5px;color:var(--slate-500);line-height:1.6}
+.rail-foot{margin-top:auto;display:flex;flex-direction:column;gap:6px}
+.rail-btn{border:1px solid var(--slate-200);background:#fff;border-radius:10px;padding:7px 0;
+  font-family:inherit;font-size:11.5px;font-weight:700;color:var(--slate-600)}
+
+/* ═══════════ 說明區（唔屬產品介面） ═══════════ */
+.notes{max-width:1240px;margin:16px auto 44px;padding:0 20px;display:grid;
+  grid-template-columns:repeat(3,1fr);gap:12px}
+.ncard{background:#fff;border:1px solid #dbe3ec;border-radius:14px;padding:13px 15px}
+.ncard h3{margin:0 0 7px;font-size:12.5px;font-weight:800;color:#0f172a}
+.ncard p{margin:0;font-size:12px;line-height:1.65;color:#475569}
+.ncard b{color:#0f172a}
+.ncard.warn{border-color:#fed7aa;background:#fffbf5}
+</style>
+</head>
+<body>
+
+<div class="chrome">
+  <div class="chrome-h">
+    <span class="chrome-title">訂單頁 — 線上／線下改為左右分欄</span>
+    <span class="chrome-note">此區為審稿工具列，唔屬產品介面</span>
+  </div>
+  <div class="tabs" id="rtabs">
+    <button type="button" data-tab="before" class="on">
+      ① 現狀（上下分欄）
+      <small>今日線上 0 張 → 上半屏長期空白</small>
+    </button>
+    <button type="button" data-tab="after">
+      ② 左右分欄（建議）
+      <small>每邊獨立滾動 · 卡片式 · 字級放大</small>
+    </button>
+    <button type="button" data-tab="collapse">
+      ③ 左右 + 空欄收窄（我額外加嘅，可刪）
+      <small>一邊冇單時，另一邊食滿 880px</small>
+    </button>
+  </div>
+</div>
+
+<div class="stage" id="stage">
+  <div class="device" id="device">
+    <div class="canvas">
+
+      <!-- ══════════ 共用側欄 ══════════ -->
+      <aside class="sbar">
+        <button class="navitem" type="button">
+          <span class="ic">
+            <svg width="19" height="19" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M4 4h7l5 5v7H4z"/><circle cx="8.5" cy="8.5" r="1.1" fill="currentColor" stroke="none"/></svg>
+          </span>
+          <span class="lbl">貼</span>
+        </button>
+        <button class="navitem" type="button">
+          <span class="ic">
+            <svg width="19" height="19" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M6 3v5.5a2 2 0 0 0 4 0V3"/><path d="M8 9.5V17"/><path d="M15 3v14"/><path d="M13 3v5h4"/></svg>
+          </span>
+          <span class="lbl">點餐</span>
+        </button>
+        <button class="navitem on" type="button">
+          <span class="ic">
+            <svg width="19" height="19" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M5 3h10v14l-2.5-1.6L10 17l-2.5-1.6L5 17z"/><path d="M8 7.5h4M8 10.5h4" stroke-linecap="round"/></svg>
+            <span class="cnt">1</span>
+          </span>
+          <span class="lbl">訂單</span>
+        </button>
+        <button class="navitem" type="button">
+          <span class="ic">
+            <svg width="19" height="19" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="10" cy="7" r="3"/><path d="M4 17c0-3.2 2.7-5 6-5s6 1.8 6 5"/></svg>
+          </span>
+          <span class="lbl">會員</span>
+        </button>
+        <button class="navitem" type="button">
+          <span class="ic">
+            <svg width="19" height="19" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M6 8V3.5h8V8"/><rect x="3" y="8" width="14" height="6" rx="1.4"/><path d="M6 13.5h8V17H6z"/></svg>
+          </span>
+          <span class="lbl">打印</span>
+        </button>
+        <button class="navitem" type="button">
+          <span class="ic">
+            <svg width="19" height="19" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="10" cy="10" r="7"/><path d="M10 6.2V10l2.8 1.9"/></svg>
+          </span>
+          <span class="lbl">交班</span>
+        </button>
+        <div class="sbar-spacer"></div>
+        <div class="sbar-net">
+          <span class="netpill">在線</span>
+          <span class="netpill amber">3 張待傳</span>
+        </div>
+        <button class="navitem" type="button">
+          <span class="ic">
+            <svg width="19" height="19" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4H4v12h5"/><path d="M13 7.2 15.8 10 13 12.8"/><path d="M7.5 10h8"/></svg>
+          </span>
+          <span class="lbl">登出</span>
+        </button>
+        <button class="navitem" type="button">
+          <span class="ic">
+            <svg width="19" height="19" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 16.5V9.5M9 16.5V4.5M14 16.5v-4.5"/></svg>
+          </span>
+          <span class="lbl">小結</span>
+        </button>
+      </aside>
+
+      <div class="main-wrap">
+
+        <!-- ══════════ ① 現狀：上下分欄 ══════════ -->
+        <div class="screenwrap on" id="scr-before">
+          <header class="appbar">
+            <div>
+              <div class="ab-title">訂單</div>
+              <div class="ab-sub">上：會員通線上訂單 · 下：店內線下訂單</div>
+            </div>
+            <div class="ab-right">
+              <div class="datepills">
+                <button class="dp on" type="button">今天</button>
+                <button class="dp" type="button">昨天</button>
+                <button class="dp" type="button">7 天內</button>
+                <button class="dp" type="button">30 天</button>
+                <button class="dp" type="button">全部</button>
+                <button class="dp" type="button">自訂</button>
+              </div>
+              <button class="btn-dark" type="button">匯出線上單（0）</button>
+              <button class="btn-mid" type="button">匯出線下單（1）</button>
+            </div>
+          </header>
+
+          <div class="stack">
+            <section class="pane online">
+              <div class="phead">
+                <div>
+                  <div class="ph-t">線上訂單</div>
+                  <div class="ph-s">今天 · 全部 · 共 0 張 · 新單 0 張</div>
+                </div>
+                <div class="ph-chips">
+                  <button class="chip on" type="button">全部</button>
+                  <button class="chip" type="button">堂食</button>
+                  <button class="chip" type="button">外賣自取</button>
+                  <button class="chip" type="button">外送</button>
+                </div>
+                <div class="ph-ctrls">
+                  <div class="pillwrap"><span class="pill-label">線上接單</span><button class="pillbtn red" type="button">已暫停</button></div>
+                  <div class="pillwrap"><span class="pill-label">自動接單</span><button class="pillbtn" type="button">開</button></div>
+                  <button class="mini-dark" type="button">手動刷新</button>
+                </div>
+              </div>
+              <div class="pbody">
+                <div class="empty">今天暫無訂單</div>
+              </div>
+              <div class="waste"><span>↑ 呢半屏（約 380px 高）長期空白</span></div>
+            </section>
+
+            <section class="pane local">
+              <div class="phead">
+                <div>
+                  <div class="ph-t">店內線下訂單</div>
+                  <div class="ph-s">今天 · 全部 · 共 1 張 · 新單 0 張</div>
+                </div>
+                <div class="ph-chips">
+                  <button class="chip on" type="button">全部</button>
+                  <button class="chip" type="button">製作中</button>
+                  <button class="chip" type="button">待取餐</button>
+                  <button class="chip" type="button">已完成</button>
+                  <button class="chip" type="button">已返結</button>
+                  <button class="chip" type="button">已取消</button>
+                </div>
+                <div class="ph-ctrls">
+                  <div class="pillwrap"><span class="pill-label">線下接單</span><button class="pillbtn red" type="button">已暫停</button></div>
+                  <div class="pillwrap"><span class="pill-label">自動接自助單</span><button class="pillbtn" type="button">開</button></div>
+                </div>
+              </div>
+              <div class="pbody">
+                <div class="tcard">
+                  <table>
+                    <colgroup>
+                      <col style="width:11%" /><col style="width:10%" /><col style="width:11%" /><col />
+                      <col style="width:14%" /><col style="width:10%" /><col style="width:10%" /><col style="width:22%" />
+                    </colgroup>
+                    <thead>
+                      <tr>
+                        <th>訂單號</th><th>餐台</th><th>時間</th><th>菜品</th>
+                        <th class="r">金額</th><th>狀態</th><th>來源</th><th class="r">操作</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <td class="cell-strong">自取01</td>
+                        <td class="cell-dim">自取</td>
+                        <td class="cell-time">23/10/2026 15:03</td>
+                        <td class="cell-dim">人氣半筋半肉麵×1</td>
+                        <td class="cell-money">MOP 95.00</td>
+                        <td>
+                          <span class="bdg bdg-emerald"><i class="dot"></i>已完成</span>
+                          <div style="margin-top:4px"><span class="bdg bdg-emerald">已結帳</span></div>
+                        </td>
+                        <td><span class="bdg bdg-blue">掃碼下單</span></td>
+                        <td><div class="actwrap"><button class="act act-dark" type="button">查看</button><button class="act act-orange" type="button">返結帳</button></div></td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+              <div class="tail-note">↓ 下半 380px 只有 1 行（12px 字）</div>
+            </section>
+          </div>
+        </div>
+
+        <!-- ══════════ ② 左右分欄 ══════════ -->
+        <div class="screenwrap" id="scr-after">
+          <header class="appbar">
+            <div>
+              <div class="ab-title">訂單</div>
+              <div class="ab-sub">左：會員通線上訂單 · 右：店內線下訂單</div>
+            </div>
+            <div class="ab-right">
+              <div class="datepills">
+                <button class="dp on" type="button">今天</button>
+                <button class="dp" type="button">昨天</button>
+                <button class="dp" type="button">7 天內</button>
+                <button class="dp" type="button">30 天</button>
+                <button class="dp" type="button">全部</button>
+                <button class="dp" type="button">自訂</button>
+              </div>
+              <button class="btn-dark" type="button">匯出線上單（6）</button>
+              <button class="btn-mid" type="button">匯出線下單（7）</button>
+            </div>
+          </header>
+
+          <div class="split">
+            <!-- 左：線上 -->
+            <section class="col online">
+              <div class="chead">
+                <div class="ch-r1">
+                  <div class="ch-title">線上訂單</div>
+                  <div class="ch-sub">今天 · 共 6 張 · 新單 2 張</div>
+                  <div class="ch-ctrls">
+                    <div class="pillwrap"><span class="pill-label">線上接單</span><button class="pillbtn" type="button">接單中</button></div>
+                    <div class="pillwrap"><span class="pill-label">自動接單</span><button class="pillbtn" type="button">開</button></div>
+                  </div>
+                </div>
+                <div class="ch-r2">
+                  <div class="chips">
+                    <button class="chip on" type="button">全部</button>
+                    <button class="chip" type="button">堂食</button>
+                    <button class="chip" type="button">外賣自取</button>
+                    <button class="chip" type="button">外送</button>
+                  </div>
+                  <button class="linkbtn" type="button">手動刷新</button>
+                </div>
+              </div>
+              <div class="cbody">
+                <article class="ocard">
+                  <div class="oc-r1">
+                    <span class="oc-code">#A1024</span><span class="tchip">堂食</span>
+                    <span class="oc-cust">陳小姐</span><span class="sp"></span>
+                    <span class="oc-time">12:31</span>
+                    <span class="bdg bdg-orange"><i class="dot"></i>待接單</span>
+                  </div>
+                  <div class="oc-items">葡撻 ×2 · 凍奶茶 ×1 · 等 3 項</div>
+                  <div class="oc-r3">
+                    <span class="oc-amt">MOP 88.00</span>
+                    <span class="bdg bdg-emerald">已支付（Mpay）</span>
+                    <span class="acts">
+                      <button class="act-lg ghost" type="button">查看</button>
+                      <button class="act-lg orange" type="button">接單</button>
+                    </span>
+                  </div>
+                </article>
+
+                <article class="ocard">
+                  <div class="oc-r1">
+                    <span class="oc-code">#A1027</span><span class="tchip">堂食</span>
+                    <span class="oc-cust">張生</span><span class="sp"></span>
+                    <span class="oc-time">12:48</span>
+                    <span class="bdg bdg-orange"><i class="dot"></i>待接單</span>
+                  </div>
+                  <div class="oc-items">非洲雞 ×1 · 白飯 ×2 · 等 3 項</div>
+                  <div class="oc-r3">
+                    <span class="oc-amt">MOP 138.00</span>
+                    <span class="bdg bdg-amber">未支付</span>
+                    <span class="acts">
+                      <button class="act-lg ghost" type="button">查看</button>
+                      <button class="act-lg dark" type="button">排位</button>
+                    </span>
+                  </div>
+                </article>
+
+                <article class="ocard">
+                  <div class="oc-r1">
+                    <span class="oc-code">#A1025</span><span class="tchip">外賣自取</span>
+                    <span class="oc-cust">李生</span><span class="sp"></span>
+                    <span class="oc-time">12:35</span>
+                    <span class="bdg bdg-blue"><i class="dot"></i>已接單</span>
+                  </div>
+                  <div class="oc-items">豬扒包 ×1 · 可樂 ×1</div>
+                  <div class="oc-r3">
+                    <span class="oc-amt">MOP 62.00</span>
+                    <span class="bdg bdg-emerald">已支付（Mpay）</span>
+                    <span class="acts">
+                      <button class="act-lg ghost" type="button">查看</button>
+                      <button class="act-lg dark" type="button">開始製作</button>
+                    </span>
+                  </div>
+                </article>
+
+                <article class="ocard">
+                  <div class="oc-r1">
+                    <span class="oc-code">#A1026</span><span class="tchip">外送</span>
+                    <span class="oc-cust">黃太</span><span class="sp"></span>
+                    <span class="oc-time">12:41</span>
+                    <span class="bdg bdg-amber"><i class="dot"></i>製作中</span>
+                  </div>
+                  <div class="oc-items">免治牛肉飯 ×2 · 例湯 ×2</div>
+                  <div class="oc-r3">
+                    <span class="oc-amt">MOP 96.00</span>
+                    <span class="bdg bdg-emerald">已支付（信用卡）</span>
+                    <span class="acts">
+                      <button class="act-lg ghost" type="button">查看</button>
+                      <button class="act-lg dark" type="button">出餐</button>
+                    </span>
+                  </div>
+                </article>
+
+                <article class="ocard">
+                  <div class="oc-r1">
+                    <span class="oc-code">#A1028</span><span class="tchip">外賣自取</span>
+                    <span class="oc-cust">何小姐</span><span class="sp"></span>
+                    <span class="oc-time">12:52</span>
+                    <span class="bdg bdg-sky"><i class="dot"></i>待取餐</span>
+                  </div>
+                  <div class="oc-items">雲吞麵 ×1 · 檸水 ×1</div>
+                  <div class="oc-r3">
+                    <span class="oc-amt">MOP 62.00</span>
+                    <span class="bdg bdg-emerald">已支付（Mpay）</span>
+                    <span class="acts">
+                      <button class="act-lg ghost" type="button">查看</button>
+                      <button class="act-lg dark" type="button">完成</button>
+                    </span>
+                  </div>
+                </article>
+
+                <article class="ocard">
+                  <div class="oc-r1">
+                    <span class="oc-code">#A1029</span><span class="tchip">外送</span>
+                    <span class="oc-cust">周生</span><span class="sp"></span>
+                    <span class="oc-time">12:58</span>
+                    <span class="bdg bdg-orange"><i class="dot"></i>待接單</span>
+                  </div>
+                  <div class="oc-items">葡國雞飯 ×1 · 凍檸茶 ×1</div>
+                  <div class="oc-r3">
+                    <span class="oc-amt">MOP 112.00</span>
+                    <span class="bdg bdg-emerald">已支付（Mpay）</span>
+                    <span class="acts">
+                      <button class="act-lg ghost" type="button">查看</button>
+                      <button class="act-lg orange" type="button">接單</button>
+                    </span>
+                  </div>
+                </article>
+              </div>
+            </section>
+
+            <div class="vdiv"></div>
+
+            <!-- 右：線下 -->
+            <section class="col local">
+              <div class="chead">
+                <div class="ch-r1">
+                  <div class="ch-title">店內線下訂單</div>
+                  <div class="ch-sub">今天 · 共 7 張 · 新單 3 張</div>
+                  <div class="ch-ctrls">
+                    <div class="pillwrap"><span class="pill-label">線下接單</span><button class="pillbtn" type="button">營業中</button></div>
+                    <div class="pillwrap"><span class="pill-label">自動接自助單</span><button class="pillbtn" type="button">開</button></div>
+                  </div>
+                </div>
+                <div class="ch-r2">
+                  <div class="chips">
+                    <button class="chip on" type="button">全部</button>
+                    <button class="chip" type="button">製作中</button>
+                    <button class="chip" type="button">待取餐</button>
+                    <button class="chip" type="button">已完成</button>
+                    <button class="chip" type="button">已返結</button>
+                    <button class="chip" type="button">已取消</button>
+                  </div>
+                </div>
+              </div>
+              <div class="cbody">
+                <article class="ocard">
+                  <div class="oc-r1">
+                    <span class="oc-code">自取01</span><span class="tchip">自取</span>
+                    <span class="oc-time">15:03</span>
+                    <span class="bdg bdg-emerald"><i class="dot"></i>已完成</span>
+                  </div>
+                  <div class="oc-items">人氣半筋半肉麵 ×1</div>
+                  <div class="oc-r3">
+                    <span class="oc-amt">MOP 95.00</span>
+                    <span class="bdg bdg-emerald">已結帳</span>
+                    <span class="acts">
+                      <button class="act-lg ghost" type="button">查看</button>
+                      <button class="act-lg orange" type="button">返結帳</button>
+                    </span>
+                  </div>
+                </article>
+
+                <article class="ocard">
+                  <div class="oc-r1">
+                    <span class="oc-code">自取02</span><span class="tchip">自取</span>
+                    <span class="oc-time">15:01</span>
+                    <span class="bdg bdg-amber"><i class="dot"></i>製作中</span>
+                  </div>
+                  <div class="oc-items">豬扒包 ×1 · 凍咖啡 ×1</div>
+                  <div class="oc-r3">
+                    <span class="oc-amt">MOP 66.00</span>
+                    <span class="bdg bdg-emerald">已結帳</span>
+                    <span class="acts">
+                      <button class="act-lg ghost" type="button">查看</button>
+                      <button class="act-lg dark" type="button">完成</button>
+                    </span>
+                  </div>
+                </article>
+
+                <article class="ocard">
+                  <div class="oc-r1">
+                    <span class="oc-code">L0031</span><span class="tchip">A3 枱</span>
+                    <span class="oc-time">14:52</span>
+                    <span class="bdg bdg-amber"><i class="dot"></i>製作中</span>
+                  </div>
+                  <div class="oc-items">葡國雞飯 ×2 · 凍檸茶 ×2</div>
+                  <div class="oc-r3">
+                    <span class="oc-amt">MOP 196.00</span>
+                    <span class="bdg bdg-slate">未結帳</span>
+                    <span class="acts">
+                      <button class="act-lg ghost" type="button">查看</button>
+                      <button class="act-lg dark" type="button">結帳</button>
+                    </span>
+                  </div>
+                </article>
+
+                <article class="ocard">
+                  <div class="oc-r1">
+                    <span class="oc-code">L0032</span><span class="tchip">B1 枱</span>
+                    <span class="oc-time">14:40</span>
+                    <span class="bdg bdg-sky"><i class="dot"></i>待取餐</span>
+                  </div>
+                  <div class="oc-items">免治牛肉飯 ×1 · 例湯 ×1</div>
+                  <div class="oc-r3">
+                    <span class="oc-amt">MOP 78.00</span>
+                    <span class="bdg bdg-slate">未結帳</span>
+                    <span class="acts">
+                      <button class="act-lg ghost" type="button">查看</button>
+                      <button class="act-lg dark" type="button">結帳</button>
+                    </span>
+                  </div>
+                </article>
+
+                <article class="ocard">
+                  <div class="oc-r1">
+                    <span class="oc-code">L0030</span><span class="tchip">A1 枱</span>
+                    <span class="oc-time">14:22</span>
+                    <span class="bdg bdg-emerald"><i class="dot"></i>已完成</span>
+                  </div>
+                  <div class="oc-items">非洲雞 ×1 · 白飯 ×2</div>
+                  <div class="oc-r3">
+                    <span class="oc-amt">MOP 158.00</span>
+                    <span class="bdg bdg-emerald">已結帳</span>
+                    <span class="acts">
+                      <button class="act-lg ghost" type="button">查看</button>
+                    </span>
+                  </div>
+                </article>
+
+                <article class="ocard">
+                  <div class="oc-r1">
+                    <span class="oc-code">L0029</span><span class="tchip">C2 枱</span>
+                    <span class="oc-time">14:08</span>
+                    <span class="bdg bdg-indigo"><i class="dot"></i>已返結</span>
+                  </div>
+                  <div class="oc-items">馬介休球 ×2 · 凍檸水 ×1</div>
+                  <div class="oc-r3">
+                    <span class="oc-amt">MOP 88.00</span>
+                    <span class="bdg bdg-emerald">已結帳</span>
+                    <span class="acts">
+                      <button class="act-lg ghost" type="button">查看</button>
+                    </span>
+                  </div>
+                </article>
+              </div>
+            </section>
+          </div>
+        </div>
+
+        <!-- ══════════ ③ 左右 + 空欄收窄 ══════════ -->
+        <div class="screenwrap" id="scr-collapse">
+          <header class="appbar">
+            <div>
+              <div class="ab-title">訂單</div>
+              <div class="ab-sub">左：會員通線上訂單 · 右：店內線下訂單</div>
+            </div>
+            <div class="ab-right">
+              <div class="datepills">
+                <button class="dp on" type="button">今天</button>
+                <button class="dp" type="button">昨天</button>
+                <button class="dp" type="button">7 天內</button>
+                <button class="dp" type="button">30 天</button>
+                <button class="dp" type="button">全部</button>
+                <button class="dp" type="button">自訂</button>
+              </div>
+              <button class="btn-dark" type="button">匯出線上單（0）</button>
+              <button class="btn-mid" type="button">匯出線下單（7）</button>
+            </div>
+          </header>
+
+          <div class="split">
+            <!-- 左：收窄成狀態欄 -->
+            <section class="col rail">
+              <div class="rail-title">線上訂單</div>
+              <div class="rail-count">0<small>張</small></div>
+              <div class="rail-sub">今天 · 全部</div>
+              <div class="rail-pills">
+                <div class="pillwrap"><span class="pill-label">線上接單</span><button class="pillbtn" type="button">接單中</button></div>
+                <div class="pillwrap"><span class="pill-label">自動接單</span><button class="pillbtn" type="button">開</button></div>
+              </div>
+              <div class="rail-empty">今天暫無線上訂單<br /><span style="color:#94a3b8">有新單會自動彈提示</span></div>
+              <div class="rail-foot">
+                <button class="rail-btn" type="button">手動刷新</button>
+                <button class="rail-btn" type="button">展開此欄</button>
+              </div>
+            </section>
+
+            <div class="vdiv"></div>
+
+            <!-- 右：食滿 -->
+            <section class="col local">
+              <div class="chead">
+                <div class="ch-r1">
+                  <div class="ch-title">店內線下訂單</div>
+                  <div class="ch-sub">今天 · 共 7 張 · 新單 3 張</div>
+                  <div class="ch-ctrls">
+                    <div class="pillwrap"><span class="pill-label">線下接單</span><button class="pillbtn" type="button">營業中</button></div>
+                    <div class="pillwrap"><span class="pill-label">自動接自助單</span><button class="pillbtn" type="button">開</button></div>
+                  </div>
+                </div>
+                <div class="ch-r2">
+                  <div class="chips">
+                    <button class="chip on" type="button">全部</button>
+                    <button class="chip" type="button">製作中</button>
+                    <button class="chip" type="button">待取餐</button>
+                    <button class="chip" type="button">已完成</button>
+                    <button class="chip" type="button">已返結</button>
+                    <button class="chip" type="button">已取消</button>
+                  </div>
+                </div>
+              </div>
+              <div class="cbody">
+                <article class="ocard">
+                  <div class="oc-r1">
+                    <span class="oc-code">自取01</span><span class="tchip">自取</span>
+                    <span class="oc-time">15:03</span>
+                    <span class="bdg bdg-emerald"><i class="dot"></i>已完成</span>
+                  </div>
+                  <div class="oc-items">人氣半筋半肉麵 ×1 · 熱豆漿 ×1　（完整菜名唔使 truncate）</div>
+                  <div class="oc-r3">
+                    <span class="oc-amt">MOP 95.00</span>
+                    <span class="bdg bdg-emerald">已結帳</span>
+                    <span class="bdg bdg-blue">掃碼下單</span>
+                    <span class="acts">
+                      <button class="act-lg ghost" type="button">查看</button>
+                      <button class="act-lg orange" type="button">返結帳</button>
+                    </span>
+                  </div>
+                </article>
+
+                <article class="ocard">
+                  <div class="oc-r1">
+                    <span class="oc-code">自取02</span><span class="tchip">自取</span>
+                    <span class="oc-time">15:01</span>
+                    <span class="bdg bdg-amber"><i class="dot"></i>製作中</span>
+                  </div>
+                  <div class="oc-items">豬扒包 ×1 · 凍咖啡 ×1</div>
+                  <div class="oc-r3">
+                    <span class="oc-amt">MOP 66.00</span>
+                    <span class="bdg bdg-emerald">已結帳</span>
+                    <span class="bdg bdg-blue">掃碼下單</span>
+                    <span class="acts">
+                      <button class="act-lg ghost" type="button">查看</button>
+                      <button class="act-lg dark" type="button">完成</button>
+                    </span>
+                  </div>
+                </article>
+
+                <article class="ocard">
+                  <div class="oc-r1">
+                    <span class="oc-code">L0031</span><span class="tchip">A3 枱</span>
+                    <span class="oc-time">14:52</span>
+                    <span class="bdg bdg-amber"><i class="dot"></i>製作中</span>
+                  </div>
+                  <div class="oc-items">葡國雞飯 ×2 · 凍檸茶 ×2</div>
+                  <div class="oc-r3">
+                    <span class="oc-amt">MOP 196.00</span>
+                    <span class="bdg bdg-slate">未結帳</span>
+                    <span class="bdg bdg-slate">店內</span>
+                    <span class="acts">
+                      <button class="act-lg ghost" type="button">查看</button>
+                      <button class="act-lg dark" type="button">結帳</button>
+                    </span>
+                  </div>
+                </article>
+
+                <article class="ocard">
+                  <div class="oc-r1">
+                    <span class="oc-code">L0032</span><span class="tchip">B1 枱</span>
+                    <span class="oc-time">14:40</span>
+                    <span class="bdg bdg-sky"><i class="dot"></i>待取餐</span>
+                  </div>
+                  <div class="oc-items">免治牛肉飯 ×1 · 例湯 ×1</div>
+                  <div class="oc-r3">
+                    <span class="oc-amt">MOP 78.00</span>
+                    <span class="bdg bdg-slate">未結帳</span>
+                    <span class="bdg bdg-slate">店內</span>
+                    <span class="acts">
+                      <button class="act-lg ghost" type="button">查看</button>
+                      <button class="act-lg dark" type="button">結帳</button>
+                    </span>
+                  </div>
+                </article>
+
+                <article class="ocard">
+                  <div class="oc-r1">
+                    <span class="oc-code">L0030</span><span class="tchip">A1 枱</span>
+                    <span class="oc-time">14:22</span>
+                    <span class="bdg bdg-emerald"><i class="dot"></i>已完成</span>
+                  </div>
+                  <div class="oc-items">非洲雞 ×1 · 白飯 ×2</div>
+                  <div class="oc-r3">
+                    <span class="oc-amt">MOP 158.00</span>
+                    <span class="bdg bdg-emerald">已結帳</span>
+                    <span class="bdg bdg-slate">店內</span>
+                    <span class="acts">
+                      <button class="act-lg ghost" type="button">查看</button>
+                    </span>
+                  </div>
+                </article>
+
+                <article class="ocard">
+                  <div class="oc-r1">
+                    <span class="oc-code">L0029</span><span class="tchip">C2 枱</span>
+                    <span class="oc-time">14:08</span>
+                    <span class="bdg bdg-indigo"><i class="dot"></i>已返結</span>
+                  </div>
+                  <div class="oc-items">馬介休球 ×2 · 凍檸水 ×1</div>
+                  <div class="oc-r3">
+                    <span class="oc-amt">MOP 88.00</span>
+                    <span class="bdg bdg-emerald">已結帳</span>
+                    <span class="bdg bdg-slate">店內</span>
+                    <span class="acts">
+                      <button class="act-lg ghost" type="button">查看</button>
+                    </span>
+                  </div>
+                </article>
+              </div>
+            </section>
+          </div>
+        </div>
+
+      </div><!-- /main-wrap -->
+    </div><!-- /canvas -->
+  </div><!-- /device -->
+</div>
+
+<div class="notes">
+  <div class="ncard">
+    <h3>為咩要由「表格」變「卡片」</h3>
+    <p>左右分欄後每邊只有 <b>約 546px</b>。原本 <b>8 欄</b>表格喺 546px 一定逼爆（2026-09-10 就係因為呢個原因改返上下）。所以每張單改為 <b>3 行卡片</b>：單號／狀態／金額字級由 12px 升到 <b>16–17px</b>，一眼睇得清，唔使逐格搵。</p>
+  </div>
+  <div class="ncard">
+    <h3>左右分欄實際賺到咩</h3>
+    <p>每邊都食到 <b>全部 680px 高</b>（原本每邊只有 380px）。今日線上 0 張、線下 1 張嘅情況下，原本 <b>一半屏幕長期空白</b>；分欄後兩邊各自獨立滾動，一邊多單唔會擠走另一邊。</p>
+  </div>
+  <div class="ncard warn">
+    <h3>要留意嘅副作用</h3>
+    <p>① 一邊完全冇單時會浪費半屏 → 建議加「空欄收窄」（③）。<br />② 卡片比表格高，<b>同一屏睇到嘅單數會少過全寬表格</b>（約 5–6 張）。<br />③ 兩邊各自滾動，店員要習慣「左邊滾完要撳右邊」。</p>
+  </div>
+</div>
+
+<script>
+var MIN_SCALE = 0.5;
+var DEVICE_W = 1208;
+var DEVICE_H = 848;
+
+function fit(){
+  var stage = document.getElementById("stage");
+  var device = document.getElementById("device");
+  if (!stage || !device) return;
+  var w = stage.clientWidth || DEVICE_W;
+  var s = Math.min(1, Math.max(w / DEVICE_W, MIN_SCALE));
+  device.style.transform = "scale(" + s + ")";
+  stage.style.height = Math.round(DEVICE_H * s) + "px";
+  stage.style.overflowX = (DEVICE_W * s > w) ? "auto" : "hidden";
+}
+
+function showTab(id){
+  var keys = ["before", "after", "collapse"];
+  for (var i = 0; i < keys.length; i++){
+    var scr = document.getElementById("scr-" + keys[i]);
+    if (scr) scr.classList.toggle("on", keys[i] === id);
+  }
+  var tabs = document.querySelectorAll("#rtabs button");
+  for (var j = 0; j < tabs.length; j++){
+    tabs[j].classList.toggle("on", tabs[j].getAttribute("data-tab") === id);
+  }
+  fit();
+}
+
+function bindTabs(){
+  var tabs = document.querySelectorAll("#rtabs button");
+  for (var i = 0; i < tabs.length; i++){
+    (function(btn){
+      btn.onclick = function(){ showTab(btn.getAttribute("data-tab")); };
+    })(tabs[i]);
+  }
+}
+
+if (typeof window !== "undefined" && window.addEventListener) {
+  window.addEventListener("resize", fit);
+}
+bindTabs();
+fit();
+</script>
+</body>
+</html>

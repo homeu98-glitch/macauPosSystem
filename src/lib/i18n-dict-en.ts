@@ -1240,7 +1240,7 @@ export const EN_DICT: Record<string, string> = {
   "確定": "Confirm",
   "請輸入數字": "Enter a number",
   "請輸入文字": "Enter text",
-  "上：會員通線上訂單 · 下：店內線下訂單": "Top: member-portal online orders · Bottom: in-store offline orders",
+  "左：會員通線上訂單 · 右：店內線下訂單": "Left: member-portal online orders · Right: in-store offline orders",
   "匯出當前時間範圍內嘅線上訂單（含客人電話）": "Export online orders in the current range (includes customer phone)",
   "匯出當前時間範圍內嘅線下訂單": "Export offline orders in the current range",
   "匯出線上單（{n}）": "Export online ({n})",

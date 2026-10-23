@@ -268,11 +268,20 @@ async function listMerchantOrdersPaged({
 
 export function OnlineOrders({
   embedded = false,
+  layout = "table",
   dateFilter: dateFilterProp,
   onDateFilterChange,
   onFilteredOrdersChange,
 }: {
   embedded?: boolean;
+  /**
+   * 列表版面（2026-10-23，純 UI）：
+   * - `"table"`（預設）＝原本 8 欄表格，全寬時用；
+   * - `"cards"` ＝ 3 行卡片，`/orders` 左右分欄（半欄闊度約 546px）時用。
+   * ⚠️ 只係換 render，**唔影響任何篩選／接單／排位／返結邏輯**（兩種版面共用同一批
+   *    `filteredOrders` 同 `renderOrderActions()`）。
+   */
+  layout?: "table" | "cards";
   /** 時間篩選：key 字串或 `{ key, custom }`（2026-09-13 加「自訂」）。 */
   dateFilter?: DateFilterArg;
   onDateFilterChange?: (key: LedgerOrderDateFilterKey, custom: CustomDateRange | null) => void;
@@ -1456,6 +1465,21 @@ export function OnlineOrders({
       .map((row) => row.tableId as string);
   }, [assigningOrder, reopenFlowOrder]);
 
+  /**
+   * 「手動刷新」掣（2026-10-23）：表格版放喺右側控件組；卡片版搬去 chips 同一行右端，
+   * 令標題行只留兩個接單總掣，半欄闊度先夠位（純排版，`onClick` 冇變）。
+   */
+  const refreshButton = (
+    <button
+      className="shrink-0 rounded-full bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
+      disabled={refreshing || loading}
+      onClick={() => void manualRefresh()}
+      type="button"
+    >
+      {refreshing ? t("刷新中…") : t("手動刷新")}
+    </button>
+  );
+
   const panel = (
     <>
       <div className={`shrink-0 border-b border-slate-200 bg-white px-4 ${embedded ? "py-3" : "py-4"}`}>
@@ -1485,11 +1509,21 @@ export function OnlineOrders({
               </div>
             ) : null}
           </div>
-          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+          {/* 卡片版（半欄闊度）：chips 要**獨佔一行**（`basis-full`）。
+              ⚠️ 唔可以用 `flex-1`：flex-basis 0 令佢永遠「塞得落」第一行，
+                 結果係被壓到 310px 再橫向滾動，最尾兩粒 chip 被切走（實測）。
+              表格版（全寬）維持原本 `flex-1 flex-wrap`，外觀零改動。 */}
+          <div
+            className={`flex min-w-0 items-center gap-2 ${
+              layout === "cards" ? "order-3 basis-full flex-nowrap overflow-x-auto" : "flex-1 flex-wrap"
+            }`}
+          >
             {TABS.map((tab) => (
               <button
                 key={tab.key}
-                className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
+                className={`shrink-0 whitespace-nowrap rounded-full font-semibold ${
+                  layout === "cards" ? "px-2 py-1 text-[11px]" : "px-3 py-1.5 text-xs"
+                } ${
                   tab.key === activeTab ? "bg-orange-500 text-white" : "bg-slate-100 text-slate-700"
                 }`}
                 onClick={() => setActiveTab(tab.key)}
@@ -1507,8 +1541,10 @@ export function OnlineOrders({
                 onChange={changeDateFilter}
               />
             ) : null}
+            {/* 卡片版：手動刷新釘喺 chips 行右端（`ml-auto` 撐去最右）。 */}
+            {layout === "cards" ? <div className="ml-auto shrink-0">{refreshButton}</div> : null}
           </div>
-          <div className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-2">
+          <div className={`ml-auto flex shrink-0 flex-wrap items-center justify-end gap-2 ${layout === "cards" ? "order-2" : ""}`}>
             {/*
               開關店（`merchant_enabled`）：全店線上單總掣。關咗之後**唔會**順手寫
               `auto_accept=false`，只係把下面嗰粒掣灰掉（開返店保留原設定）。
@@ -1544,14 +1580,12 @@ export function OnlineOrders({
               onChange={(next) => void setAutoAccept(next)}
               variant="contained"
             />
-            <button
-              className="rounded-full bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
-              disabled={refreshing || loading}
-              onClick={() => void manualRefresh()}
-              type="button"
-            >
-              {refreshing ? t("刷新中…") : t("手動刷新")}
-            </button>
+            {/*
+              卡片版（半欄闊度）把「手動刷新」搬去 chips 同一行（見上面 chips 區塊）——
+              兩個接單總掣留喺標題行，重新分配闊度之後兩行都放得落（實測 546px 欄闊）。
+              表格版（全寬）維持原位，外觀零改動。
+            */}
+            {layout === "cards" ? null : refreshButton}
           </div>
         </div>
       </div>
@@ -1580,6 +1614,100 @@ export function OnlineOrders({
           原本 `overflow-hidden` + `min-w-[1080px]` 會剪走最右「操作」欄（iPad 只見半個掣）。
         */}
         {filteredOrders.length > 0 ? (
+          layout === "cards" ? (
+            /*
+              卡片版（2026-10-23，純 UI）：`/orders` 左右分欄後每邊只有約 546px，
+              8 欄表格一定逼爆（2026-09-10 就係因為咁改返上下分區）。所以半欄闊度用
+              3 行卡片：① 單號／類型／客戶／時間／狀態 ② 菜品 ③ 金額／支付／操作。
+              資料來源同 `renderOrderActions()` 同表格版**完全一樣**，只係換咗排版。
+            */
+            <div className="flex flex-col gap-2.5">
+              {filteredOrders.map((order) => {
+                const statusBadge = getLedgerStatusBadge(order);
+                const externalAccepted = rawLedgerStatus(order.status) === "accepted";
+                const scheduled = hasScheduledPickup(order);
+                return (
+                  <article
+                    className="rounded-2xl border border-slate-200 bg-white px-3.5 py-3 shadow-sm"
+                    key={order.id}
+                  >
+                    <div className="flex items-center gap-2">
+                      <div className="truncate text-base font-bold text-slate-900">{tOrderCode(t, order)}</div>
+                      <span className="shrink-0 rounded-md bg-slate-100 px-1.5 py-0.5 text-[11px] font-bold text-slate-600">
+                        {t(tabLabel(order.tabType))}
+                      </span>
+                      <span className="truncate text-xs text-slate-500">{order.customerName ?? "--"}</span>
+                      {scheduled ? <ScheduledPickupChip compact nowMs={nowTick} order={order} /> : null}
+                      <div className="ml-auto flex shrink-0 items-center gap-2">
+                        <span className="text-[11px] tabular-nums text-slate-400">
+                          {orderEventISO(order) ? formatMacauDateTime(orderEventISO(order)) : "--"}
+                        </span>
+                        <span
+                          className={`inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-0.5 text-xs font-semibold ${statusBadge.bgClass} ${statusBadge.textClass}`}
+                        >
+                          <span className={`h-2 w-2 rounded-full ${statusBadge.dotClass}`} />
+                          {t(statusBadge.label)}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="mt-1.5 truncate text-[13px] text-slate-500">
+                      {order.itemSummary ?? "--"}
+                      {order.itemCount && order.itemCount > 1 ? t(" 等 {n} 項", { n: order.itemCount }) : ""}
+                    </div>
+                    {scheduled ? (
+                      <div className="mt-1 text-[11px] font-semibold">
+                        <ScheduledPickupTimeText nowMs={nowTick} order={order} />
+                      </div>
+                    ) : null}
+
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <div className="flex flex-col">
+                        <span className="text-[17px] font-bold leading-tight tabular-nums text-slate-900">
+                          {formatMoney(order.total)}
+                        </span>
+                        {order.discountAmount && order.discountAmount > 0 ? (
+                          <span className="mt-0.5 text-[11px] tabular-nums text-amber-700">
+                            {t("已優惠 -{amt}", { amt: formatMoney(order.discountAmount) })}
+                            {order.subtotalBeforeDiscount != null ? (
+                              <span className="ml-1 text-slate-400 line-through">
+                                {t("原 {amt}", { amt: formatMoney(order.subtotalBeforeDiscount) })}
+                              </span>
+                            ) : null}
+                          </span>
+                        ) : null}
+                      </div>
+                      <span
+                        className={`inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                          order.paymentStatus === "paid"
+                            ? "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200"
+                            : "bg-amber-50 text-amber-700 ring-1 ring-amber-200"
+                        }`}
+                      >
+                        {order.paymentStatus === "paid" ? t("已支付") : t("未支付")}
+                        {order.paymentMode
+                          ? t("（{mode}）", { mode: t(paymentModeLabel(order.paymentMode)) })
+                          : ""}
+                      </span>
+                      {externalAccepted ? (
+                        <span className="shrink-0 text-[11px] font-medium text-amber-600">{t("已由外部接單")}</span>
+                      ) : null}
+                      <div className="ml-auto flex flex-wrap items-center justify-end gap-1.5">
+                        <button
+                          className="whitespace-nowrap rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-800"
+                          onClick={() => void openOrderDetail(order.id)}
+                          type="button"
+                        >
+                          {t("查看")}
+                        </button>
+                        {renderOrderActions(order)}
+                      </div>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          ) : (
           <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white">
           <table className="w-full min-w-[860px] table-fixed border-collapse text-left">
             <thead>
@@ -1695,6 +1823,7 @@ export function OnlineOrders({
             </tbody>
           </table>
           </div>
+          )
         ) : null}
       </div>
     </>

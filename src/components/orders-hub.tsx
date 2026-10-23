@@ -29,7 +29,7 @@ function todayKey(): string {
 }
 
 /**
- * 訂單頁（`/orders`）：上＝會員通線上訂單，下＝店內線下訂單。
+ * 訂單頁（`/orders`）：左＝會員通線上訂單，右＝店內線下訂單（2026-10-23 改左右分欄）。
  *
  * ## 時間篩選（2026-09-13 加「自訂」）
  *
@@ -38,7 +38,7 @@ function todayKey(): string {
  * - `custom` 只在 `key === "custom"` 時有意義（`YYYY-MM-DD` 起訖，Macau 日曆）。
  *
  * 呢個 state 由兩張表共用（`OnlineOrders` 同 `LocalOrdersPanel` 都吃同一個 prop），
- * 所以撳一次 chips，上面線上單同下面線下單會**同時**跟隨。
+ * 所以撳一次 chips，左邊線上單同右邊線下單會**同時**跟隨。
  *
  * ## Deep link（2026-09-10，docs/115 G5）
  *
@@ -203,7 +203,7 @@ export function OrdersHub() {
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <div className="text-lg font-semibold text-slate-900">{t("訂單")}</div>
-              <div className="mt-0.5 text-sm text-slate-500">{t("上：會員通線上訂單 · 下：店內線下訂單")}</div>
+              <div className="mt-0.5 text-sm text-slate-500">{t("左：會員通線上訂單 · 右：店內線下訂單")}</div>
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <DateRangeFilterChips
@@ -237,26 +237,30 @@ export function OrdersHub() {
           </div>
         </header>
         {/*
-          列表版面（2026-09-10）：由左右分欄改為上下分區、每區全寬。
-          原因：訂單列表每個 8 欄（單號／餐台／時間／菜品／金額／狀態／來源·支付／操作），
-          半欄寬度會逼爆欄位；全寬先可以做到金額右對齊 + 操作釘右。
-          響應式（2026-09-10 修）：兩個表都改用「`table-fixed` + 百分比欄寬」自適應容器闊度，
-          所以正常 iPad／桌面闊度下唔會再出現橫向滾動，亦唔會剪走「操作」欄；
-          只有容器窄過表格下限（<860px，例如手機）先由各表自己橫向滾動。
+          列表版面（2026-10-23）：由上下分區改回**左右分欄**（商家要求「睇得太細」）。
+          歷史：2026-09-10 曾經由左右改上下，原因係每張單 8 欄、半欄闊度（約 546px）會逼爆欄位。
+          所以今次左右分欄**同時**把兩個 panel 轉用 `layout="cards"`（3 行卡片、字級 16–17px），
+          表格版仍然保留（`layout` 預設 `"table"`），兩邊邏輯完全一樣，只係換咗 render。
+          ⚠️ 兩欄用 `flex-1` 等寬 + 1px 分隔線；`min-w-0` 唔可以漏，否則卡片內容會撐爆 flex 子項。
+          ⚠️ 只喺 `lg`（≥1024px）以上左右並排；iPad 直向（834px）／手機會**自動變返上下**
+             （`flex-col`），唔會出現每邊只有 380px 嘅窄欄（chips 會被迫疊成三行）。
         */}
-        <div className="grid min-h-0 flex-1 grid-rows-2 divide-y divide-slate-200">
-          <section className="flex min-h-0 min-w-0 flex-col overflow-hidden bg-slate-50">
+        <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
+          <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-slate-50">
             <OnlineOrders
               dateFilter={dateSelection}
               embedded
+              layout="cards"
               onDateFilterChange={handleDateChange}
               onFilteredOrdersChange={setOnlineRows}
             />
           </section>
-          <section className="flex min-h-0 min-w-0 flex-col overflow-hidden bg-white">
+          <div className="h-px w-full shrink-0 bg-slate-200 lg:h-auto lg:w-px" />
+          <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-white">
             <LocalOrdersPanel
               dateFilter={dateSelection}
               focusOrderId={focusOrderId}
+              layout="cards"
               onFilteredOrdersChange={setLocalRows}
             />
           </section>
