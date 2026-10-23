@@ -122,6 +122,18 @@ export function LoginScreen() {
   const [selected, setSelected] = useState<LoginIdentity | null>(null);
   const [storeName, setStoreName] = useState("");
   const [checking, setChecking] = useState(false);
+  /**
+   * 身份清單嘅「診斷狀態」。
+   *
+   * 🔴 為何要存：`known:false`（店主未登入過）、`staffTotal === 0`（未加店員）、
+   * `staffActive === 0`（店員全停用）三種情況喺畫面上**長得一模一樣**——
+   * 都係得「店主 · 切換」一張卡，用家只會覺得「壞咗」。
+   * 所以 server 回呢幾個數，UI 直接講出原因。
+   */
+  const [known, setKnown] = useState<boolean | null>(null);
+  const [staffTotal, setStaffTotal] = useState(0);
+  const [staffActive, setStaffActive] = useState(0);
+  const [staffTableMissing, setStaffTableMissing] = useState(false);
 
   /**
    * 落地：套用工作台副作用，然後整頁跳去對應首頁。
@@ -159,6 +171,9 @@ export function LoginScreen() {
         known?: boolean;
         storeName?: string;
         identities?: LoginIdentity[];
+        staffTotal?: number;
+        staffActive?: number;
+        staffTableMissing?: boolean;
       };
       if (!response.ok || !payload.ok) {
         setError(payload.error ?? "讀取身份失敗，請再試一次。");
@@ -168,6 +183,10 @@ export function LoginScreen() {
       const list = payload.identities ?? [];
       setStoreName(payload.storeName ?? "");
       setIdentities(list);
+      setKnown(payload.known === true);
+      setStaffTotal(Number(payload.staffTotal ?? 0));
+      setStaffActive(Number(payload.staffActive ?? 0));
+      setStaffTableMissing(payload.staffTableMissing === true);
 
       // 未有任何店主登入過（known:false）或得一個身份 → 唔需要揀，直接打 PIN
       if (!payload.known || list.length <= 1) {
@@ -201,6 +220,29 @@ export function LoginScreen() {
     setError("");
     setSelected(null);
     setStep("account");
+  }
+
+  /**
+   * 「點解得店主一個身份？」——直接講原因。
+   *
+   * 冇呢段，三種完全唔同嘅成因（店主未登入過 / 未加店員 / 店員全停用）
+   * 喺畫面上都係一模一樣嘅「店主 · 切換」，用家只會覺得個掣壞咗。
+   */
+  function identityHint(): string | null {
+    if (identities.length > 1) return null;
+    if (known === false) {
+      return "呢間店第一次用：店主用自己帳號登入一次之後，店員就會出現喺呢個清單。";
+    }
+    if (staffTableMissing) {
+      return "店員表未建立（migration 0072 未跑），所以暫時淨係得店主可以登入。";
+    }
+    if (staffTotal === 0) {
+      return "呢間店仲未加入店員。去「設定 → 員工權限」加咗店員，佢哋就會出現喺呢個清單。";
+    }
+    if (staffActive === 0) {
+      return "店員全部已停用，所以暫時淨係得店主可以登入。";
+    }
+    return null;
   }
 
   function submitPin() {
@@ -433,6 +475,8 @@ export function LoginScreen() {
     if (step === "pin") submitPin();
   }
 
+  const pinHint = identityHint();
+
   return (
     /*
       🔴 `fixed inset-0 overflow-y-auto` 唔可以改返 `min-h-screen overflow-hidden`：
@@ -533,9 +577,15 @@ export function LoginScreen() {
                   onClick={backFromPin}
                   type="button"
                 >
-                  切換
+                  {identities.length > 1 ? "切換" : "改帳號"}
                 </button>
               </div>
+
+              {pinHint ? (
+                <div className="rounded-2xl border border-amber-400/25 bg-amber-400/10 px-4 py-3 text-xs leading-relaxed text-amber-100">
+                  {pinHint}
+                </div>
+              ) : null}
 
               <label className="grid gap-1">
                 <span className="text-xs font-semibold text-white/70">PIN（4 位數字）</span>

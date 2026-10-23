@@ -55,6 +55,9 @@ export async function POST(request: Request) {
       ok: true,
       known: false,
       identities: [{ kind: "owner", id: "owner", name: "店主", role: "owner" }],
+      staffTotal: 0,
+      staffActive: 0,
+      staffTableMissing: false,
     });
   }
 
@@ -63,9 +66,13 @@ export async function POST(request: Request) {
   ];
 
   const staffResult = await listPosStaff(resolved.storeId);
+  let staffTotal = 0;
+  let staffActive = 0;
   if (staffResult.ok) {
+    staffTotal = staffResult.staff.length;
     for (const item of staffResult.staff) {
       if (!item.active) continue;
+      staffActive += 1;
       if (identities.length >= 61) break; // 一間店最多 40 人，留返緩衝
       identities.push({
         kind: "staff",
@@ -83,5 +90,13 @@ export async function POST(request: Request) {
     storeId: resolved.storeId,
     storeName: resolved.storeName,
     identities,
+    // 診斷用：client 靠呢三個數字講清楚「點解得店主一個」——
+    //   ① staffTableMissing → 0072 未跑
+    //   ② staffTotal === 0  → 真係未加店員
+    //   ③ staffTotal > 0 但 staffActive === 0 → 店員全部停用
+    // 冇呢三個數，三種情況喺 UI 上長得一模一樣，淨係見到「店主 · 切換」。
+    staffTotal,
+    staffActive,
+    staffTableMissing: staffResult.ok ? false : staffResult.tableMissing === true,
   });
 }
