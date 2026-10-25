@@ -2602,19 +2602,59 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
       // 分隔符都係顯示文案（中文頓號 vs 英文逗號）。
       .join(t("、")) || "—";
 
-  // 手動毛利率 → 毛利 = 營業額 × 毛利率%；冇設定就用系統估算（營業額 − 進貨成本）。
-  const displayGrossProfit =
-    gpMarginPct != null ? (onlineOfflineSplit.totalRevenueMop * gpMarginPct) / 100 : grossProfit;
+  /**
+   * 2026-10-25（J）：**有買貨記錄就計真毛利率**，唔再靠手動 50% 估。
+   *
+   * J 原話：「已經有買貨嘅價錢，同營業額，那其實我不就知道毛利了嗎？」
+   * ⇒ 買貨總額 + 營業額已經足夠算真毛利同毛利率，手動 % 只應該係
+   *   **冇買貨資料時**（新店／未入貨／讀唔到進貨數據）嘅後備。
+   *
+   * 舊行為：手動 % 一設就**永遠蓋過**真實成本（J 自己設過 50%，
+   * 所以卡面長期顯示 19,797 而唔係真實 25,550）—— 呢個就係要修嘅位。
+   *
+   * ⚠️ `count` 係**全部收據張數**（含未付），唔用 `paidCount`：
+   *    月結／賒數貨未付款但已經係成本，用 `paidCount` 會當成「冇買貨」。
+   */
+  const hasPurchaseCost = !purchaseUnavailable && (purchase.sel?.count ?? 0) > 0;
+  /** 手動毛利率只在「完全冇買貨記錄」時生效。 */
+  const useManualMargin = gpMarginPct != null && !hasPurchaseCost;
+
+  const displayGrossProfit = useManualMargin
+    ? (onlineOfflineSplit.totalRevenueMop * gpMarginPct) / 100
+    : grossProfit;
+
+  /**
+   * 毛利率（2026-10-25 新增）。
+   *
+   * 分母用 **`totalRevenueNetMop`**（＝「營業額」格顯示嗰個已扣退款嘅數），
+   * 唔用 `totalRevenueMop`（毛）—— 否則商家自己用「毛利 ÷ 營業額」計出嚟
+   * 同卡面顯示嘅 % 差幾毫，會覺得夾唔埋。
+   *
+   * 手動分支直接回傳手動 %：手動 % 嘅定義本身就係「毛利率」，
+   * 唔應該再除一次（`totalRevenueMop` 同 `Net` 有退款差）。
+   */
+  const grossMarginPct = useManualMargin
+    ? gpMarginPct
+    : onlineOfflineSplit.totalRevenueNetMop > 0
+      ? (displayGrossProfit / onlineOfflineSplit.totalRevenueNetMop) * 100
+      : null;
 
   // 🔴 2026-10-05（J 拍板）：成本口徑改為「**買貨總額（已付 ＋ 未付）**」。
   // 比舊嘅「當日已付收據」準（月結／賒數貨唔會漏計），但仍**未扣存貨變動**。
   // 讀唔到進貨數據時更要明講，否則用戶會以為毛利率真係 100%。
-  const gpSubtitle =
-    gpMarginPct != null
-      ? t("毛利率 {p}%（營業額 × {p}%）", { p: gpMarginPct })
-      : purchaseUnavailable
-        ? t("注意：進貨數據未能讀取，未扣成本（＝營業額），僅供參考")
-        : t("系統估算：營業額 − 買貨總額（已付 ＋ 未付）");
+  const gpSubtitle: React.ReactNode = useManualMargin
+    ? t("毛利率 {p}%（營業額 × {p}%）", { p: gpMarginPct })
+    : purchaseUnavailable
+      ? t("注意：進貨數據未能讀取，未扣成本（＝營業額），僅供參考")
+      : (
+          <span className="flex flex-wrap items-baseline gap-x-1">
+            <span>{t("毛利率")}</span>
+            <span className="text-[13px] font-extrabold text-emerald-600">
+              {grossMarginPct == null ? "—" : `${grossMarginPct.toFixed(1)}%`}
+            </span>
+            <span>{t("（毛利 ÷ 營業額）")}</span>
+          </span>
+        );
 
   /**
    * 沽清菜品清單。
@@ -3233,7 +3273,7 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                     }
                     highlight
                     delta={
-                      gpMarginPct != null || purchaseUnavailable
+                      useManualMargin || purchaseUnavailable
                         ? null
                         : grossProfitYest === null
                           ? null
@@ -3245,7 +3285,7 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                       <>
                         <span className="block font-semibold text-slate-800">{t("毛利（估）")}</span>
                         <span className="mt-1 block">
-                          {gpMarginPct != null
+                          {useManualMargin
                             ? `手動設定毛利率：營業額 × ${gpMarginPct}%。`
                             : "系統估算：營業額 − 買貨總額（已付 ＋ 未付）。"}
                         </span>
@@ -3254,7 +3294,11 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                           ＝入貨當期認成本 —— 比只用「已付」準（月結貨唔會漏計）。
                           但仍<span className="font-semibold">{t("未扣存貨變動")}</span>
                           （入大批貨當期毛利會偏低；冇入貨當期會偏高）。
-                          要更準可撳右上角 edit 直接輸入毛利率。
+                        </span>
+                        <span className="mt-1 block text-[11px] text-slate-500">
+                          {hasPurchaseCost
+                            ? "呢期有買貨記錄 ⇒ 毛利同毛利率都用實際成本計，手動毛利率暫時唔生效（唔會遮住真實數）。"
+                            : "呢期冇買貨記錄 ⇒ 毛利用你手動設定嘅毛利率估算；撳右上角 edit 可以改。"}
                         </span>
                         <span className="mt-1 block text-[11px] text-slate-500">
                           {t("成本只計 MOP 貨款；HKD／RMB 唔換算（不設匯率）")}
@@ -3262,36 +3306,42 @@ function RestaurantDailyReportBody(props: RestaurantDailyReportProps = {}) {
                       </>
                     }
                     action={
-                      gpEditing ? (
-                        <div className="flex items-center gap-1">
+                      /*
+                       * 2026-10-25：有買貨記錄時**唔顯示 edit** —— 手動 % 而家只係
+                       * 「冇成本資料」嘅後備，擺個撳完冇反應嘅掣只會令人以為壞咗。
+                       */
+                      !hasPurchaseCost ? (
+                        gpEditing ? (
+                          <div className="flex items-center gap-1">
+                            <button
+                              onClick={saveGpOverride}
+                              className="text-[11px] font-semibold text-orange-600 hover:underline"
+                            >
+                              {t("儲存")}
+                            </button>
+                            <button
+                              onClick={() => setGpEditing(false)}
+                              className="text-[11px] text-slate-400 hover:underline"
+                            >
+                              {t("取消")}
+                            </button>
+                          </div>
+                        ) : (
                           <button
-                            onClick={saveGpOverride}
-                            className="text-[11px] font-semibold text-orange-600 hover:underline"
+                            onClick={() => {
+                              setGpDraft(gpMarginPct != null ? String(gpMarginPct) : "50");
+                              setGpEditing(true);
+                            }}
+                            className="flex items-center gap-0.5 rounded-md px-1.5 py-0.5 text-[11px] text-slate-400 transition-colors hover:bg-orange-50 hover:text-orange-600"
+                            title={t("編輯毛利預估值")}
                           >
-                            {t("儲存")}
+                            <svg viewBox="0 0 16 16" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="1.5">
+                              <path d="M11 2l3 3L6 13l-3.5.5L3 10z" strokeLinejoin="round" />
+                            </svg>
+                            edit
                           </button>
-                          <button
-                            onClick={() => setGpEditing(false)}
-                            className="text-[11px] text-slate-400 hover:underline"
-                          >
-                            {t("取消")}
-                          </button>
-                        </div>
-                      ) : (
-                        <button
-                          onClick={() => {
-                            setGpDraft(gpMarginPct != null ? String(gpMarginPct) : "50");
-                            setGpEditing(true);
-                          }}
-                          className="flex items-center gap-0.5 rounded-md px-1.5 py-0.5 text-[11px] text-slate-400 transition-colors hover:bg-orange-50 hover:text-orange-600"
-                          title={t("編輯毛利預估值")}
-                        >
-                          <svg viewBox="0 0 16 16" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="1.5">
-                            <path d="M11 2l3 3L6 13l-3.5.5L3 10z" strokeLinejoin="round" />
-                          </svg>
-                          edit
-                        </button>
-                      )
+                        )
+                      ) : null
                     }
                   />
                 </div>
@@ -4505,7 +4555,7 @@ function Kpi({
   highlight?: boolean;
   delta: { arrow: string; cls: string } | null;
   /** 大數下方的小字（如「線下/線上」分拆）。 */
-  subtitle?: string;
+  subtitle?: React.ReactNode;
   /** 右上角操作位（如「毛利（估）」嘅 edit 掣）。 */
   action?: React.ReactNode;
   /**

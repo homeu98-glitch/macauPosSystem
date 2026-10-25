@@ -629,6 +629,7 @@ export const EN_DICT: Record<string, string> = {
   "未付支出": "Unpaid expenses",
   "未付款": "Unpaid",
   "毛利率": "Gross margin",
+  "（毛利 ÷ 營業額）": "(gross profit ÷ revenue)",
   "毛利（估）": "Gross profit (est.)",
   "未扣存貨變動": "Inventory change not deducted",
   "儲存": "Save",
