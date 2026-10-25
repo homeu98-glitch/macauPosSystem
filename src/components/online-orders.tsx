@@ -1490,8 +1490,17 @@ export function OnlineOrders({
           ⚠️ chips 欄一定要 `min-w-0`，否則 flex 子項最小闊度＝內容闊度 → 窄屏撐爆外層。
           ⚠️ 外層唔可以加 `justify-between`：chips 欄靠 `flex-1` 吃滿中間，右欄自然貼右。
         */}
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-          <div className="min-w-0 shrink-0">
+        <div className="@container flex flex-wrap items-center gap-x-4 gap-y-2">
+          {/*
+            🔴 2026-10-25：卡片版（左右分欄）標題塊要**可以被壓縮**。
+            原本 `shrink-0` + `flex-wrap` ⇒ 標題塊（約 195px）＋右側兩粒接單掣（約 288px）
+            加起來 499px，半欄（iPad 1080 ⇒ 行寬 472px）塞唔落 ⇒ 控件被擠落第二行，
+            變成「標題／接單掣／chips」三行；桌面 1440（行寬 652px）就冇事。
+            `basis-0 grow` ⇒ 標題塊只佔剩餘闊度（472−288＝168px），兩粒掣留在同一行。
+            ⚠️ 用 `grow` + `basis-0`（長寫），**唔可以**用 `flex-1`：`flex-1` 係
+               `flex: 1 1 0%` 簡寫，同 `shrink-0` 撞同一個 longhand，邊個贏睇生成順序。
+          */}
+          <div className={`min-w-0 shrink-0 ${layout === "cards" ? "lg:basis-0 lg:grow" : ""}`}>
             <div className={`font-semibold text-slate-900 ${embedded ? "text-sm" : "text-lg"}`}>
               {embedded ? t("線上訂單") : t("會員通線上訂單")}
             </div>

@@ -71,12 +71,17 @@ export function AutoAcceptPill({
     ? "text-[11px] font-semibold text-slate-600"
     : sm
       ? "text-[11px] font-medium text-slate-500"
-      : "text-xs font-semibold text-slate-600";
+      : "text-xs font-semibold text-slate-600 @max-[540px]:text-[11px]";
+  /*
+   * 🔴 2026-10-25：窄容器（訂單頁左右分欄，iPad ⇒ header 行寬 472px）自動收緊，
+   * 令「自動接單」同隔籬「線上／線下接單」留在標題同一行；闊容器完全冇變。
+   * 詳情見 `merchant-open-pill.tsx` 同一段註釋。
+   */
   const buttonSizeClass = xs
     ? "rounded-full px-1.5 py-[9px]"
     : sm
       ? "rounded-full px-3 py-1 text-[11px] font-semibold"
-      : "rounded-full px-3 py-1 text-xs font-semibold";
+      : "rounded-full px-3 py-1 text-xs font-semibold @max-[540px]:px-2 @max-[540px]:py-[7px]";
   const stateClass = enabled
     ? "bg-emerald-600 text-white"
     : contained
@@ -93,7 +98,9 @@ export function AutoAcceptPill({
   const stateNode = xs ? (
     <span className="block text-[12px] font-semibold leading-[1.35]">{stateText}</span>
   ) : (
-    stateText
+    /* 非 xs：包一層 span 只為咗窄容器可以縮字（`font: inherit` 令按鈕本身嘅
+       `text-xs` 冇效）。闊容器下無任何影響。 */
+    <span className="@max-[540px]:text-[12px]">{stateText}</span>
   );
 
   const inner = (
@@ -124,7 +131,7 @@ export function AutoAcceptPill({
     return (
       <div
         className={`flex shrink-0 items-center rounded-full bg-slate-100 ${
-          xs ? "gap-1.5 p-[3px]" : "gap-2 px-3 py-1.5"
+          xs ? "gap-1.5 p-[3px]" : "gap-2 px-3 py-1.5 @max-[540px]:gap-1.5 @max-[540px]:px-2 @max-[540px]:py-[3px]"
         }`}
       >
         {inner}

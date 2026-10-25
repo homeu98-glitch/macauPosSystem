@@ -698,8 +698,10 @@ export function LocalOrdersPanel({
           ⚠️ chips 欄一定要 `min-w-0`，否則 flex 子項最小闊度＝內容闊度 → 窄屏撐爆外層。
           ⚠️ 外層唔可以加 `justify-between`：chips 欄靠 `flex-1` 吃滿中間，右欄自然貼右。
         */}
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-          <div className="min-w-0 shrink-0">
+        <div className="@container flex flex-wrap items-center gap-x-4 gap-y-2">
+          {/* 🔴 2026-10-25：卡片版標題塊要可以被壓縮，否則半欄（472px）塞唔落
+              標題（195）＋兩粒接單掣（288）⇒ 控件被擠落第二行。同 `online-orders.tsx` 一致。 */}
+          <div className={`min-w-0 shrink-0 ${layout === "cards" ? "lg:basis-0 lg:grow" : ""}`}>
             <div className="text-sm font-semibold text-slate-900">{t("店內線下訂單")}</div>
             {/* 與左卡「線上訂單」header 同格式：dateFilter · tab · 共 X 張 · 新單 X 張。 */}
             <div className="mt-1 text-xs text-slate-500 sm:text-sm">

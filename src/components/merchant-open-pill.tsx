@@ -130,14 +130,22 @@ export function MerchantOpenPill({
     ? "text-[11px] font-semibold text-slate-600"
     : sm
       ? "text-[11px] font-medium text-slate-500"
-      : "text-xs font-semibold text-slate-600";
+      : "text-xs font-semibold text-slate-600 @max-[540px]:text-[11px]";
   // 觸控：`py-2` + 外層 padding → 實際可撳高度 ≥ 40px（同 AutoAcceptPill 對齊）。
   // `xs` 亦刻意保持 ~40px 高（只縮橫向），見 docs/mockups/accept-toggle-placement-2026-09-15-v2.html。
+  /*
+   * 🔴 2026-10-25「窄容器自動收緊」（`@max-[540px]:`）：
+   * 訂單頁左右分欄（iPad 1080 ⇒ 每欄 header 行寬 472px）放唔落
+   * 「標題（195）＋兩粒接單掣（288）」⇒ 兩粒掣被擠落第二行（桌面 1440 行寬 652 冇事）。
+   * 呢組 container query 喺**窄容器**自動收緊 padding／字級（唔改高度），
+   * 令兩粒掣留在標題同一行；闊容器（桌面）**完全冇變**。
+   * ⚠️ 一定要喺 call site 嘅 header 加 `@container`，否則呢啲 variant 永遠唔會 match。
+   */
   const buttonSizeClass = xs
     ? "rounded-full px-1.5 py-[9px]"
     : sm
       ? "rounded-full px-3 py-1.5 text-[11px] font-semibold"
-      : "rounded-full px-4 py-2 text-xs font-semibold";
+      : "rounded-full px-4 py-2 text-xs font-semibold @max-[540px]:px-2 @max-[540px]:py-[7px]";
 
   const unknown = merchantEnabled === null;
   const enabled = merchantEnabled === true;
@@ -165,7 +173,9 @@ export function MerchantOpenPill({
   const stateNode = xs ? (
     <span className="block text-[12px] font-semibold leading-[1.35]">{stateText}</span>
   ) : (
-    stateText
+    /* 非 xs：包一層 span 只為咗窄容器可以縮字（`font: inherit` 令按鈕本身嘅
+       `text-xs` 冇效，字級要落喺 span 先改得到）。闊容器下無任何影響。 */
+    <span className="@max-[540px]:text-[12px]">{stateText}</span>
   );
 
   const inner = (
@@ -222,7 +232,7 @@ export function MerchantOpenPill({
     return (
       <div
         className={`flex shrink-0 items-center rounded-full bg-slate-100 ${
-          xs ? "gap-1.5 p-[3px]" : "gap-2 px-3 py-1.5"
+          xs ? "gap-1.5 p-[3px]" : "gap-2 px-3 py-1.5 @max-[540px]:gap-1.5 @max-[540px]:px-2 @max-[540px]:py-[3px]"
         }`}
       >
         {inner}
