@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>報表 — 毛利（估）加毛利率（實機稿）</title>
+<style>
+:root{
+  --orange-600:#ea580c; --orange-500:#f97316;
+  --slate-50:#f8fafc; --slate-100:#f1f5f9; --slate-200:#e2e8f0;
+  --slate-400:#94a3b8; --slate-500:#64748b; --slate-600:#475569;
+  --slate-700:#334155; --slate-900:#0f172a;
+  --emerald-600:#059669; --emerald-50:#ecfdf5; --emerald-200:#a7f3d0;
+  --amber-700:#b45309; --amber-200:#fde68a; --amber-50:#fffbeb;
+  --red-600:#dc2626;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{
+  background:#e8edf4;color:#0f172a;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang TC","Microsoft JhengHei","Microsoft YaHei",sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:1120px;margin:0 auto;padding:22px 24px 40px}
+
+/* ── 審稿工具列（唔屬產品介面）── */
+.rev{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin:26px 0 10px}
+.rev h2{font-size:15px;margin:0;font-weight:700}
+.rev .tag{font-size:11px;font-weight:700;color:#fff;background:#0f172a;border-radius:9999px;padding:3px 10px}
+.rev .note{font-size:12px;color:#64748b}
+.rev.rec .tag{background:var(--emerald-600)}
+
+/* ── 卡片 ── */
+.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+.kpi{background:#fff;border:1px solid var(--slate-200);border-radius:16px;padding:16px;display:flex;flex-direction:column}
+.kpi-top{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}
+.kpi-label{font-size:12px;color:var(--slate-500)}
+.kpi-aside{display:flex;align-items:center;gap:6px;flex-shrink:0;color:var(--slate-400)}
+.info{width:15px;height:15px;border-radius:9999px;border:1px solid var(--slate-300);display:inline-flex;align-items:center;justify-content:center;font-size:9px;font-weight:700;color:var(--slate-400);line-height:1}
+.edit{font-size:10px;color:var(--slate-400);display:inline-flex;align-items:center;gap:3px}
+.val{margin-top:4px;font-size:23px;font-weight:800;letter-spacing:-.2px;color:var(--slate-900);display:flex;align-items:baseline;gap:6px;flex-wrap:wrap}
+.val .cur{font-size:11px;font-weight:700;color:var(--slate-500);letter-spacing:.3px}
+.val.hl{color:var(--orange-600)}
+.sub{margin-top:2px;font-size:11px;color:var(--slate-500);line-height:1.5}
+.note{margin-top:8px;border:1px solid var(--amber-200);background:var(--amber-50);color:var(--amber-700);border-radius:9px;padding:5px 8px;font-size:10.5px;line-height:1.55}
+
+/* 方案 A：毛利率寫喺副標，數字加粗上色 */
+.sub-a{display:flex;align-items:center;gap:6px;margin-top:4px;font-size:11.5px;color:var(--slate-500)}
+.sub-a b{font-size:13px;color:var(--emerald-600);font-weight:800}
+
+/* 方案 B：右邊大百分比 */
+.val-row{display:flex;align-items:flex-end;justify-content:space-between;gap:8px}
+.margin-b{text-align:right;line-height:1.1}
+.margin-b .n{font-size:22px;font-weight:800;color:var(--emerald-600);letter-spacing:-.5px}
+.margin-b .n span{font-size:12px;font-weight:700}
+.margin-b .l{font-size:10px;color:var(--slate-400);margin-top:2px}
+
+/* 方案 C：兩欄 */
+.two{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:4px}
+.two .cell{background:var(--slate-50);border:1px solid var(--slate-100);border-radius:10px;padding:7px 9px}
+.two .cell .l{font-size:10px;color:var(--slate-500)}
+.two .cell .n{font-size:15px;font-weight:800;margin-top:2px;display:flex;align-items:baseline;gap:4px}
+.two .cell .n .cur{font-size:9.5px;font-weight:700;color:var(--slate-400)}
+.two .cell.gp .n{color:var(--orange-600)}
+.two .cell.gm .n{color:var(--emerald-600)}
+
+.foot{margin-top:26px;font-size:12px;color:#64748b;line-height:1.9}
+.foot b{color:#0f172a}
+code{background:#fff;border:1px solid #dbe3ec;border-radius:5px;padding:1px 5px;font-size:11px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="rev">
+    <h2>報表 › 今日 · 毛利（估）卡片</h2>
+    <span class="tag">現況</span>
+    <span class="note">買貨總額 MOP 14,043／營業額 MOP 39,593 ⇒ 真實毛利 25,550、毛利率 64.5%</span>
+  </div>
+
+  <div class="grid">
+    <div class="kpi">
+      <div class="kpi-top"><div class="kpi-label">買貨總額</div><div class="kpi-aside"><span class="info">i</span></div></div>
+      <div class="val"><span class="cur">MOP</span>14,043</div>
+      <div class="sub">另有 <b style="color:var(--red-600)">RMB 427.46</b><br>共 177 張收據 · 含未付</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-top"><div class="kpi-label">已付支出</div><div class="kpi-aside"><span class="info">i</span></div></div>
+      <div class="val"><span class="cur">MOP</span>8,580</div>
+      <div class="sub">另有 <b style="color:var(--red-600)">RMB 427.46</b><br>本期間現金已付出嘅貨款</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-top"><div class="kpi-label">未付支出</div><div class="kpi-aside"><span class="info">i</span></div></div>
+      <div class="val"><span class="cur">MOP</span>5,463</div>
+      <div class="sub">本期間已入貨但未付款嘅貨款</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-top"><div class="kpi-label">毛利（估）</div><div class="kpi-aside"><span class="info">i</span><span class="edit">✎ edit</span></div></div>
+      <div class="val hl"><span class="cur">MOP</span>19,797</div>
+      <div class="sub">毛利率 50%（營業額 × 50%）</div>
+      <div class="note">成本只計 MOP 貨款；HKD／RMB 唔換算（不設匯率）</div>
+    </div>
+  </div>
+
+  <!-- ══════════ 方案 A ══════════ -->
+  <div class="rev rec">
+    <h2>方案 A</h2>
+    <span class="tag">建議</span>
+    <span class="note">主數字改為真實毛利，毛利率寫喺正下方 —— 改動最細，其餘八格完全不動</span>
+  </div>
+  <div class="grid">
+    <div class="kpi">
+      <div class="kpi-top"><div class="kpi-label">買貨總額</div><div class="kpi-aside"><span class="info">i</span></div></div>
+      <div class="val"><span class="cur">MOP</span>14,043</div>
+      <div class="sub">另有 <b style="color:var(--red-600)">RMB 427.46</b><br>共 177 張收據 · 含未付</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-top"><div class="kpi-label">已付支出</div><div class="kpi-aside"><span class="info">i</span></div></div>
+      <div class="val"><span class="cur">MOP</span>8,580</div>
+      <div class="sub">另有 <b style="color:var(--red-600)">RMB 427.46</b><br>本期間現金已付出嘅貨款</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-top"><div class="kpi-label">未付支出</div><div class="kpi-aside"><span class="info">i</span></div></div>
+      <div class="val"><span class="cur">MOP</span>5,463</div>
+      <div class="sub">本期間已入貨但未付款嘅貨款</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-top"><div class="kpi-label">毛利（估）</div><div class="kpi-aside"><span class="info">i</span><span class="edit">✎ edit</span></div></div>
+      <div class="val hl"><span class="cur">MOP</span>25,550</div>
+      <div class="sub-a">毛利率 <b>64.5%</b>（毛利 ÷ 營業額）</div>
+      <div class="note">成本只計 MOP 貨款；HKD／RMB 唔換算（不設匯率）</div>
+    </div>
+  </div>
+
+  <!-- ══════════ 方案 B ══════════ -->
+  <div class="rev">
+    <h2>方案 B</h2>
+    <span class="tag">對比</span>
+    <span class="note">毛利率放大到右邊，一眼睇到「賺幾成」—— 適合老闆每日巡一眼</span>
+  </div>
+  <div class="grid">
+    <div class="kpi">
+      <div class="kpi-top"><div class="kpi-label">買貨總額</div><div class="kpi-aside"><span class="info">i</span></div></div>
+      <div class="val"><span class="cur">MOP</span>14,043</div>
+      <div class="sub">另有 <b style="color:var(--red-600)">RMB 427.46</b><br>共 177 張收據 · 含未付</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-top"><div class="kpi-label">已付支出</div><div class="kpi-aside"><span class="info">i</span></div></div>
+      <div class="val"><span class="cur">MOP</span>8,580</div>
+      <div class="sub">另有 <b style="color:var(--red-600)">RMB 427.46</b><br>本期間現金已付出嘅貨款</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-top"><div class="kpi-label">未付支出</div><div class="kpi-aside"><span class="info">i</span></div></div>
+      <div class="val"><span class="cur">MOP</span>5,463</div>
+      <div class="sub">本期間已入貨但未付款嘅貨款</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-top"><div class="kpi-label">毛利（估）</div><div class="kpi-aside"><span class="info">i</span><span class="edit">✎ edit</span></div></div>
+      <div class="val-row">
+        <div class="val hl"><span class="cur">MOP</span>25,550</div>
+        <div class="margin-b"><div class="n">64.5<span>%</span></div><div class="l">毛利率</div></div>
+      </div>
+      <div class="sub">營業額 39,593 − 買貨 14,043</div>
+      <div class="note">成本只計 MOP 貨款；HKD／RMB 唔換算（不設匯率）</div>
+    </div>
+  </div>
+
+  <!-- ══════════ 方案 C ══════════ -->
+  <div class="rev">
+    <h2>方案 C</h2>
+    <span class="tag">對比</span>
+    <span class="note">毛利／毛利率並排兩格，兩個數一樣大 —— 資訊最完整，但卡片會高一截</span>
+  </div>
+  <div class="grid">
+    <div class="kpi">
+      <div class="kpi-top"><div class="kpi-label">買貨總額</div><div class="kpi-aside"><span class="info">i</span></div></div>
+      <div class="val"><span class="cur">MOP</span>14,043</div>
+      <div class="sub">另有 <b style="color:var(--red-600)">RMB 427.46</b><br>共 177 張收據 · 含未付</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-top"><div class="kpi-label">已付支出</div><div class="kpi-aside"><span class="info">i</span></div></div>
+      <div class="val"><span class="cur">MOP</span>8,580</div>
+      <div class="sub">另有 <b style="color:var(--red-600)">RMB 427.46</b><br>本期間現金已付出嘅貨款</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-top"><div class="kpi-label">未付支出</div><div class="kpi-aside"><span class="info">i</span></div></div>
+      <div class="val"><span class="cur">MOP</span>5,463</div>
+      <div class="sub">本期間已入貨但未付款嘅貨款</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-top"><div class="kpi-label">毛利（估）</div><div class="kpi-aside"><span class="info">i</span><span class="edit">✎ edit</span></div></div>
+      <div class="two">
+        <div class="cell gp"><div class="l">毛利</div><div class="n"><span class="cur">MOP</span>25,550</div></div>
+        <div class="cell gm"><div class="l">毛利率</div><div class="n">64.5<span class="cur" style="font-size:11px;color:#059669">%</span></div></div>
+      </div>
+      <div class="note">成本只計 MOP 貨款；HKD／RMB 唔換算（不設匯率）</div>
+    </div>
+  </div>
+
+  <div class="foot">
+    <b>算式（用你截圖嘅數）</b><br>
+    毛利 ＝ 營業額 39,593 − 買貨總額 14,043 ＝ <b>25,550</b><br>
+    毛利率 ＝ 25,550 ÷ 39,593 ＝ <b>64.5%</b><br>
+    <br>
+    <b>要留意</b>：買貨總額係「入貨當期認成本」，未扣存貨變動 —— 一次入大批貨嘅期間毛利率會偏低，冇入貨嘅期間會偏高。所以標題仍然係「毛利（<b>估</b>）」。
+  </div>
+</div>
+</body>
+</html>
