@@ -50,6 +50,33 @@ body {
   margin: 0;
   width: 100%;
   height: 100%;
+  /*
+   * ── 2026-10-25 禁止「成個頁面被拉動」（iOS 橡皮筋）────────────────────
+   *
+   * 症狀（實機影片，訂單頁）：手指喺列表向下／向上拖，**成個畫面**（連左側欄、
+   * 標題列）一齊跟住上落，放手又彈返原位。呢個唔係任何一個 div 喺度 scroll
+   * —— `body` 本身已經 `h-full overflow-hidden`，document 根本冇 scrollTop；
+   * 係 iOS WebView 對**文件層**做 overscroll bounce。
+   *
+   * ⇒ 文件層截斷 bounce／pull-to-refresh。
+   */
+  overscroll-behavior: none;
+}
+
+/*
+ * 內部滾動容器（訂單列表、側欄、設定頁…）：滾到頂／底之後，剩餘手勢
+ * **唔可以**「傳染」去文件層 —— 否則一樣會成頁彈（只係換咗由邊個容器觸發）。
+ *
+ * ⚠️ Tailwind 嘅 `overflow-*` 係真 class，呢度直接列出嚟一次過覆蓋；
+ *    呢段係 unlayered 規則，會蓋過 utilities layer 嘅 `overscroll-auto`
+ *    （包括日後新加嘅滾動區，唔會漏）。真係要例外嗰個位，寫 inline style。
+ * ⚠️ 只影響「滾動鏈」，唔影響正常滾動同慣性。
+ */
+.overflow-auto,
+.overflow-y-auto,
+.overflow-x-auto,
+.overflow-scroll {
+  overscroll-behavior: contain;
 }
 
 a {
