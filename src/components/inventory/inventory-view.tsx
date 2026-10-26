@@ -468,6 +468,17 @@ function ReceiptFormModal({
   const [pickerIndex, setPickerIndex] = useState<number>(-1);
 
   /**
+   * 品項區嘅 scroll 容器（`flex-1 overflow-y-auto` 嗰個 div）。
+   *
+   * 🔴 2026-10-26：新增品項之後要**自己**捲呢個容器（見 `addItemRow`）。
+   *    唔可以叫 `scrollIntoView()` —— 佢會連 backdrop 後面嘅頁面一齊捲，
+   *    令商家閂咗彈窗之後發現成頁跳咗位。
+   */
+  const bodyRef = useRef<HTMLDivElement>(null);
+  /** 每一行品項嘅 wrapper（index 對應 `form.items`），新增行之後用嚟捲到佢。 */
+  const itemRowRefs = useRef<Array<HTMLDivElement | null>>([]);
+
+  /**
    * 🔴 2026-10-08：**目前所選供應商**嘅歷史品項
    * （`GET /api/inventory/receipt-items?account=…&merchantId=…`）。
    *
@@ -593,6 +604,38 @@ function ReceiptFormModal({
 
   const setItem = (i: number, patch: Partial<FormItem>) =>
     setForm((f) => ({ ...f, items: f.items.map((it, idx) => (idx === i ? { ...it, ...patch } : it)) }));
+
+  /**
+   * 新增一行品項，並且**一定要**捲到新行。
+   *
+   * 🔴 2026-10-26 實案（商家拍片回報「喺編輯收據撳＋品項冇反應」）：
+   *    新行其實**加咗**，但係 append 喺最尾 —— 商家捲到「＋ 品項」掣啱啱好入鏡
+   *    嘅位置撳落去，新行落喺 scroll 容器底邊以外（實測行 top 646 > 容器 bottom 642）
+   *    ⇒ 畫面零變化。之後佢再撳幾次，就靜靜雞多咗幾行空殼。
+   *
+   *    ⇒ 加完之後自己捲容器，令新行完整入鏡（留 16px 呼吸位）。
+   *    ⚠️ 唔好用 `scrollIntoView()`（會連頁面一齊捲）；
+   *    ⚠️ 唔好 `focus()` 品名欄（iPad 彈鍵盤會蓋住成個下半部，反而更亂）。
+   */
+  const addItemRow = () => {
+    setForm((f) => ({
+      ...f,
+      items: [...f.items, { name: "", unit_price: "", quantity: "1", unit: "" }],
+    }));
+    // 等新行掛咗 DOM 先度位。`requestAnimationFrame` 喺 React 18/19 嘅自動 batching
+    // 之下都係 commit 之後嘅下一個 frame，唔使 `setTimeout` 魔術數字。
+    requestAnimationFrame(() => {
+      const body = bodyRef.current;
+      // 一定係「最後一行」——唔用 `form.items.length`（快速連撳兩下會拿到舊長度）。
+      const rows = itemRowRefs.current;
+      const row = [...rows].reverse().find((el): el is HTMLDivElement => Boolean(el));
+      if (!body || !row) return;
+      const rowRect = row.getBoundingClientRect();
+      const bodyRect = body.getBoundingClientRect();
+      const overflow = rowRect.bottom + 16 - bodyRect.bottom;
+      if (overflow > 0) body.scrollTop += overflow;
+    });
+  };
 
   const total = form.items.reduce((s, it) => s + (Number(it.unit_price) || 0) * (Number(it.quantity) || 1), 0);
 
@@ -1046,7 +1089,7 @@ function ReceiptFormModal({
           </button>
         </div>
 
-        <div className="flex-1 space-y-5 overflow-y-auto px-5 py-5">
+        <div ref={bodyRef} className="flex-1 space-y-5 overflow-y-auto px-5 py-5">
           {/* ── 供應商：下拉（已有）＋ 即時新增 ── */}
           <div>
             <label className={labelCls}>供應商</label>
@@ -1459,11 +1502,18 @@ function ReceiptFormModal({
           {/* ── 品項：支援歷史品項快速選取 ── */}
           <div>
             <div className="mb-1.5 flex items-center justify-between">
-              <label className="text-sm font-medium text-slate-700">品項</label>
+              <label className="text-sm font-medium text-slate-700">
+                品項
+                {/* 🔴 2026-10-26：行數要即刻睇得到。商家回報「撳＋品項冇反應」時，
+                    唯一分辨「真係冇加」同「加咗但落喺可視範圍外」嘅線索就係呢個數字。 */}
+                <span className="ml-1.5 text-xs font-normal text-slate-400 tabular-nums">
+                  共 {form.items.length} 行
+                </span>
+              </label>
               <button
                 type="button"
-                className="rounded-lg bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-700"
-                onClick={() => setForm((f) => ({ ...f, items: [...f.items, { name: "", unit_price: "", quantity: "1", unit: "" }] }))}
+                className="inline-flex min-h-[44px] shrink-0 items-center justify-center rounded-xl bg-slate-900 px-4 text-sm font-semibold text-white hover:bg-slate-700"
+                onClick={addItemRow}
               >
                 ＋ 品項
               </button>
@@ -1472,7 +1522,13 @@ function ReceiptFormModal({
               {form.items.map((it, i) => {
                 const suggestions = pickerIndex === i ? suggestionsFor(it.name) : [];
                 return (
-                  <div key={i} className="relative">
+                  <div
+                    key={i}
+                    ref={(el) => {
+                      itemRowRefs.current[i] = el;
+                    }}
+                    className="relative"
+                  >
                     {/* 🔴 2026-09-25 修正：以前係 `flex` + `${fieldCls} w-28`，而 fieldCls
                         內含 `w-full`；本專案 Tailwind v4 產生順序係 `.w-full` 喺 `.w-28`
                         之後 ⇒ `w-full` 勝出 ⇒ 單價／數量 flex-basis = 100%，

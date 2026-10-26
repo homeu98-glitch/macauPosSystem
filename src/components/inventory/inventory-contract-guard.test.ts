@@ -1594,3 +1594,27 @@ describe('品項分析：tab 接線', () => {
     assert.ok(/categoryOrder={categoryOrder}/.test(src));
   });
 });
+
+describe('收據彈窗：「＋ 品項」一定要捲到新行（2026-10-26 實案）', () => {
+  /**
+   * 商家拍片回報「喺編輯收據撳＋品項冇反應」。
+   * 真相：新行**加咗**，但 append 喺最尾 —— 佢捲到「＋ 品項」掣啱啱入鏡嘅位置撳，
+   * 新行落喺 scroll 容器底邊以外（實測行 top 646 > 容器 bottom 642）⇒ 畫面零變化。
+   */
+  it('加行要交畀 addItemRow（唔可以就地 inline setForm 就算）', () => {
+    const src = read(VIEW);
+    assert.ok(/const addItemRow = \(\) =>/.test(src), '要有 addItemRow');
+    assert.ok(/onClick=\{addItemRow\}/.test(src), '＋ 品項 掣要撳 addItemRow');
+  });
+
+  it('加完要捲自己個容器（唔可以用 scrollIntoView 連頁面一齊捲）', () => {
+    const src = read(VIEW);
+    assert.ok(/body\.scrollTop \+= overflow/.test(src), '要自己捲 scroll 容器');
+    assert.equal(/scrollIntoView/.test(src), false, '🔴 scrollIntoView 會連 backdrop 後面頁面一齊捲');
+  });
+
+  it('行數要即刻顯示（分得出「真係冇加」同「加咗但睇唔到」）', () => {
+    const src = read(VIEW);
+    assert.ok(/共 \{form\.items\.length\} 行/.test(src), '品項標題要有行數');
+  });
+});
