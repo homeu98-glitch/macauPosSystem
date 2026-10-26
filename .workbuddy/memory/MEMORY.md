@@ -55,7 +55,10 @@
 - git-bash 冇 coreutils、`npm/npx` 跑唔到 ⇒ 用 Read/Glob/Grep 或 managed node 直接跑入口檔（`node_modules/typescript/bin/tsc`、`node --test`、`node_modules/eslint/bin/eslint.js <file>`）。
 - 唔好 `node -e` 寫含反引號內容（shell 靜默吞）⇒ 用 Write/Edit 或 `.cjs`。
 - `next build` 要 `CODEBUDDY_SAFE_DELETE_ENABLED=0`；刪源碼檔要 PowerShell `Remove-Item -LiteralPath` ＋同一 env。
-- push 前把 PortableGit `cmd`＋`mingw64/bin` 入 PATH；仍掛就繞過 GCM 用內聯 helper。
+- **push 唔使做任何手腳**（2026-10-26 更正，舊記錄寫「要把 PortableGit 入 PATH／繞過 GCM」係錯嘅）：J 部機裝咗 **GitHub Desktop**，GCM 已有緩存憑證 ⇒ `git push origin main` 直接乾脆成功，唔使 PATH、唔使 inline helper、唔使 PAT。
+- ⚠️ 但 push **可能要 >120s 先返結果**：Bash tool 默認超時會 SIGTERM 殺死 process，輸出空白、以為失敗，**其實可能已經推咗**。
+  ⇒ 用 `timeout 240 git push origin main` 並把 tool timeout 設 300s；判成敗一律用 `git rev-parse origin/main` 對 `main`，**唔好**用push指令嘅 exit code／輸出。
+- 本機 node_modules 嘅 `typescript`／`eslint` 包裝殘缺（lib.dom.ts、eslint package.json 缺）⇒ `tsc --noEmit`／`eslint` 跑唔起，改動要靠手審。
 
 ## 取證
 - `pos_bootstrap_config`／`pos_device_configs`／`pos_shifts` anon 401；`pos_store_status`、`pos_print_jobs` anon 可讀 ⇒ union store_id，再打公開 `/api/pos/bootstrap?storeId=` 核店名／菜品（唔需憑證）。
