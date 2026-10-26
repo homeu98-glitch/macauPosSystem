@@ -176,7 +176,11 @@ export async function GET(request: Request) {
     const receiptItems = (itemsByReceipt.get(String(r.id)) ?? []).map((it) => {
       const item = it as Record<string, unknown>;
       return {
-        name: typeof item.name === "string" ? item.name : "未命名品項",
+        // 🔴 2026-10-26：空字串品名（expenseRecorder 掃碼流非必填）原本會過咗呢關、
+        //   再被 `buildItemStats` 嘅 `if (!rawName) continue` 靜默跳過 ⇒ 整行金額消失、
+        //   貨品細項同買貨總額對唔上。trim 後為空一律 fallback「未命名品項」，
+        //   至少令佢現身（金額照計），唔會無聲跌數。根治要 expenseRecorder 掃碼流強制品名。
+        name: (typeof item.name === "string" ? item.name : "").trim() || "未命名品項",
         unit_price: Number(item.unit_price) || 0,
         quantity: Number(item.quantity) || 1,
         // 2026-10-05：貨品細項要顯示單位（kg／包／罐）。expenseRecorder 嘅

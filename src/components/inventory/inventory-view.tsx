@@ -477,6 +477,20 @@ function ReceiptFormModal({
   const bodyRef = useRef<HTMLDivElement>(null);
   /** 每一行品項嘅 wrapper（index 對應 `form.items`），新增行之後用嚟捲到佢。 */
   const itemRowRefs = useRef<Array<HTMLDivElement | null>>([]);
+  /** 彈窗最外層 backdrop（用嚟喺鍵盤彈起時錨住 visual viewport）。 */
+  const overlayRef = useRef<HTMLDivElement>(null);
+  /**
+   * 🔴 2026-10-26 iPad 鍵盤修復：iPadOS 彈起虛擬鍵盤會 pan 成個 **visual viewport**，
+   *    連 `fixed inset-0` 彈窗（含底部「儲存收據」掣）一齊視覺上移 ⇒
+   *    商家打字中途以為掣喺原位，實際撳中間就誤撳到儲存。
+   *
+   *    呢度記低 visual viewport 嘅 `offsetTop`（被 pan 嘅位移）同 `height`（可視高度），
+   *    再去 JSX 把彈窗錨返去可視區：① backdrop `top` 拉到 offsetTop，令彈窗填滿「鍵盤上方」
+   *    嗰塊可視區；② 彈窗自身 `height` 收縮到 visual viewport 高度，footer 永遠喺鍵盤上方。
+   *    沒鍵盤（桌面／手機無 pan）時兩者皆 null ⇒ 回復原本 `inset-0` ＋ `max-h-[92vh]`。
+   */
+  const [vvTop, setVvTop] = useState<number | null>(null);
+  const [vvH, setVvH] = useState<number | null>(null);
 
   /**
    * 🔴 2026-10-08：**目前所選供應商**嘅歷史品項
@@ -599,6 +613,34 @@ function ReceiptFormModal({
       cancelled = true;
     };
   }, [open, account, form.merchant_id, suppliers, scopedItems]);
+
+  /**
+   * 🔴 2026-10-26 iPad 鍵盤修復（配套上面 `vvTop`／`vvH` state ＋ JSX 錨位）。
+   *
+   * 監聽 `visualViewport` 嘅 resize／scroll：鍵盤彈起 ⇒ `offsetTop` ＞ 0 且 `height` 縮細
+   * ⇒ 記低兩個值，喺 JSX 把彈窗錨返去「鍵盤上方可視區」，成個彈窗唔會跟住鍵盤上移，
+   * 底部「儲存收據」掣永遠留喺可視範圍內｜鍵盤收起 ⇒ 兩值 reset 為 null，回復正常版面。
+   */
+  useEffect(() => {
+    if (!open || typeof window === "undefined") return;
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const apply = () => {
+      // 只有真係畀鍵盤壓小咗 visual viewport 先至處理（桌面鍵盤唔會改 vv.height，留 null）。
+      const keyboardUp = vv.height > 0 && vv.height < window.innerHeight - 4;
+      setVvTop(keyboardUp ? vv.offsetTop || 0 : null);
+      setVvH(keyboardUp ? vv.height : null);
+    };
+    vv.addEventListener("resize", apply);
+    vv.addEventListener("scroll", apply);
+    apply();
+    return () => {
+      vv.removeEventListener("resize", apply);
+      vv.removeEventListener("scroll", apply);
+      setVvTop(null);
+      setVvH(null);
+    };
+  }, [open]);
 
   if (!open) return null;
 
@@ -1072,10 +1114,13 @@ function ReceiptFormModal({
 
   return (
     <div
+      ref={overlayRef}
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-3"
+      style={vvTop != null ? { top: `${vvTop}px` } : undefined}
     >
       <div
         className="flex max-h-[92vh] w-full max-w-2xl flex-col overflow-hidden rounded-3xl bg-white shadow-2xl"
+        style={vvH != null ? { height: `calc(${vvH}px - 24px)` } : undefined}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex shrink-0 items-center justify-between border-b border-slate-100 px-5 py-4">
