@@ -212,9 +212,47 @@ export function groupSettlementByOrder(txns: readonly PlatformSettlementTxn[]): 
   byOrder: Map<string, PlatformSettlementForOrder>;
   /** 冇 `tradeNo`（無法配對）嘅 transaction 筆數。 */
   unmatchedCount: number;
+  /**
+   * 被當成**完全重複**而丟棄嘅 transaction 筆數（2026-10-26 新增）。
+   *
+   * 🔴🔴 為什麼要「去重之後才加總」（真機事故 2026-10-26）──────────────
+   * 報表 MFOOD 實收顯示 **MOP 4,318.32**，而應收只係 **2,149.00**（2.009 倍）。
+   * 逐張拆開睇，金額全部可以整除 2 或 3，除返之後比率穩定落喺 0.73–0.80
+   * （＝正常平台抽成 20–27%），同 9 月尾正常單完全一致。
+   * ⇒ 同一筆錢被**加總咗 2–3 次**（抓取跨頁重疊／同一頁重抓，上游去重漏咗）。
+   *
+   * 加總本身係必要嘅（拆單／部分退款／補貼分開入帳都係「同一 tradeNo 多筆」），
+   * 但**每個金額欄位都一模一樣**嘅兩筆，唔可能係真實拆單 —— 係重複投遞。
+   * ⇒ 只丟棄「完全重複」，其餘照舊加總（拆單金額必然唔同，測試有覆蓋）。
+   */
+  duplicateCount: number;
 } {
   const byOrder = new Map<string, PlatformSettlementForOrder>();
   let unmatchedCount = 0;
+  let duplicateCount = 0;
+
+  /**
+   * 完全重複嘅簽名（`tradeNo + 五個金額`）。
+   *
+   * ⚠️ 一定要包 `businessAmount` / `serviceFee`：真實拆單即使 `netAmount` 巧合相同，
+   *    營業額同服務費亦唔會一齊相同；只用 `tradeNo+netAmount` 會誤殺。
+   * ⚠️ `null` 要同 `0` 分開寫（`"n"` vs 數字），否則「冇值」同「真係 0」會撞簽名。
+   */
+  const seen = new Set<string>();
+  const sigOf = (
+    key: string,
+    net: number | null,
+    sub: number | null,
+    biz: number | null,
+    fee: number | null,
+  ): string =>
+    [
+      key,
+      net === null ? "n" : net.toFixed(2),
+      sub === null ? "n" : sub.toFixed(2),
+      biz === null ? "n" : biz.toFixed(2),
+      fee === null ? "n" : fee.toFixed(2),
+    ].join("|");
 
   for (const txn of txns ?? []) {
     const key = normalizeTradeNo(txn?.externalOrderId);
@@ -225,6 +263,16 @@ export function groupSettlementByOrder(txns: readonly PlatformSettlementTxn[]): 
 
     const net = toAmountOrNull(txn?.netAmount);
     const sub = toAmountOrNull(txn?.subsidyNet);
+    const biz = toAmountOrNull(txn?.businessAmount);
+    const fee = toAmountOrNull(txn?.serviceFee);
+
+    // 🔴 完全重複 → 丟棄（唔加總、唔計 txnCount）。見上面 `duplicateCount` 註釋。
+    const sig = sigOf(key, net, sub, biz, fee);
+    if (seen.has(sig)) {
+      duplicateCount += 1;
+      continue;
+    }
+    seen.add(sig);
 
     // 🔴 初始值係 `null`（＝仲未有過任何值），唔係 0。
     const cur =
@@ -240,7 +288,7 @@ export function groupSettlementByOrder(txns: readonly PlatformSettlementTxn[]): 
     byOrder.set(key, cur);
   }
 
-  return { byOrder, unmatchedCount };
+  return { byOrder, unmatchedCount, duplicateCount };
 }
 
 /**
@@ -369,10 +417,26 @@ export interface MfoodTotals {
   /** 屬 MFOOD 但未對到帳嘅單數（> 0 時 UI 要標示「部分未對帳」）。 */
   pendingCount: number;
   /**
+   * 已對帳嗰批嘅**營業額**（＝差額率嘅真正分母）。
+   *
+   * 🔴 2026-10-26：之前只回 `receivable`（全部單），UI 亦印佢做分母，
+   *    但 `feeRate` 實際用嘅係「已對帳嗰批」。兩者唔同 ⇒ 商家用計數機照住
+   *    footer 打（`1 − 實收 ÷ 全部應收`）永遠對唔上 ⇒ 以為報表亂計。
+   */
+  settledReceivable: number;
+  /**
    * 差額率（＝平台抽成比例）＝ `1 − 實收 ÷ 應收`（0~1）。
    * `null` ＝ 冇實收 或 應收為 0 → 計唔到。
    */
   feeRate: number | null;
+  /**
+   * 🔴 口徑異常：實收 **大過** 已對帳應收（2026-10-26 真機事故）。
+   *
+   * 平台抽成再低都唔會負數；出現就代表資料有問題（最常見＝重複對帳加總）。
+   * 舊寫法只係靜靜 clamp 到 0 ⇒ 畫面顯示「**0.0%**」＝「平台一毫都冇抽」，
+   * 比顯示負數更誤導（商家完全睇唔出有問題）。UI 見到 `true` 必須講明白。
+   */
+  overReceivable: boolean;
 }
 
 /**
@@ -433,7 +497,16 @@ export function computeMfoodTotals<T extends SettlementOrderLike>(
   // 冇任何一張對到帳 → received 用 null（唔用 0）＋ 差額率計唔到。
   const receivedOrNull = settledCount > 0 ? received : null;
 
+  // 🔴 實收大過已對帳應收 ⇒ 唔可能係「平台抽成」，係資料問題。
+  //    容差 1 分（`round2` 造成嘅尾數），避免 0.005 級誤差誤報。
+  const overReceivable =
+    receivedOrNull !== null &&
+    settledReceivable > 0 &&
+    receivedOrNull > settledReceivable + 0.01;
+
   // 🔴 分子分母同一批（settledReceivable，唔係 receivable）。
+  //    ⚠️ 仍然要 clamp：`feeRate` 會用嚟畫比例條（負數會令 bar 爆版）；
+  //       「有異常」呢件事由 `overReceivable` 表達，唔靠 feeRate 負數。
   const feeRate =
     receivedOrNull === null || settledReceivable <= 0
       ? null
@@ -442,9 +515,11 @@ export function computeMfoodTotals<T extends SettlementOrderLike>(
   return {
     receivable,
     received: receivedOrNull,
+    settledReceivable,
     settledCount,
     pendingCount,
     feeRate,
+    overReceivable,
   };
 }
 
@@ -465,6 +540,13 @@ export interface SettlementTotals {
   received: number | null;
   /** 差額率 ＝ `1 − 實收 ÷ 對應應收`；`null` ＝ 計唔到。 */
   feeRate: number | null;
+  /**
+   * 差額率嘅**真正分母**（＝已對帳嗰批嘅營業額）。
+   * UI footer 一定要印佢，唔可以印 `receivable`（全部單）—— 見 `MfoodTotals.settledReceivable`。
+   */
+  settledReceivable: number;
+  /** 實收大過應收 ⇒ 資料異常（重複對帳）。UI 要顯示「異常」而唔係 0.0%。 */
+  overReceivable: boolean;
   /**
    * 口徑：
    *   `"per-order"` → 全部用逐單加總（最準，但有未對帳單）
@@ -521,6 +603,8 @@ export function computeSettlementTotals<T extends SettlementOrderLike>(
     receivable: perOrder.receivable,
     received: perOrder.received,
     feeRate: perOrder.feeRate,
+    settledReceivable: perOrder.settledReceivable,
+    overReceivable: perOrder.overReceivable,
     basis,
     pendingCount: perOrder.pendingCount,
     settledCount: perOrder.settledCount,

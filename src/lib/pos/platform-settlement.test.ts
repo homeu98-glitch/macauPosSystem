@@ -97,6 +97,38 @@ describe("groupSettlementByOrder：同一 tradeNo 多筆必須加總", () => {
     assert.equal(s.txnCount, 2, "要記住係兩筆，UI 可以顯示「N 筆」");
   });
 
+  it("🔴🔴 完全重複嘅 transaction 唔可以加總（2026-10-26 真機事故：實收變 2–3 倍）", () => {
+    // 真機樣本：POS 營業額 70.00，平台實收 55.30（比率 0.79 ＝ 正常抽成 21%）。
+    // 上游跨頁重疊令同一筆出現 3 次 ⇒ 舊寫法加總成 165.90（＝營業額 2.37 倍）。
+    const one = {
+      externalOrderId: "CRD202610052011242327105",
+      netAmount: 55.3,
+      subsidyNet: 55.3,
+      businessAmount: 70.0,
+      serviceFee: 14.7,
+    };
+    const { byOrder, duplicateCount } = groupSettlementByOrder([one, one, one]);
+    const s = byOrder.get("CRD202610052011242327105");
+    assert.ok(s);
+    assert.equal(s.netAmount, 55.3, "重複 3 次仍然係 55.30，唔可以變 165.90");
+    assert.equal(s.subsidyNet, 55.3);
+    assert.equal(s.txnCount, 1, "只計一筆");
+    assert.equal(duplicateCount, 2, "另外兩筆要報出嚟（唔可以靜默丟）");
+  });
+
+  it("完全重複去重之後，仍然保留「真拆單」加總（金額唔同 → 唔算重複）", () => {
+    const { byOrder, duplicateCount } = groupSettlementByOrder([
+      { externalOrderId: "CRD9", netAmount: 20.0, subsidyNet: 18.0, businessAmount: 30.0 },
+      { externalOrderId: "CRD9", netAmount: 20.0, subsidyNet: 18.0, businessAmount: 30.0 }, // 完全重複
+      { externalOrderId: "CRD9", netAmount: 15.11, subsidyNet: 13.91, businessAmount: 22.0 },
+    ]);
+    const s = byOrder.get("CRD9");
+    assert.ok(s);
+    assert.equal(s.netAmount, 35.11, "20.00 + 15.11（重複嗰筆唔計）");
+    assert.equal(s.txnCount, 2);
+    assert.equal(duplicateCount, 1);
+  });
+
   it("其中一筆只有 netAmount、另一筆只有 subsidyNet → 兩欄各自獨立加總", () => {
     const { byOrder } = groupSettlementByOrder([
       { externalOrderId: "CRD2", netAmount: 10.0 },
@@ -274,6 +306,28 @@ describe("computeMfoodTotals：報表三格", () => {
     ]);
     const r = computeMfoodTotals([ord("A", 100)], lookup(m));
     assert.equal(r.feeRate, 0, "1 - 150/100 = -0.5 → 夾成 0");
+    // 🔴 2026-10-26：唔可以只係夾成 0 就當無事 —— 咁樣畫面顯示「0.0% 抽成」，
+    //    商家完全睇唔出有問題。一定要有旗標俾 UI 顯示「異常」。
+    assert.equal(r.overReceivable, true, "實收 > 應收 ⇒ 要標記異常");
+  });
+
+  it("正常情況 overReceivable = false（實收細過應收）", () => {
+    const m = new Map([
+      ["A", { netAmount: 35.11, subsidyNet: 31.91, txnCount: 1 }],
+    ]);
+    const r = computeMfoodTotals([ord("A", 62)], lookup(m));
+    assert.equal(r.overReceivable, false);
+  });
+
+  it("🔴 settledReceivable ＝ 差額率真正嘅分母（部分對帳時唔等於 receivable）", () => {
+    const m = new Map([
+      ["A", { netAmount: 50, subsidyNet: 50, txnCount: 1 }],
+    ]);
+    // 2 張單：A 對到帳（100）、B 未對帳（100）
+    const r = computeMfoodTotals([ord("A", 100), ord("B", 100)], lookup(m));
+    assert.equal(r.receivable, 200, "應收係全部");
+    assert.equal(r.settledReceivable, 100, "分母只計已對帳嗰批");
+    assert.equal(r.feeRate, 0.5, "1 - 50/100，唔係 1 - 50/200");
   });
 
   it("補貼後優先：同一批要一致用 subsidyNet", () => {

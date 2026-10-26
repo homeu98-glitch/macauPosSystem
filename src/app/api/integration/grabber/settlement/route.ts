@@ -225,6 +225,7 @@ export async function POST(request: Request) {
       notFound: [],
       failed: [],
       unmatchedCount: 0,
+      duplicateCount: 0,
       periodSaved,
       period: periodAmounts?.period ?? null,
       periodShould: periodAmounts?.should ?? null,
@@ -237,7 +238,16 @@ export async function POST(request: Request) {
   }
 
   // 同一 tradeNo 多筆 transaction → 加總（拆單／部分退款會出現）。
-  const { byOrder, unmatchedCount } = groupSettlementByOrder(txns);
+  // 🔴 2026-10-26：**完全重複**嘅 transaction 會先去重再加總。
+  //    真機事故：實收變應收嘅 2.0–2.4 倍（金額全部可整除 2 或 3），
+  //    上游跨頁重疊令同一筆錢喺同一批出現 2–3 次 ⇒ 加總就變幾倍。
+  const { byOrder, unmatchedCount, duplicateCount } = groupSettlementByOrder(txns);
+  if (duplicateCount > 0) {
+    // 唔可以靜默：呢個數字代表「上游送重複」，要留痕跡俾人查抓取流程。
+    console.warn(
+      `[integration/grabber/settlement] 已丟棄 ${duplicateCount} 筆完全重複 transaction（store=${storeId} source=${source}）`,
+    );
+  }
 
   // ── 逐單配對：一定要「前綴無關」（2026-09-29 確診，見 `tradeNoCore`）────
   //
@@ -328,6 +338,8 @@ export async function POST(request: Request) {
     failed: failed.slice(0, 10),
     // 冇 tradeNo 嘅 transaction（無法配對）—— 唔好靜默掉
     unmatchedCount,
+    // 完全重複而被丟棄嘅筆數（> 0 ＝ 上游送重複，加總會變幾倍）
+    duplicateCount,
     settledAt,
     // 帳期級寫入結果（報表三格嘅保底來源；唔受 notFound 影響）
     periodSaved,

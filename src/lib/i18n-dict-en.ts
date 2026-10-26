@@ -598,6 +598,8 @@ export const EN_DICT: Record<string, string> = {
   "已對帳": "Reconciled",
   "平台差額率": "Platform variance rate",
   "冇實收就計唔到差額率（唔會用 0 濫竽充數）": "No actual payout yet, so the variance rate cannot be computed (we won't pad it with 0)",
+  "異常": "Anomaly",
+  "實收大過應收，多數係同一筆錢重複計（請查對帳明細）": "Actual payout exceeds receivable — usually the same money counted twice (check the settlement detail)",
   "店鋪每日營運總結": "Daily store operations summary",
   "導出 CSV": "Export CSV",
   "⚠️ 雲端數據只讀到一部分，以下數字未能作準": "⚠️ Cloud data was only partially read — the figures below are not conclusive",

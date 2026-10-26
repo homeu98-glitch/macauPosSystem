@@ -215,14 +215,26 @@ function PlatformSettlementCard({
           <div className="text-[11.5px] font-semibold text-slate-500">{t("平台差額率")}</div>
           <div
             className={`mt-1 truncate text-xl font-bold tabular-nums ${
-              totals.feeRate === null ? "text-amber-600" : theme.feeValue
+              totals.overReceivable
+                ? "text-rose-600"
+                : totals.feeRate === null
+                  ? "text-amber-600"
+                  : theme.feeValue
             }`}
           >
-            {totals.feeRate === null
-              ? "待對帳"
-              : `${(totals.feeRate * 100).toFixed(1)}%`}
+            {totals.overReceivable
+              ? t("異常")
+              : totals.feeRate === null
+                ? "待對帳"
+                : `${(totals.feeRate * 100).toFixed(1)}%`}
           </div>
-          {totals.feeRate === null ? (
+          {/* 🔴 實收 > 應收 ＝ 資料問題，唔可以扮「0.0% 抽成」。
+              舊寫法 clamp 到 0 之後畫面完全正常，商家根本睇唔出有問題（2026-10-26 事故）。 */}
+          {totals.overReceivable ? (
+            <div className="mt-1 text-[11px] font-semibold leading-relaxed text-rose-600">
+              {t("實收大過應收，多數係同一筆錢重複計（請查對帳明細）")}
+            </div>
+          ) : totals.feeRate === null ? (
             <div className="mt-1 text-[11px] text-slate-400">
               {t("冇實收就計唔到差額率（唔會用 0 濫竽充數）")}
             </div>
@@ -239,9 +251,11 @@ function PlatformSettlementCard({
                   style={{ width: `${totals.feeRate * 100}%` }}
                 />
               </div>
+              {/* 🔴 分母一定要用 `settledReceivable`（＝feeRate 真正用嘅分母）。
+                  印 `receivable`（全部單）會令商家用計數機照打都對唔上。 */}
               <div className="mt-1 text-[11px] text-slate-400">
                 1 − {totals.received !== null ? formatMoney(totals.received) : "—"} ÷{" "}
-                {formatMoney(totals.receivable)}
+                {formatMoney(totals.settledReceivable)}
                 {totals.basis === "period"
                   ? "（帳期口徑）"
                   : totals.pendingCount > 0
