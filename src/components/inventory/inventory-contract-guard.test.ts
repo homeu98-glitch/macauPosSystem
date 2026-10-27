@@ -1618,3 +1618,44 @@ describe('收據彈窗：「＋ 品項」一定要捲到新行（2026-10-26 實�
     assert.ok(/共 \{form\.items\.length\} 行/.test(src), '品項標題要有行數');
   });
 });
+
+describe('收據彈窗：iPad 觸控對位（2026-10-27）', () => {
+  /**
+   * 商家拍片回報：iPad 上「睇到粒掣，但撳落去中咗第二樣」。
+   * 已證實有兩個可由程式碼避免嘅放大器：
+   *  1. 彈窗留喺 `InventoryView` 嘅 `overflow-y-auto` 容器內 → 背景會被拖住捲，
+   *     iPadOS 重算 fixed 層時 visual / hit-test 會分離。
+   *  2. 短視窗入面「刪除確認」生成喺 sticky footer 底下，粒「取消」只露半截。
+   */
+  it('彈窗要 portal 去 document.body，唔可以留喺頁面 scroll container', () => {
+    const src = read(VIEW);
+    assert.ok(/from "react-dom"/.test(src), '要用 react-dom 嘅 createPortal');
+    assert.ok(/return createPortal\(/.test(src), '收據 modal 要 portal');
+    assert.ok(/document\.body,?\s*\)/.test(src), 'portal 目標要 document.body');
+  });
+
+  it('高度用 100dvh；calc 減號兩邊一定要有空格（Tailwind 底線寫法）', () => {
+    const src = read(VIEW);
+    assert.ok(
+      /max-h-\[calc\(100dvh_-_24px\)\]/.test(src),
+      '要扣掉 overlay 上下 p-3（24px），短視窗先唔會爆出螢幕',
+    );
+    assert.equal(
+      /max-h-\[calc\(100dvh-24px\)\]/.test(src),
+      false,
+      '🔴 無空格嘅 calc 係無效 CSS ⇒ max-height 變 none，彈窗會高過螢幕',
+    );
+  });
+
+  it('刪除確認 block 出現時要自己捲入視野（唔可以畀 sticky footer 蓋住）', () => {
+    const src = read(VIEW);
+    assert.ok(/deleteConfirmRef/.test(src), '確認 block 要有 ref');
+    assert.ok(/block\.getBoundingClientRect\(\)\.bottom \+ 16/.test(src), '要量度確認 block 底邊');
+    assert.ok(/body\.scrollTop \+= overflow/.test(src), '要捲自己個 body');
+  });
+
+  it('彈窗 body 要 overscroll-contain（唔好將捲動手勢傳去背景）', () => {
+    const src = read(VIEW);
+    assert.ok(/overflow-y-auto overscroll-contain/.test(src), '短表單／長表單都唔應該拖到背景');
+  });
+});

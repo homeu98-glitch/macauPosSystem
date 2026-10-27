@@ -1,6 +1,7 @@
 "use client";
 
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 import {
   loadAuthSession,
@@ -430,7 +431,7 @@ function ReceiptFormModal({
   /**
    * 🔴 2026-10-08：驗證失敗時要標紅嘅欄位（`null` = 全部正常）。
    *
-   * 為何要逐欄標紅而唔止出一句 banner：收據 modal 係 `max-h-[92vh] overflow-y-auto`
+   * 為何要逐欄標紅而唔止出一句 banner：收據 modal 係 `max-h-[calc(100dvh_-_24px)] overflow-y-auto`
    * 嘅長表單，商家唔一定睇得到 banner 講嘅係邊一行 —— 紅框 ＋
    * 「第 N 項「魚」的單位必填」兩者一齊，先算「明確嘅驗證提示」。
    */
@@ -487,10 +488,34 @@ function ReceiptFormModal({
    *    呢度記低 visual viewport 嘅 `offsetTop`（被 pan 嘅位移）同 `height`（可視高度），
    *    再去 JSX 把彈窗錨返去可視區：① backdrop `top` 拉到 offsetTop，令彈窗填滿「鍵盤上方」
    *    嗰塊可視區；② 彈窗自身 `height` 收縮到 visual viewport 高度，footer 永遠喺鍵盤上方。
-   *    沒鍵盤（桌面／手機無 pan）時兩者皆 null ⇒ 回復原本 `inset-0` ＋ `max-h-[92vh]`。
+   *    沒鍵盤（桌面／手機無 pan）時兩者皆 null ⇒ 回復原本 `inset-0` ＋ `max-h-[calc(100dvh_-_24px)]`。
    */
   const [vvTop, setVvTop] = useState<number | null>(null);
   const [vvH, setVvH] = useState<number | null>(null);
+  /** 刪除確認 block（`askDelete`）——出現時要自動捲入視野（見下面 effect）。 */
+  const deleteConfirmRef = useRef<HTMLDivElement>(null);
+
+  /**
+   * 🔴 2026-10-27：撳「刪除收據」之後，確認 block 會喺表單最底部生成。
+   * 短視窗（iPad 分割畫面／Stage Manager／鍵盤開住）入面，佢會啱啱好落喺
+   * sticky footer 底下 —— 商家見到半粒「取消」，撳落去就中咗 footer。
+   * 所以一出現就主動捲入視野，同 `addItemRow` 一樣**只捲自己個 body**。
+   *
+   * ⚠️ 唔可以用 `scrollIntoView()`：會連 backdrop 後面頁面一齊捲。
+   * ⚠️ 呢個 effect 只改 scrollTop，唔會影響任何表單狀態／驗證／儲存流程。
+   */
+  useEffect(() => {
+    if (!open || !askDelete) return;
+    const frame = requestAnimationFrame(() => {
+      const body = bodyRef.current;
+      const block = deleteConfirmRef.current;
+      if (!body || !block) return;
+      const overflow =
+        block.getBoundingClientRect().bottom + 16 - body.getBoundingClientRect().bottom;
+      if (overflow > 0) body.scrollTop += overflow;
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [open, askDelete]);
 
   /**
    * 🔴 2026-10-08：**目前所選供應商**嘅歷史品項
@@ -1112,14 +1137,27 @@ function ReceiptFormModal({
   const itemFieldErr = (idx: number, field: "name" | "quantity" | "unit") =>
     fieldErr?.kind === "item" && fieldErr.row === idx && fieldErr.field === field;
 
-  return (
+  if (typeof document === "undefined") return null;
+
+  /*
+   * 🔴 2026-10-27（iPad 按鈕同觸控位置唔一致）：
+   * 彈窗一定要 portal 去 `document.body`，離開 `InventoryView` 嘅 `overflow-y-auto`
+   * 頁面容器。原因（純架構，唔涉及任何業務邏輯）：
+   *  1. 留喺 scroll container 內，喺遮罩上拖動會 scroll chaining 到底下頁面；
+   *     背景一捲，iPadOS 就會重算 fixed 層，令「畫出嚟嘅位置」同 hit 區分離。
+   *  2. portal 之後，focus helper 嘅 `scrollIntoView` 最近可捲祖先只會係彈窗 body，
+   *     唔會再捲到背景頁。
+   * React portal 仍然保留 React tree 嘅 event bubbling／context，唔會影響任何
+   * 表單事件、驗證或儲存流程。
+   */
+  return createPortal(
     <div
       ref={overlayRef}
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-3"
       style={vvTop != null ? { top: `${vvTop}px` } : undefined}
     >
       <div
-        className="flex max-h-[92vh] w-full max-w-2xl flex-col overflow-hidden rounded-3xl bg-white shadow-2xl"
+        className="flex max-h-[calc(100dvh_-_24px)] w-full max-w-2xl touch-manipulation flex-col overflow-hidden rounded-3xl bg-white shadow-2xl"
         style={vvH != null ? { height: `calc(${vvH}px - 24px)` } : undefined}
         onClick={(e) => e.stopPropagation()}
       >
@@ -1128,13 +1166,13 @@ function ReceiptFormModal({
           <button
             type="button"
             onClick={onClose}
-            className="rounded-full bg-slate-100 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-200"
+            className="inline-flex min-h-[44px] items-center justify-center rounded-full bg-slate-100 px-4 text-sm font-medium text-slate-700 hover:bg-slate-200"
           >
             關閉
           </button>
         </div>
 
-        <div ref={bodyRef} className="flex-1 space-y-5 overflow-y-auto px-5 py-5">
+        <div ref={bodyRef} className="flex-1 space-y-5 overflow-y-auto overscroll-contain px-5 py-5">
           {/* ── 供應商：下拉（已有）＋ 即時新增 ── */}
           <div>
             <label className={labelCls}>供應商</label>
@@ -1379,7 +1417,7 @@ function ReceiptFormModal({
           <div>
             {/*
              * 🔴 付款狀態標題同「月結」提示**必須排成同一行**。
-             *    POS 係觸屏，modal 高度得 92vh；獨立一行提示會把
+             *    POS 係觸屏，modal 高度得 100dvh 減 24px；獨立一行提示會把
              *    下方「單據照片」區推出可視範圍（實測溢出 58px）。
              *    收埋做標題右側一行細字＝零額外高度，商家照樣睇得到。
              */}
@@ -1474,7 +1512,7 @@ function ReceiptFormModal({
              * 🔴 相片縮圖用**單一行橫向捲動**（`flex-nowrap overflow-x-auto`）。
              *
              * 為何唔用 `flex-wrap`（換行）：
-             *   收據 modal 有 `max-h-[92vh] overflow-y-auto`，而上面已經有供應商／品類／
+             *   收據 modal 有 `max-h-[calc(100dvh_-_24px)] overflow-y-auto`，而上面已經有供應商／品類／
              *   日期／付款方式／付款狀態五大區。若縮圖會換行，加到第 4–5 張就會把
              *   **下面嘅品項／合計／儲存掣**推到 modal 可視範圍以外 ——
              *   實測第一版就係咁：縮圖 bottom 918px > 面板 bottom 864px，被裁切。
@@ -1534,7 +1572,7 @@ function ReceiptFormModal({
 
             {/*
              * 🔴 呢個區**唔可以再加任何獨立一行嘅說明文字**。
-             *    收據 modal 係 `max-h-[92vh] overflow-y-auto`，而上面已有供應商／
+             *    收據 modal 係 `max-h-[calc(100dvh_-_24px)] overflow-y-auto`，而上面已有供應商／
              *    品類／日期／付款方式／付款狀態五區。第一版寫咗三段說明（移除提示／
              *    虛線框含義／200KB 說明）＝ +48px，正好把上傳掣同縮圖推出可視範圍
              *    （實測縮圖 bottom 922 > 面板 bottom 864，被裁切）。
@@ -1811,7 +1849,7 @@ function ReceiptFormModal({
           )}
 
           {form.id && askDelete && (
-            <div className="space-y-2 rounded-2xl border border-red-200 bg-red-50 p-4">
+            <div ref={deleteConfirmRef} className="space-y-2 rounded-2xl border border-red-200 bg-red-50 p-4">
               <p className="text-sm font-medium text-red-800">確定要刪除這張收據嗎？此操作不可復原。</p>
               <div className="flex gap-2">
                 <button
@@ -1887,7 +1925,8 @@ function ReceiptFormModal({
       {storedViewer && account && (
         <PhotoViewer account={account} path={storedViewer} onClose={() => setStoredViewer(null)} />
       )}
-    </div>
+    </div>,
+    document.body,
   );
 }
 
