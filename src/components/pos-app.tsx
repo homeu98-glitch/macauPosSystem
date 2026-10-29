@@ -37,6 +37,13 @@ import { normalizeBootstrapPayload } from "@/lib/bootstrap-normalizer";
 import { resolvePrintJobStatus } from "@/lib/print-bridge/companion";
 import { mergePrintJobs } from "@/lib/pos/print-job-merge";
 import { posDeviceAuthHeaders, refreshPosDeviceTokenIfNeeded } from "@/lib/pos/pos-sync-auth";
+// 2026-10-29（離線可用性 P2）：落單序號／開機 bootstrap 都要硬逾時，
+// 否則「有 wifi 但上唔到網」會一直掛住（詳見該檔頂部表格）。
+import {
+  BOOTSTRAP_FETCH_TIMEOUT_MS,
+  SEQUENCE_FETCH_TIMEOUT_MS,
+  fetchWithTimeout,
+} from "@/lib/pos/fetch-timeout";
 import {
   flushPosSyncQueue,
   notifyQueueChanged,
@@ -1312,7 +1319,10 @@ export function PosApp() {
       const bootstrapUrl = merchantId
         ? `/api/pos/bootstrap?storeId=${encodeURIComponent(merchantId)}`
         : "/api/pos/bootstrap";
-      const response = await fetch(bootstrapUrl);
+      // 2026-10-29（P2）：硬逾時 8 秒。冇 cache 嘅新機 ＋ 半開網絡時，
+      // 原本會一直卡喺「正在載入門店設定…」（`isBootstrapping` 要 `finally` 才解），
+      // 店員完全開唔到工。逾時 → 走下面 `catch` → 用本地 cache（如有）／出重試畫面。
+      const response = await fetchWithTimeout(bootstrapUrl, {}, BOOTSTRAP_FETCH_TIMEOUT_MS);
       const raw = normalizeBootstrapPayload((await response.json()) as PosBootstrap);
       const data = applyLedgerMerchantToBootstrap(raw, loadAuthSession());
       // merge：本地 cache 優先（枱 area / name 等 per-terminal 編輯唔應該被 server 舊數據覆蓋）；
@@ -4364,11 +4374,19 @@ export function PosApp() {
             ));
       if (!offlineMode && !counterHasOpenOrder) {
         try {
-          const response = await fetch("/api/pos/sequence", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ kind: isQuickMode ? quickTypeKind() : "pos", storeId: bootstrap.storeId }),
-          });
+          // 2026-10-29（P2）：硬逾時 2.5 秒。呢個請求喺落單同步路徑上，
+          // 未返之前訂單唔會寫入本機、`orderSubmitting` 一直 true ＝ 個掣一直轉圈。
+          // 半開網絡原本會等足瀏覽器預設超時（30–120 秒）⇒ 店員出唔到單。
+          // 逾時就即刻行本地每日序號（`nextLocalDailyOrderNo()`），連網後再對齊。
+          const response = await fetchWithTimeout(
+            "/api/pos/sequence",
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ kind: isQuickMode ? quickTypeKind() : "pos", storeId: bootstrap.storeId }),
+            },
+            SEQUENCE_FETCH_TIMEOUT_MS,
+          );
           const payload = (await response.json()) as { display?: string };
           nextOrderNo = payload.display;
         } catch {
@@ -5669,8 +5687,45 @@ export function PosApp() {
     }
   }
 
-  if (isBootstrapping || !bootstrap) {
+  if (isBootstrapping) {
     return <div className="empty-state">{t("正在載入門店設定…")}</div>;
+  }
+
+  /*
+   * 2026-10-29（離線可用性 P2）：拉唔到門店設定（新機未連過網／網絡半開／server 掛）
+   * 嘅情況。
+   *
+   * 舊寫法係 `if (isBootstrapping || !bootstrap)`，即係呢個情況會**永遠**顯示
+   * 「正在載入門店設定…」—— 冇錯誤訊息、冇重試掣、冇出路，店員只可以殺 app。
+   * 而 `bootstrap` 只會由 server 或本地 cache 嚟，兩者都冇就永遠 null。
+   *
+   * 現在分開處理：`isBootstrapping` 才係「載入中」，`!bootstrap` 係「拉唔到」。
+   * ⚠️ 呢個畫面只會喺**從來未成功連過呢間店**（無 cache）時出現；
+   *    正常用過嘅收銀機一定有 cache，斷網照樣入得去。
+   */
+  if (!bootstrap) {
+    return (
+      <div className="empty-state">
+        <div className="flex flex-col items-center gap-4 px-6 text-center">
+          <div className="text-base font-semibold text-slate-700">
+            {t("未能載入門店設定，請檢查網絡後重試。")}
+          </div>
+          <div className="text-sm text-slate-500">
+            {t("呢部機首次使用需要連網載入一次門店資料。")}
+          </div>
+          <button
+            type="button"
+            className="rounded-xl bg-orange-600 px-6 py-3 text-sm font-semibold text-white active:scale-[0.98]"
+            onClick={() => {
+              setIsBootstrapping(true);
+              void refreshBootstrapFromServer();
+            }}
+          >
+            {t("重試")}
+          </button>
+        </div>
+      </div>
+    );
   }
 
   return (

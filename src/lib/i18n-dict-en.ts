@@ -848,6 +848,9 @@ export const EN_DICT: Record<string, string> = {
   "買貨（收據）數據來自庫存系統：買貨總額＝已付＋未付；毛利為「營業額 − 買貨總額（已付＋未付）」估算，未扣存貨變動。菜品排行按金額由高到低。": "Purchase (receipt) data comes from the inventory system: total purchases = paid + unpaid; gross profit is estimated as \"revenue − total purchases (paid + unpaid)\" and does not deduct inventory movement. Dish ranking is by amount, high to low.",
 
   "正在載入門店設定…": "Loading store settings…",
+  // 2026-10-29（P2）：bootstrap 拉唔到時嘅明確錯誤畫面（取代原本無限轉圈）。
+  "未能載入門店設定，請檢查網絡後重試。": "Could not load store settings. Check your connection and try again.",
+  "呢部機首次使用需要連網載入一次門店資料。": "This terminal needs to be online once to load store data for first-time use.",
   "桌台總覽": "Table overview",
   "點開桌子後進入點餐介面。桌台狀態：空閒 / 未下單 / 已下單": "Tap a table to open the ordering screen. Table status: free / not ordered / ordered",
   "開始今日班次（未開工前不能開枱／落單）": "Start today's shift (you cannot open tables or place orders before clocking in)",
