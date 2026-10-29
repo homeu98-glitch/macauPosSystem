@@ -1,3 +1,7 @@
+// ⚠️ 一定要寫 `.ts` 副檔名：`login-identities.test.ts` 用 `node --test` 直接跑，
+//    Node 唔識 `@/` alias（呢個 repo 多處已用同一個寫法，見 `i18n-dict-en.ts`）。
+import { fetchWithTimeout } from "./fetch-timeout.ts";
+
 /**
  * 登入「身份清單」嘅客戶端共用層（docs/160 §11、docs/161）。
  *
@@ -50,7 +54,25 @@ export type FetchIdentitiesResult =
       status: number;
       /** 表未建立（0073）／未升級（0075）—— 呼叫方應該落返帳號模式。 */
       tableMissing: boolean;
+      /**
+       * 係「連唔到 server」定「server 話唔得」。
+       *
+       * 🔴 分開呢個係為了離線登入（P4）：只有**連唔到**（`status === 0`，
+       * 包括硬逾時）才可以落返本機憑證。server 明確回 `ok:false`
+       * 代表憑證被撤銷／店員被停用 —— 呢種情況一定要照 server 講，
+       * 唔可以因為「本機有快取」就放行。
+       */
+      offline: boolean;
     };
+
+/**
+ * 查身份清單嘅硬逾時。
+ *
+ * 呢個請求喺**登入頁**開頁第一件事，斷網時如果掛住，店主連 PIN 都未見到
+ * 就係一片「正在讀取可用身份…」。5 秒足夠慢速 3G 完成（payload 細），
+ * 又唔會令人以為部機死咗。
+ */
+export const IDENTITIES_FETCH_TIMEOUT_MS = 5_000;
 
 /**
  * 打 `/api/pos/login/identities`。
@@ -63,11 +85,15 @@ export async function fetchLoginIdentities(input: {
   deviceSecret?: string;
 }): Promise<FetchIdentitiesResult> {
   try {
-    const response = await fetch("/api/pos/login/identities", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(input),
-    });
+    const response = await fetchWithTimeout(
+      "/api/pos/login/identities",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      },
+      IDENTITIES_FETCH_TIMEOUT_MS,
+    );
     const payload = (await response.json().catch(() => null)) as IdentitiesPayload | null;
 
     if (!response.ok || !payload?.ok) {
@@ -76,11 +102,19 @@ export async function fetchLoginIdentities(input: {
         status: response.status,
         tableMissing: payload?.code === "table_missing",
         error: payload?.error ?? "讀取身份失敗，請再試一次。",
+        offline: false,
       };
     }
     return { ok: true, payload };
   } catch {
-    return { ok: false, status: 0, tableMissing: false, error: "網絡錯誤，請稍後再試。" };
+    // fetch reject ＝ 完全斷網／DNS 死／硬逾時 ⇒ 可以行離線登入
+    return {
+      ok: false,
+      status: 0,
+      tableMissing: false,
+      error: "網絡錯誤，請稍後再試。",
+      offline: true,
+    };
   }
 }
 

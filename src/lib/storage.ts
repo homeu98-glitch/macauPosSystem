@@ -1333,6 +1333,18 @@ export type AuthSession = {
    * 呢個口徑要同 server 端 `loadMerchantGrants()` 完全一致。
    */
   allowedModules?: MerchantModuleGrants;
+  /**
+   * 呢個 session 係「離線登入」出嚟嘅（P4，2026-10-29）。
+   *
+   * 有值 = 用本機 PIN 驗證器認人，**未經 server 確認**：
+   *   · `ledgerAccessToken` 係上一次聯網登入留低嘅舊 token（大概已過期）；
+   *   · 會員／報表／庫存呢類要對數嘅功能本來就要聯網，離線時會失敗；
+   *   · 恢復網絡後應該提示重新登入一次，換返新 token。
+   *
+   * ⚠️ `normalizeAuthSession()` 一定要帶返呢個欄位，否則 reload 之後
+   *    就會以為自己係正常登入（同 `posDeviceToken` 嘅歷史教訓一樣）。
+   */
+  offlineLoginAt?: string;
 };
 
 function normalizeAuthSession(session: Partial<AuthSession> | null | undefined): AuthSession | null {
@@ -1369,6 +1381,9 @@ function normalizeAuthSession(session: Partial<AuthSession> | null | undefined):
     allowedModules: session.allowedModules
       ? normalizeMerchantGrants(session.allowedModules)
       : undefined,
+    // ⚠️ 漏咗呢行，reload 之後就唔知自己係離線登入（會當成正常 session）。
+    offlineLoginAt:
+      typeof session.offlineLoginAt === "string" ? session.offlineLoginAt : undefined,
   };
 }
 

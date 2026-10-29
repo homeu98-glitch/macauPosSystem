@@ -19,6 +19,19 @@ import {
   fetchLoginIdentities,
   type LoginIdentity,
 } from "@/lib/pos/login-identities";
+import {
+  OFFLINE_MAX_FAILS,
+  clearOfflineFailures,
+  credentialDaysLeft,
+  isCredentialExpired,
+  loadOfflineCredential,
+  lockRemainingMs,
+  recordOfflineFailure,
+  rememberOfflineIdentity,
+  verifyOfflinePin,
+  type OfflineCredential,
+  type OfflineIdentity,
+} from "@/lib/pos/offline-credential";
 import { applyWorkbenchSelection } from "@/lib/pos/apply-workbench";
 import {
   WORKBENCH_IDS,
@@ -98,6 +111,17 @@ function readRequestedWorkbench(): WorkbenchId | null {
   return findWorkbench(raw)?.id ?? null;
 }
 
+/** 本機憑證身份 → 登入頁身份卡（兩邊 shape 一樣，只係剔走 verifier／session）。 */
+function toLoginIdentity(identity: OfflineIdentity): LoginIdentity {
+  return {
+    kind: identity.kind,
+    id: identity.id,
+    name: identity.name,
+    staffNo: identity.staffNo,
+    role: identity.role,
+  };
+}
+
 export function LoginScreen() {
   const [account, setAccount] = useState("");
   const [pin, setPin] = useState("");
@@ -147,6 +171,19 @@ export function LoginScreen() {
   const [booting, setBooting] = useState(true);
 
   /**
+   * 離線登入（P4，2026-10-29）。
+   *
+   * `offlineCred` 係本機憑證（可能已過期 —— 過期都留住，用嚟講清楚原因）。
+   * `offlineMode` = 而家連唔到 server，用本機 PIN 驗證器認人。
+   *
+   * ⚠️ 只有「連唔到 server」才入呢個模式；server 明確拒絕（PIN 錯／店員停用／
+   *    憑證撤銷）一定要照 server 講，唔可以因為本機有快取就放行。
+   */
+  const [offlineCred, setOfflineCred] = useState<OfflineCredential | null>(null);
+  const [offlineMode, setOfflineMode] = useState(false);
+  const [offlineNotice, setOfflineNotice] = useState("");
+
+  /**
    * 落地：套用工作台副作用，然後整頁跳去對應首頁。
    *
    * ⚠️ 一律用 `window.location.replace()` 而唔係 SPA 跳轉：
@@ -183,6 +220,29 @@ export function LoginScreen() {
   }
 
   /**
+   * 入離線模式：用本機憑證嘅身份清單，唔問 8 位帳號（店員根本唔知）。
+   *
+   * ⚠️ 一定要保留「揀身份 + 打 PIN」兩步：唔可以見到有快取就自動入，
+   *    否則等於回到 docs/162 之前（店主走開 → 店員一開機就有店主權限）。
+   */
+  function enterOfflineMode(cred: OfflineCredential) {
+    const staffCount = cred.identities.filter((it) => it.kind === "staff").length;
+    setOfflineMode(true);
+    setDeviceMode(true);
+    setError("");
+    setStep("identity");
+    setOfflineNotice(`本機憑證 ${credentialDaysLeft(cred)} 日後到期`);
+    applyIdentities({
+      known: true,
+      storeName: cred.storeName,
+      identities: cred.identities.map(toLoginIdentity),
+      staffTotal: staffCount,
+      staffActive: staffCount,
+    });
+    setBooting(false);
+  }
+
+  /**
    * 開頁：有裝置憑證就直接查身份清單。
    *
    * 🔴 唔可以喺 render 期間讀 localStorage（SSR 冇 window）；一定要 effect。
@@ -190,9 +250,23 @@ export function LoginScreen() {
    *    唔好留住一張永遠失敗嘅票。
    */
   useEffect(() => {
+    // ① 先讀本機離線憑證：無論後面聯唔聯得上網都可能要用。
+    const cached = loadOfflineCredential();
+    setOfflineCred(cached);
+    // 過期就唔再用，但要留住個 record 講清楚「7 日到期，請聯網登入一次」。
+    const usable = cached && !isCredentialExpired(cached) ? cached : null;
+
     const binding = loadDeviceBinding();
     if (!binding) {
-      setBooting(false);
+      // 未初始化嘅機（新機／清過資料／撤銷過）。
+      //
+      // 🔴 只有**確定斷網**（`navigator.onLine === false`）才直接入離線模式。
+      //    有網但冇 binding 嘅情況（例如未初始化就重裝）要行返正常「輸入帳號」流程 ——
+      //    唔可以靜靜用一份舊憑證當成正式登入。
+      const definitelyOffline =
+        typeof navigator !== "undefined" && navigator.onLine === false;
+      if (usable && definitelyOffline) enterOfflineMode(usable);
+      else setBooting(false);
       return;
     }
 
@@ -205,6 +279,12 @@ export function LoginScreen() {
       if (cancelled) return;
 
       if (!result.ok) {
+        // 連唔到 server（完全斷網／DNS 死／硬逾時）⇒ 落離線登入。
+        // 🔴 只有 `result.offline` 才這樣做：server 明確拒絕要照 server 講。
+        if (result.offline && usable) {
+          enterOfflineMode(usable);
+          return;
+        }
         // 憑證已經冇用（撤銷／0073 未跑／0075 未升級）⇒ 清走本機票；
         // 網絡問題就保留，下次開頁會再試。
         if (result.status === 401 || result.tableMissing) clearDeviceBinding();
@@ -213,7 +293,11 @@ export function LoginScreen() {
         //    至少仲有一條行得通嘅路。
         setDeviceMode(false);
         setStep("account");
-        setError(result.error);
+        setError(
+          result.offline
+            ? "連唔到 server。呢部機未有離線憑證 —— 第一次登入一定要聯網。"
+            : result.error,
+        );
         setBooting(false);
         return;
       }
@@ -245,6 +329,18 @@ export function LoginScreen() {
     try {
       const result = await fetchLoginIdentities({ account: normalizedAccount });
       if (!result.ok) {
+        // 斷網時唔可以只彈「網絡錯誤」然後困住 —— 如果本機有可用憑證，
+        // 直接轉去離線身份清單（店員唔使知 8 位帳號）。
+        if (result.offline) {
+          const cached =
+            offlineCred && !isCredentialExpired(offlineCred) ? offlineCred : null;
+          if (cached) {
+            enterOfflineMode(cached);
+            return;
+          }
+          setError("連唔到 server。呢部機未有離線憑證 —— 第一次登入一定要聯網。");
+          return;
+        }
         setError(result.error);
         return;
       }
@@ -317,11 +413,108 @@ export function LoginScreen() {
 
   function submitPin() {
     if (!selected) return;
+    if (offlineMode) {
+      void loginOffline();
+      return;
+    }
     if (selected.kind === "owner") {
       void loginAsOwner();
       return;
     }
     void loginAsStaff();
+  }
+
+  /**
+   * 離線登入：用本機 PIN 驗證器認人（P4，2026-10-29）。
+   *
+   * 唔會碰 server。成功之後照樣 `saveAuthSession` + `markTerminalUnlocked`，
+   * 之後成個 app 行為同正常登入一樣（session 帶 `offlineLoginAt` 做標記）。
+   *
+   * ⚠️ PIN 錯嘅計數同鎖定住喺**憑證**（localStorage）而唔係 component state：
+   *    否則店員只要 refresh 一次就重設 5 次機會，鎖定形同虛設。
+   */
+  async function loginOffline() {
+    if (!selected || !offlineCred) return;
+    setError("");
+
+    const normalizedPin = pin.replace(/\D/g, "").slice(0, 4);
+    if (!/^\d{4}$/.test(normalizedPin)) {
+      setError("請輸入 4 位數字 PIN。");
+      return;
+    }
+
+    const lockedMs = lockRemainingMs(offlineCred);
+    if (lockedMs > 0) {
+      setError(`PIN 錯太多次，請等 ${Math.max(1, Math.ceil(lockedMs / 60_000))} 分鐘再試。`);
+      return;
+    }
+
+    const entry = offlineCred.identities.find((it) => it.id === selected.id);
+    if (!entry) {
+      setError("呢個身份未喺本機登入過，請先聯網登入一次。");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const passed = await verifyOfflinePin(normalizedPin, entry.verifier);
+      if (!passed) {
+        const next = recordOfflineFailure(offlineCred);
+        setOfflineCred(next);
+        if (next.lockedUntil > 0) {
+          setError(`PIN 錯 ${OFFLINE_MAX_FAILS} 次，已鎖 5 分鐘。`);
+        } else {
+          setError(`PIN 唔啱，仲有 ${OFFLINE_MAX_FAILS - next.fails} 次機會。`);
+        }
+        return;
+      }
+
+      setOfflineCred(clearOfflineFailures(offlineCred));
+
+      const now = new Date().toISOString();
+      const session: AuthSession = {
+        ...entry.session,
+        name: entry.name,
+        loggedInAt: now,
+        offlineLoginAt: now,
+      };
+
+      markTerminalUnlocked();
+      saveAuthSession(session);
+      await finishOfflineLogin(session);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  /**
+   * 離線登入之後嘅落地。
+   *
+   * 同 `finishLogin()` 嘅分別：**刻意唔碰 Supabase / Ledger token**。
+   * 離線時 `restoreLedgerSession()` 一定失敗，而失敗路徑會清走本機 token ——
+   * 咁樣恢復網絡之後連「用舊 token 頂住」都冇。
+   */
+  async function finishOfflineLogin(session: AuthSession) {
+    const cachedBootstrap = loadBootstrapCache();
+    if (cachedBootstrap && session.name) {
+      saveBootstrapCache(applyLedgerMerchantToBootstrap(cachedBootstrap, session));
+    }
+
+    const granted: WorkbenchId[] = session.allowedModules?.workbenches ?? [...WORKBENCH_IDS];
+
+    const requested = readRequestedWorkbench();
+    if (requested && granted.includes(requested)) {
+      await enterWorkbench(requested, session);
+      return;
+    }
+
+    const remembered = resolveRememberedWorkbench(session.merchantId, granted);
+    if (remembered) {
+      await enterWorkbench(remembered, session);
+      return;
+    }
+
+    window.location.replace("/");
   }
 
   async function loginAsOwner() {
@@ -430,6 +623,18 @@ export function LoginScreen() {
         setDeviceMode(true);
       }
 
+      // 記住本機 PIN 驗證器（P4 離線登入）。
+      // ⚠️ 一定要 `await` 完才跳頁：`finishLogin()` 會 `location.replace`，
+      //    未寫完就跳等於冇寫（下次斷網照樣開唔到工）。
+      await rememberOfflineIdentity({
+        merchantId: session.merchantId ?? "",
+        account: normalizedAccount,
+        storeName,
+        identity: { kind: "owner", id: "owner", name: session.name, role: "owner" },
+        pin: normalizedPin,
+        session,
+      });
+
       await finishLogin(session);
     } catch (err) {
       setError(err instanceof Error ? err.message : "登入失敗");
@@ -513,6 +718,23 @@ export function LoginScreen() {
         expiresAt: payload.expiresAt ?? "",
       });
 
+      // 記住本機 PIN 驗證器（P4 離線登入）—— 逐個身份分開存，
+      // 唔可以共用店主嗰份 session（否則店員離線登入會變店主權限）。
+      await rememberOfflineIdentity({
+        merchantId: session.merchantId ?? "",
+        account: session.account,
+        storeName,
+        identity: {
+          kind: "staff",
+          id: selected.id,
+          name: payload.operator.name,
+          staffNo: payload.operator.staffNo,
+          role: payload.operator.role,
+        },
+        pin: normalizedPin,
+        session,
+      });
+
       await finishLogin(session);
     } catch {
       setError("網絡錯誤，請稍後再試。");
@@ -574,7 +796,10 @@ export function LoginScreen() {
     if (step === "pin") submitPin();
   }
 
-  const pinHint = identityHint();
+  // 離線時清單係「本機登入過嘅人」，唔係「店主加過嘅店員」——
+  // `describeIdentityGap()` 嗰三種成因（未加店員／全停用／未登入過）全部唔適用，
+  // 照出只會誤導（例如店主明明加咗店員，卻話「仲未加入店員」）。
+  const pinHint = offlineMode ? null : identityHint();
 
   return (
     /*
@@ -596,7 +821,11 @@ export function LoginScreen() {
             <div className="text-sm font-semibold tracking-widest text-orange-200/90">澳門會員通POS系統</div>
             <div className="mt-2 text-2xl font-semibold text-white">登入</div>
             <div className="mt-2 text-sm text-white/70">
-              {deviceMode ? "揀你嘅身份，再打自己嘅 PIN。" : "輸入店舖帳號，再揀你嘅身份登入。"}
+              {offlineMode
+                ? "離線模式：揀你嘅身份，再打自己嘅 PIN。"
+                : deviceMode
+                  ? "揀你嘅身份，再打自己嘅 PIN。"
+                  : "輸入店舖帳號，再揀你嘅身份登入。"}
             </div>
           </div>
 
@@ -604,6 +833,19 @@ export function LoginScreen() {
             <div className="mt-8 grid gap-2 text-center">
               <div className="text-sm text-white/70">正在讀取可用身份…</div>
               <div className="text-xs text-white/40">呢部機已由店主初始化，唔需要輸入店舖帳號。</div>
+            </div>
+          ) : null}
+
+          {offlineMode ? (
+            <div className="mt-5 rounded-2xl border border-amber-400/30 bg-amber-400/10 px-4 py-3 text-xs leading-relaxed text-amber-100">
+              <div className="font-semibold">離線登入</div>
+              <div className="mt-1">
+                連唔到 server，改用本機憑證認人。
+                {offlineNotice ? `（${offlineNotice}）` : ""}
+              </div>
+              <div className="mt-1 text-amber-100/70">
+                點餐、打印、訂單、沽清、交班照用；會員／報表／庫存要聯網。
+              </div>
             </div>
           ) : null}
 
@@ -655,13 +897,20 @@ export function LoginScreen() {
                   <span className="shrink-0 text-lg text-white/30">›</span>
                 </button>
               ))}
-              {/* 裝置模式冇「帳號」可以改，逃生門係「用店主帳號登入」 */}
+              {/* 裝置模式冇「帳號」可以改，逃生門係「用店主帳號登入」；
+                  離線模式下呢條逃生門冇用（一樣要聯網）⇒ 改成重試連線。 */}
               <button
                 className="mt-1 min-h-[44px] text-xs text-white/50 hover:text-white/80"
-                onClick={deviceMode ? switchToAccountMode : backToAccount}
+                onClick={
+                  offlineMode
+                    ? () => window.location.reload()
+                    : deviceMode
+                      ? switchToAccountMode
+                      : backToAccount
+                }
                 type="button"
               >
-                {deviceMode ? "用店主帳號登入" : "返回，改帳號"}
+                {offlineMode ? "重試連線" : deviceMode ? "用店主帳號登入" : "返回，改帳號"}
               </button>
             </div>
           ) : null}
