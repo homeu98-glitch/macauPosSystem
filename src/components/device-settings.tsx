@@ -1245,9 +1245,32 @@ export function DeviceSettings() {
 
 
   return (
-    <div className="h-[100dvh] overflow-hidden bg-slate-100">
+    /*
+     * 🔴 2026-10-29：外殼由 `h-[100dvh]` 改做 `fixed inset-0`（內層 scroller 用 `absolute inset-0`）。
+     *
+     * 症狀（Android 收銀機，Chrome ＋ PWA standalone）：設置頁大畫面**任何位置都拉唔到**，
+     * 唯獨左側欄（點餐／庫存）捲得到。
+     *
+     * 成因：`body` 本身 `h-full overflow-hidden`（`src/app/layout.tsx`）⇒ 文件層永遠零
+     * scrollTop，全頁捲動**全靠呢個內層容器**。但喺 Android PWA（standalone ＋
+     * `viewport-fit=cover`）之下，`100dvh` 會計出**大過實際可見視窗**（全幅排版連系統
+     * 導航欄都計埋）⇒ 每個 dvh 容器都「太高」⇒ 內容永遠裝得落 ⇒ 冇任何容器需要捲動
+     * ⇒ 摺線以下內容永遠摸唔到。側欄用 `fixed inset-y-0`（top/bottom 量法，唔經 viewport
+     * 單位）量到嘅先係真可見高，所以唯獨佢正常。
+     *
+     * 改法＝**改用側欄已經用緊、喺 iPad／桌面／Android 都驗證過嘅同一套量法**：
+     * `position: fixed` 直接對可見視窗，唔經任何 viewport 單位。iPad 上呢個盒同
+     * `100dvh` 係同一個尺寸 ⇒ 視覺、捲動、鍵盤行為零變化；同時連「舊引擎唔識 dvh」
+     * 嗰種情況都一併修好（因為根本唔再讀 dvh）。
+     *
+     * ⚠️ 今次**只改 `/settings` 呢一頁**；`/pos`、`/orders` 等其餘頁面外殼暫時不動，
+     *    等實機驗完再分批推（見 memory 2026-10-29）。
+     * ⚠️ 內層分區嘅 `max-h-[calc(100dvh-150px)]` 暫未改：喺 dvh 偏大嘅機上佢只會
+     *    「高咗」，唔會再阻擋捲動（外層 scroller 已經接得住），之後再逐個收窄。
+     */
+    <div className="fixed inset-0 overflow-hidden bg-slate-100">
       <AppSidebar />
-      <div className="h-[100dvh] overflow-auto pb-[calc(env(safe-area-inset-bottom)+16px)]">
+      <div className="absolute inset-0 overflow-auto pb-[calc(env(safe-area-inset-bottom)+16px)]">
         <div className="sticky top-0 z-20 border-b border-slate-200 bg-white">
           {/* 🔴 2026-10-08：窄屏（<md）要**直排**。
               原本 `flex items-center justify-between` ＋ 右側 `shrink-0` ⇒ 390px 時
