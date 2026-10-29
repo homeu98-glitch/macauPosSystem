@@ -30,6 +30,7 @@ import { SelfOrderActionButtons } from "@/components/self-order-action-buttons";
 import { SelfOrderNoticeStack } from "@/components/self-order-notice-stack";
 import { SyncHealthModal } from "@/components/sync-health-modal";
 import { PosToolsMenu } from "@/components/pos-tools-menu";
+import { PosOfflineReloginBanner } from "@/components/pos-offline-relogin-banner";
 import { OnlineOpenPill } from "@/components/online-open-pill";
 import { StoreOpenPill } from "@/components/store-open-pill";
 import { applyLedgerMerchantToBootstrap, resolveStoreDisplaySubtitle, resolveStoreDisplayTitle } from "@/lib/store-display";
@@ -5746,6 +5747,12 @@ export function PosApp() {
           cartItemCount={cartItems.length}
           pendingSyncCount={queue.filter((event) => event.status === "pending").length}
           settlementOpen={Boolean(payingOrderId)}
+        />
+        {/* 2026-10-30（P4 收尾）：離線登入出嚟嘅 session server 未驗證過身份
+            → 恢復網絡之後提示重新登入。**in-flow**（推低內容、唔蓋控制項），
+            而且**唔踢人落線**（離線單可能仲未補傳完）。詳見該元件頂部說明。 */}
+        <PosOfflineReloginBanner
+          pendingSyncCount={queue.filter((event) => event.status === "pending").length}
         />
         {posMode === "tables" ? (
           /*
