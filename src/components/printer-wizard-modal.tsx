@@ -3,9 +3,18 @@
 import { useEffect, useMemo, useState } from "react";
 import { ResponsiveModal } from "@/components/responsive-modal";
 import { DevicePrinterConfig, PrinterRole } from "@/lib/types";
-import { PrinterCandidate, enumerateCompanionUsbPrinters, isCompanionAvailable, probeLan } from "@/lib/print-bridge/companion";
-import { isAndroidNativeEnv } from "@/lib/print-bridge/native-environment";
-import { listNativeUsbPrinters, probeNativeLan } from "@/lib/print-bridge/native";
+import { PrinterCandidate, discoverCompanionLanPrinters, enumerateCompanionBluetoothDevices, enumerateCompanionUsbPrinters, isCompanionAvailable, probeLan } from "@/lib/print-bridge/companion";
+import { isAndroidNativeEnv, isDesktopCompanionEnv } from "@/lib/print-bridge/native-environment";
+import {
+  LanScanHit,
+  listNativeBtPrinters,
+  listNativeUsbPrinters,
+  probeNativeLan,
+  requestNativeBtPermission,
+  scanNativeBtPrinters,
+  scanNativeLanPrinters,
+  stopNativeLanScan,
+} from "@/lib/print-bridge/native";
 import {
   BRAND_FILTER_ALL,
   BrandGroup,
@@ -29,7 +38,7 @@ type WizardStep = 1 | 2 | 3;
 interface WizardState {
   step: WizardStep;
   role: PrinterRole | null;
-  connectionType: "lan" | "usb" | null;
+  connectionType: "lan" | "usb" | "bluetooth" | null;
   model: string | null;
   resolvedMeta: LanModelOption | null;
   usbVendorId?: string;
@@ -67,6 +76,31 @@ interface WizardState {
   testing: boolean;
   usbCandidates: PrinterCandidate[];
   usbScanning: boolean;
+  /**
+   * 藍牙（2026-10-29 · P3「打印脫離 Sunmi」）。
+   *
+   * 🔴 之前精靈只支援 `"lan" | "usb"` —— 但 `ConnectionType` 同 APK 側
+   * （`listBtPrinters` / `scanBtPrinters` / `requestBtPermission`）一直都支援藍牙。
+   * 結果係：**藍牙可攜打印機根本加唔到**，只有沙龍版嘅 `PrinterCompanionPanel`
+   * （桌面向）加得到。小店換走 Sunmi 一體機之後最常見嘅配搭就係
+   * 「平板 ＋ 58mm 藍牙機」，所以呢個缺口一定要補。
+   */
+  btCandidates: PrinterCandidate[];
+  btScanning: boolean;
+  /** 藍牙掃描錯誤（權限不足／探索失敗）。空 = 冇錯。 */
+  btScanError: string;
+  btAddress?: string;
+  btName?: string;
+  /**
+   * LAN 自動搜尋（2026-10-29 · P3）。
+   *
+   * 打印機 IP 係 DHCP 派、機身又冇顯示 → 舊版逼店員手填 IP ＝ 實際裝唔到機。
+   * Android 走 APK 內 `LanScanner` 掃整個網段；desktop 走 `:9311/api/discover`。
+   */
+  lanScanning: boolean;
+  lanScanProgress: { checked: number; total: number; found: number } | null;
+  lanHits: LanScanHit[];
+  lanScanError: string;
 }
 
 function uid(prefix: string) {
@@ -105,6 +139,13 @@ export function PrinterWizardModal({ open, onClose, onAdd, printZones, lockRole 
     testing: false,
     usbCandidates: [],
     usbScanning: false,
+    btCandidates: [],
+    btScanning: false,
+    btScanError: "",
+    lanScanning: false,
+    lanScanProgress: null,
+    lanHits: [],
+    lanScanError: "",
   });
 
   /**
@@ -201,6 +242,13 @@ export function PrinterWizardModal({ open, onClose, onAdd, printZones, lockRole 
         testing: false,
         usbCandidates: [],
         usbScanning: false,
+        btCandidates: [],
+        btScanning: false,
+        btScanError: "",
+        lanScanning: false,
+        lanScanProgress: null,
+        lanHits: [],
+        lanScanError: "",
       });
     }
   }, [open, printZones, lockRole]);
@@ -266,6 +314,191 @@ export function PrinterWizardModal({ open, onClose, onAdd, printZones, lockRole 
     }
   }
 
+  /**
+   * 藍牙發現回呼（Android native，2026-10-29 · P3）。
+   *
+   * ⚠️ 只在「第 2 步 ＋ 已揀藍牙」時訂閱，離開即刻清走：
+   * `printer-companion-panel.tsx`（沙龍設定）會寫同一組 `window.onBt*` 全域，
+   * 兩邊同時掛住會互相蓋走 → 一邊永遠「掃描中」。
+   */
+  useEffect(() => {
+    if (state.step !== 2 || state.connectionType !== "bluetooth") return;
+    if (!isAndroidNativeEnv()) return;
+    const w = window as unknown as {
+      onBtPrinterFound?: (raw: Record<string, unknown>) => void;
+      onBtDiscoveryFinished?: () => void;
+      onBtDiscoveryError?: (msg: string) => void;
+      onBtPermissionNeeded?: () => void;
+      onBtPermissionResult?: (granted: boolean) => void;
+    };
+    w.onBtPrinterFound = (raw) => {
+      const address = raw.address ? String(raw.address) : undefined;
+      if (!address) return;
+      const cand: PrinterCandidate = {
+        source: "bluetooth",
+        name: String(raw.name ?? raw.bluetoothName ?? address),
+        connectionType: "bluetooth",
+        bluetoothName: raw.bluetoothName ? String(raw.bluetoothName) : undefined,
+        bluetoothAddress: address,
+      };
+      setState((s) =>
+        s.btCandidates.some((c) => c.bluetoothAddress === cand.bluetoothAddress)
+          ? s
+          : { ...s, btCandidates: [...s.btCandidates, cand] },
+      );
+    };
+    w.onBtDiscoveryFinished = () => setState((s) => ({ ...s, btScanning: false }));
+    w.onBtDiscoveryError = (msg) =>
+      setState((s) => ({ ...s, btScanning: false, btScanError: String(msg || "藍牙掃描失敗") }));
+    // Android 12+ 未授權 BLUETOOTH_SCAN → APK 會叫一次；真結果經 onBtPermissionResult 返。
+    w.onBtPermissionNeeded = () => {
+      void requestNativeBtPermission();
+    };
+    w.onBtPermissionResult = (granted) => {
+      if (granted) void scanNativeBtPrinters();
+      else setState((s) => ({ ...s, btScanning: false, btScanError: "未獲藍牙權限，請喺系統設定允許" }));
+    };
+    return () => {
+      w.onBtPrinterFound = undefined;
+      w.onBtDiscoveryFinished = undefined;
+      w.onBtDiscoveryError = undefined;
+      w.onBtPermissionNeeded = undefined;
+      w.onBtPermissionResult = undefined;
+    };
+  }, [state.step, state.connectionType]);
+
+  /**
+   * 掃描藍牙打印機。
+   *
+   * 次序：**先列已配對，再開探索**。
+   * 門店嘅藍牙打印機九成都係一早喺 Android 設定配對好，開探索反而要等 10 秒；
+   * 先顯示已配對清單，店員可以即刻揀，想加新機再等探索結果陸續出現。
+   */
+  async function scanBt() {
+    setState((s) => ({ ...s, btScanning: true, btScanError: "" }));
+    try {
+      if (isAndroidNativeEnv()) {
+        const bonded = await listNativeBtPrinters();
+        setState((s) => {
+          const merged = [...bonded];
+          for (const c of s.btCandidates) {
+            if (c.bluetoothAddress && !merged.some((m) => m.bluetoothAddress === c.bluetoothAddress)) {
+              merged.push(c);
+            }
+          }
+          return { ...s, btCandidates: merged };
+        });
+        const r = await scanNativeBtPrinters();
+        if (!r.ok) setState((s) => ({ ...s, btScanning: false }));
+        return;
+      }
+      // desktop：經 Companion 列已配對裝置
+      if (!isDesktopCompanionEnv()) {
+        setState((s) => ({ ...s, btScanning: false, btScanError: "此環境唔支援藍牙打印機" }));
+        return;
+      }
+      const list = await enumerateCompanionBluetoothDevices();
+      setState((s) => ({ ...s, btCandidates: list, btScanning: false }));
+    } catch (e) {
+      setState((s) => ({
+        ...s,
+        btScanning: false,
+        btScanError: e instanceof Error ? e.message : "藍牙掃描失敗",
+      }));
+    }
+  }
+
+  /** 揀藍牙裝置 → 直接跳第 3 步（藍牙冇型號表，用裝置名做型號）。 */
+  function selectBtDevice(candidate: PrinterCandidate) {
+    const labelish = state.role === "label";
+    const opt: LanModelOption = {
+      brand: candidate.model || "藍牙打印機",
+      model: candidate.model || candidate.name || "藍牙打印機",
+      charset: "gb18030",
+      // 藍牙可攜機絕大多數係 58mm；80mm 藍牙機唔常見，第 3 步可以改。
+      paperSize: labelish ? "100x75mm" : "58mm",
+      kanjiEnlarge: "GS!",
+      family: labelish ? "label" : "receipt",
+      alsoKnownAs: [],
+    };
+    setState((s) => ({
+      ...s,
+      model: opt.model,
+      resolvedMeta: opt,
+      btAddress: candidate.bluetoothAddress,
+      btName: candidate.bluetoothName ?? candidate.name,
+      labelCommandSet: labelish ? suggestLabelCommandSet(opt.brand) : s.labelCommandSet,
+      step: 3,
+    }));
+  }
+
+  /**
+   * LAN 自動搜尋（2026-10-29 · P3）。
+   *
+   * 為何要：打印機 IP 係 router DHCP 派、機身冇顯示 → 舊版逼店員手填等於裝唔到機。
+   * Android 走 APK 內 `LanScanner`（掃整個 /24，port 9100／631／80，帶進度）；
+   * desktop 走 Companion `:9311/api/discover`；純網頁冇本地代理 → 明確講唔支援。
+   */
+  async function scanLan() {
+    setState((s) => ({
+      ...s,
+      lanScanning: true,
+      lanScanError: "",
+      lanHits: [],
+      lanScanProgress: null,
+    }));
+    try {
+      if (isAndroidNativeEnv()) {
+        const r = await scanNativeLanPrinters((p) => {
+          setState((s) => ({ ...s, lanScanProgress: p }));
+        });
+        setState((s) => ({
+          ...s,
+          lanScanning: false,
+          lanScanProgress: null,
+          lanHits: r.hits,
+          lanScanError: r.ok ? "" : (r.error ?? "搜尋失敗"),
+        }));
+        return;
+      }
+      if (!isDesktopCompanionEnv()) {
+        setState((s) => ({
+          ...s,
+          lanScanning: false,
+          lanScanError: "純網頁環境搜尋唔到區網打印機，請手動填 IP",
+        }));
+        return;
+      }
+      const list = await discoverCompanionLanPrinters();
+      setState((s) => ({
+        ...s,
+        lanScanning: false,
+        lanHits: list
+          .filter((c) => Boolean(c.ipAddress))
+          .map((c) => ({
+            ip: String(c.ipAddress),
+            openPorts: [typeof c.lanPort === "number" ? c.lanPort : 9100],
+            hostname: c.name,
+          })),
+      }));
+    } catch (e) {
+      setState((s) => ({
+        ...s,
+        lanScanning: false,
+        lanScanProgress: null,
+        lanScanError: e instanceof Error ? e.message : "搜尋失敗",
+      }));
+    }
+  }
+
+  // 關閉精靈 → 停止背景網段掃描（254 個 host 嘅 socket 唔應該留喺背景燒電）。
+  useEffect(() => {
+    if (!open) return;
+    return () => {
+      stopNativeLanScan();
+    };
+  }, [open]);
+
   function selectRole(role: PrinterRole) {
     // 換用途 = 之前揀嘅型號一定唔啱（票據機型號 != 標籤機型號）→ 一齊清走。
     // 唔清 = 商家由「廚房機」改「標籤機」之後，model 仲留住上一份清單嘅值。
@@ -280,7 +513,7 @@ export function PrinterWizardModal({ open, onClose, onAdd, printZones, lockRole 
     }));
   }
 
-  function selectConnectionType(connectionType: "lan" | "usb") {
+  function selectConnectionType(connectionType: "lan" | "usb" | "bluetooth") {
     // 換連線方式 = chip 來源換咗（LAN 用型號表、USB 用偵測結果）→ 篩選也要 reset。
     setState((s) => ({ ...s, connectionType, brandFilter: BRAND_FILTER_ALL }));
   }
@@ -369,6 +602,8 @@ export function PrinterWizardModal({ open, onClose, onAdd, printZones, lockRole 
   function complete() {
     if (!state.role || !state.connectionType || !state.model || !state.resolvedMeta) return;
     if (state.connectionType === "lan" && !state.ipAddress.trim()) return;
+    // 藍牙：一定要有 address，否則 APK 連唔到（會出「藍牙打印機缺少 address」）。
+    if (state.connectionType === "bluetooth" && !state.btAddress) return;
 
     const roleLabel = state.role === "receipt" ? "小票機" : state.role === "label" ? "標籤機" : "廚房機";
     const printer: DevicePrinterConfig = {
@@ -387,6 +622,10 @@ export function PrinterWizardModal({ open, onClose, onAdd, printZones, lockRole 
       usbVendorId: state.connectionType === "usb" ? state.usbVendorId : undefined,
       usbProductId: state.connectionType === "usb" ? state.usbProductId : undefined,
       usbPort: state.connectionType === "usb" ? state.usbPort : undefined,
+      // 藍牙（2026-10-29 · P3）：APK `SdkPrinter` 用 `bluetoothAddress` 直接 connect，
+      // 缺咗會即時報「藍牙打印機缺少 address」。`bluetoothName` 只係顯示用。
+      bluetoothAddress: state.connectionType === "bluetooth" ? state.btAddress : undefined,
+      bluetoothName: state.connectionType === "bluetooth" ? state.btName : undefined,
       // 🔴 標籤機**唔應該**有 zoneId —— 杯貼 / 價籤同廚房分區無關。
       // 舊行為：`role !== "receipt"` 會塞一個 zoneId 落標籤機，令排位 / 分區
       // 邏輯誤以為佢係廚房機。
@@ -418,7 +657,7 @@ export function PrinterWizardModal({ open, onClose, onAdd, printZones, lockRole 
   }
 
   const canComplete =
-    state.connectionType === "usb"
+    state.connectionType === "usb" || state.connectionType === "bluetooth"
       ? Boolean(state.model && state.resolvedMeta)
       : Boolean(state.model && state.resolvedMeta && state.ipAddress.trim());
 
@@ -429,9 +668,24 @@ export function PrinterWizardModal({ open, onClose, onAdd, printZones, lockRole 
     { value: "label", label: "標籤機", desc: "價籤 / 杯貼（TSPL）", icon: "🏷️" },
   ];
 
-  const connOptions: { value: "lan" | "usb"; label: string; desc: string; icon: string }[] = [
+  /**
+   * 連接方式選項。
+   *
+   * 🔴 2026-10-29 加「藍牙」：`ConnectionType` 同 APK 側（`listBtPrinters` /
+   * `scanBtPrinters` / `SdkPrinter` 嘅 BLUETOOTH 分支）一直都支援，但精靈從來冇
+   * 呢個選項 → 藍牙可攜打印機根本加唔到。換走 Sunmi 一體機之後，小店最常見嘅
+   * 配搭就係「平板 ＋ 58mm 藍牙機」。
+   *
+   * 藍牙只在「Android native 或 desktop companion」出現 —— 純網頁冇本地代理，
+   * 藍牙物理上連唔到，顯示只會令店員撳完得一場空。
+   */
+  const btSupported = isAndroidNativeEnv() || isDesktopCompanionEnv();
+  const connOptions: { value: "lan" | "usb" | "bluetooth"; label: string; desc: string; icon: string }[] = [
     { value: "lan", label: "LAN", desc: "區網 / 網線", icon: "🌐" },
     { value: "usb", label: "USB", desc: "USB 直連", icon: "🔌" },
+    ...(btSupported
+      ? [{ value: "bluetooth" as const, label: "藍牙", desc: "可攜式藍牙機", icon: "📶" }]
+      : []),
   ];
 
   if (!open) return null;
@@ -582,7 +836,7 @@ export function PrinterWizardModal({ open, onClose, onAdd, printZones, lockRole 
               {state.role === "receipt" ? "小票機" : state.role === "label" ? "標籤機" : "廚房機"}
             </span>
             {" · "}
-            {state.connectionType === "lan" ? "LAN" : "USB"}
+            {state.connectionType === "lan" ? "LAN" : state.connectionType === "bluetooth" ? "藍牙" : "USB"}
           </div>
 
           {/*
@@ -779,6 +1033,69 @@ export function PrinterWizardModal({ open, onClose, onAdd, printZones, lockRole 
               )}
             </div>
           ) : null}
+
+          {/*
+            藍牙裝置列表（2026-10-29 · P3）。
+            APK 側一直有 `listBtPrinters` / `scanBtPrinters`，但精靈冇藍牙入口，
+            令「平板 ＋ 58mm 可攜機」呢個最常見嘅非 Sunmi 配搭裝唔到。
+            藍牙冇 VID/PID 亦冇型號表 → 用裝置名做型號，第 3 步可改紙寬。
+          */}
+          {state.connectionType === "bluetooth" ? (
+            <div className="grid gap-3">
+              <div className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs leading-relaxed text-sky-800">
+                📶 下面會先列<b>已配對</b>嘅裝置，再自動搜尋附近新機。
+                <br />
+                如果打印機未出現，請先喺 Android「設定 → 藍牙」配對一次，再返嚟重新搜尋。
+              </div>
+
+              {state.btScanning ? (
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">
+                  正在搜尋藍牙打印機…
+                </div>
+              ) : null}
+
+              {state.btScanError ? (
+                <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+                  {state.btScanError}
+                </div>
+              ) : null}
+
+              {state.btCandidates.length === 0 && !state.btScanning ? (
+                <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-6 text-center text-sm text-amber-700">
+                  未搵到藍牙打印機
+                  <br />
+                  <span className="text-xs">請確認打印機已開機、並已完成系統配對</span>
+                </div>
+              ) : (
+                <div className="grid max-h-[400px] gap-2 overflow-y-auto">
+                  {state.btCandidates.map((c, i) => (
+                    <button
+                      key={c.bluetoothAddress ?? `${c.name}-${i}`}
+                      className="flex items-center justify-between rounded-2xl border-2 border-slate-200 bg-white px-4 py-3 text-left hover:border-slate-300"
+                      onClick={() => selectBtDevice(c)}
+                      type="button"
+                    >
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-bold text-slate-900">{c.name}</div>
+                        <div className="truncate text-xs text-slate-500">
+                          {c.bluetoothAddress ?? "（未取得 address）"}
+                        </div>
+                      </div>
+                      <span className="text-slate-300">→</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              <button
+                className="rounded-2xl bg-slate-100 px-4 py-2 text-sm font-semibold text-slate-700"
+                onClick={() => void scanBt()}
+                type="button"
+              >
+                重新搜尋
+              </button>
+            </div>
+          ) : null}
         </div>
       ) : null}
 
@@ -789,15 +1106,94 @@ export function PrinterWizardModal({ open, onClose, onAdd, printZones, lockRole 
           <div className="flex flex-wrap items-center gap-2 rounded-xl bg-slate-100 px-3 py-2 text-xs text-slate-600">
             {state.role === "receipt" ? "小票機" : state.role === "label" ? "標籤機" : "廚房機"}
             {" · "}
-            {state.connectionType === "lan" ? "LAN" : "USB"}
+            {state.connectionType === "lan" ? "LAN" : state.connectionType === "bluetooth" ? "藍牙" : "USB"}
             {" · "}
             {state.model}
             <span className="text-slate-400">🔒 已鎖定</span>
           </div>
 
-          {/* LAN：輸入 IP */}
+          {/* LAN：自動搜尋 + 手動輸入 IP */}
           {state.connectionType === "lan" ? (
             <div className="grid gap-3">
+              {/*
+                自動搜尋（2026-10-29 · P3「打印脫離 Sunmi」）。
+                🔴 換走 Sunmi 一體機之後，門店用嘅係普通平板 ＋ 網絡打印機；
+                打印機 IP 由 router DHCP 派、機身又冇顯示 → 舊版逼店員手填 IP，
+                實際上等於「裝唔到機」。Android 走 APK 內 `LanScanner`（掃整個 /24），
+                desktop 走 Companion `/api/discover`。
+              */}
+              <div className="grid gap-2 rounded-2xl border border-slate-200 bg-slate-50 p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-semibold text-slate-700">唔知打印機 IP？</span>
+                  <button
+                    className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                    disabled={state.lanScanning}
+                    onClick={() => void scanLan()}
+                    type="button"
+                  >
+                    {state.lanScanning ? "搜尋中…" : "🔍 自動搜尋"}
+                  </button>
+                </div>
+
+                {state.lanScanning ? (
+                  <div className="text-xs text-slate-500">
+                    {state.lanScanProgress
+                      ? `已掃 ${state.lanScanProgress.checked}／${state.lanScanProgress.total} 部主機 · 搵到 ${state.lanScanProgress.found} 部`
+                      : "正在準備掃描…"}
+                  </div>
+                ) : null}
+
+                {state.lanScanError ? (
+                  <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800">
+                    {state.lanScanError}
+                  </div>
+                ) : null}
+
+                {!state.lanScanning && !state.lanScanError && state.lanHits.length === 0 ? (
+                  <div className="text-xs text-slate-400">
+                    掃描會列出同一個網段入面有開 9100／631／80 嘅主機。
+                  </div>
+                ) : null}
+
+                {state.lanHits.length > 0 ? (
+                  <div className="grid max-h-[220px] gap-1.5 overflow-y-auto">
+                    {state.lanHits.map((h) => {
+                      const printerLikely = h.openPorts.includes(9100);
+                      const active = state.ipAddress.trim() === h.ip;
+                      return (
+                        <button
+                          key={h.ip}
+                          className={`flex items-center justify-between gap-2 rounded-xl border-2 px-3 py-2 text-left ${
+                            active ? "border-slate-900 bg-white" : "border-slate-200 bg-white"
+                          }`}
+                          onClick={() =>
+                            setState((s) => ({ ...s, ipAddress: h.ip, connectionTested: false }))
+                          }
+                          type="button"
+                        >
+                          <span className="min-w-0">
+                            <span className="block text-sm font-semibold text-slate-900">{h.ip}</span>
+                            <span className="block truncate text-[11px] text-slate-500">
+                              {h.mac ? `${h.mac} · ` : ""}
+                              {h.hostname
+                                ? h.hostname
+                                : printerLikely
+                                  ? "9100 開啟（多數係打印機）"
+                                  : `開放端口 ${h.openPorts.join(" / ")}`}
+                            </span>
+                          </span>
+                          {printerLikely ? (
+                            <span className="shrink-0 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
+                              打印機？
+                            </span>
+                          ) : null}
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : null}
+              </div>
+
               <label className="grid gap-1 text-sm font-semibold text-slate-900">
                 打印機 IP 地址
                 <input
@@ -833,6 +1229,51 @@ export function PrinterWizardModal({ open, onClose, onAdd, printZones, lockRole 
               <div className="mt-1 text-xs text-emerald-600">
                 {state.model} · {isLabel ? state.labelPaperSize : state.resolvedMeta?.paperSize}
               </div>
+            </div>
+          ) : null}
+
+          {/*
+            藍牙：已選裝置 + 紙寬（2026-10-29 · P3）。
+            藍牙冇型號表，所以紙寬要喺呢度畀商家揀 —— APK 側 `SdkPrinter` 用
+            `bluetoothAddress` 直連，紙寬只影響 `template.cols` 缺席時嘅 fallback。
+          */}
+          {state.connectionType === "bluetooth" ? (
+            <div className="grid gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3">
+              <div className="text-sm font-semibold text-emerald-800">✅ 已選藍牙打印機</div>
+              <div className="text-xs text-emerald-700">
+                {state.btName || state.model}
+                {state.btAddress ? ` · ${state.btAddress}` : ""}
+              </div>
+              {!isLabel ? (
+                <div className="grid gap-1">
+                  <span className="text-xs font-semibold text-emerald-800">紙寬</span>
+                  <div className="flex gap-2">
+                    {(["58mm", "80mm"] as const).map((p) => {
+                      const active = state.resolvedMeta?.paperSize === p;
+                      return (
+                        <button
+                          key={p}
+                          className={`rounded-xl border-2 px-3 py-2 text-xs font-semibold ${
+                            active
+                              ? "border-emerald-600 bg-white text-emerald-800"
+                              : "border-emerald-200 bg-white/70 text-slate-600"
+                          }`}
+                          onClick={() =>
+                            setState((s) =>
+                              s.resolvedMeta
+                                ? { ...s, resolvedMeta: { ...s.resolvedMeta, paperSize: p } }
+                                : s,
+                            )
+                          }
+                          type="button"
+                        >
+                          {p === "58mm" ? "58mm（可攜機）" : "80mm"}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : null}
             </div>
           ) : null}
 

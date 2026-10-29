@@ -185,6 +185,180 @@ function getNativeBridge(): NativeBridge | null {
   return p ?? null;
 }
 
+// ──────────────────────────────────────────────────────────────────────────
+// Android：整段網域掃描（2026-10-29 · P3「打印脫離 Sunmi」）
+// ──────────────────────────────────────────────────────────────────────────
+
+/** 掃描到嘅一部主機（APK `LanScanner.ScanHit` 嘅鏡像）。 */
+export interface LanScanHit {
+  ip: string;
+  mac?: string;
+  openPorts: number[];
+  hostname?: string;
+}
+
+export interface LanScanOutcome {
+  ok: boolean;
+  hits: LanScanHit[];
+  /** `ok=false` 時嘅原因（拎唔到本機 IP／逾時／已取消／機型唔支援）。 */
+  error?: string;
+  /** 本機所屬網段前三段，例如 `192.168.1`。 */
+  subnet?: string;
+}
+
+export interface LanScanProgress {
+  checked: number;
+  total: number;
+  found: number;
+}
+
+/** 同一時間只可能有一次掃描 → 用單一 resolver，避免多個 promise 爭回呼。 */
+let lanScanResolve: ((r: LanScanOutcome) => void) | null = null;
+let lanScanTimer: ReturnType<typeof setTimeout> | null = null;
+
+function parseMaybeJson(raw: unknown): Record<string, unknown> | null {
+  if (typeof raw === "string") {
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : null;
+    } catch {
+      return null;
+    }
+  }
+  return raw && typeof raw === "object" ? (raw as Record<string, unknown>) : null;
+}
+
+function settleLanScan(result: LanScanOutcome): void {
+  if (lanScanTimer) {
+    clearTimeout(lanScanTimer);
+    lanScanTimer = null;
+  }
+  const resolve = lanScanResolve;
+  lanScanResolve = null;
+  resolve?.(result);
+  // 回呼留喺 window 上冇害（下一次掃描會覆蓋），但清走可以避免舊 promise 已被
+  // 結算後仍然觸發 `onProgress` 令 UI 亂跳。
+  if (typeof window !== "undefined") {
+    const w = window as unknown as {
+      __onLanScanProgress?: unknown;
+      __onLanScanResult?: unknown;
+    };
+    w.__onLanScanProgress = undefined;
+    w.__onLanScanResult = undefined;
+  }
+}
+
+/**
+ * Android：掃描整個網段，列出有開 9100／631／80 嘅主機。
+ *
+ * ─────────────────────────────────────────────────────────────
+ * 為何要（2026-10-29）
+ * ─────────────────────────────────────────────────────────────
+ * 之前 Android 只有 `probeNativeLan(ip)` —— **要店員自己知打印機 IP** 先加得到機。
+ * 但換走 Sunmi 一體機之後，門店用嘅係普通 Android 平板 ＋ 網絡打印機，而打印機
+ * IP 係 DHCP 派、機身又冇顯示 → 等於裝唔到機。APK 側嘅 `LanScanner` 一直存在
+ * （64 並發、讀 ARP 攞 MAC、帶進度），只係從來冇經 bridge 匯出。
+ *
+ * 對應 desktop 條路嘅 `discoverCompanionLanPrinters()`（`:9311/api/discover`）；
+ * 兩者回傳都會被呼叫端收斂成 `LanScanHit[]`。
+ *
+ * ⚠️ 逾時 45 秒：APK 側理論上一定會回（`__onLanScanResult`），但 native 崩／
+ * 被系統殺嘅話 promise 會永遠掛住 → UI 永遠「搜尋中」。防守性結算係必要的。
+ *
+ * ⚠️ 只喺 Android native 環境有效；其他環境回 `ok:false` 而**唔會** throw，
+ * 呼叫端可以一律顯示「此環境不支援自動搜尋，請手動填 IP」。
+ */
+export async function scanNativeLanPrinters(
+  onProgress?: (p: LanScanProgress) => void,
+): Promise<LanScanOutcome> {
+  const b = getNativeBridge() as
+    | (NativeBridge & { scanLanPrinters?: () => unknown; stopLanScan?: () => unknown })
+    | null;
+  if (!b?.scanLanPrinters) {
+    return { ok: false, hits: [], error: "此裝置唔支援自動搜尋（請手動填 IP）" };
+  }
+
+  // 上一次未完 → 先結算，否則舊 promise 永遠唔 resolve（memory leak + UI 卡死）。
+  if (lanScanResolve) settleLanScan({ ok: false, hits: [], error: "已被新一次搜尋取代" });
+
+  const w = window as unknown as {
+    __onLanScanProgress?: (raw: unknown) => void;
+    __onLanScanResult?: (raw: unknown) => void;
+  };
+
+  return new Promise<LanScanOutcome>((resolve) => {
+    lanScanResolve = resolve;
+
+    w.__onLanScanProgress = (raw) => {
+      const p = parseMaybeJson(raw);
+      if (!p) return;
+      onProgress?.({
+        checked: Number(p.checked ?? 0),
+        total: Number(p.total ?? 0),
+        found: Number(p.found ?? 0),
+      });
+    };
+
+    w.__onLanScanResult = (raw) => {
+      const p = parseMaybeJson(raw);
+      if (!p) {
+        settleLanScan({ ok: false, hits: [], error: "掃描結果格式不正確" });
+        return;
+      }
+      const rawHits = Array.isArray(p.hits) ? (p.hits as unknown[]) : [];
+      const hits: LanScanHit[] = rawHits
+        .map((item) => parseMaybeJson(item))
+        .filter((item): item is Record<string, unknown> => item !== null)
+        .map((item) => ({
+          ip: String(item.ip ?? ""),
+          mac: item.mac ? String(item.mac) : undefined,
+          openPorts: Array.isArray(item.openPorts)
+            ? (item.openPorts as unknown[]).map((n) => Number(n)).filter((n) => Number.isFinite(n))
+            : [],
+          hostname: item.hostname ? String(item.hostname) : undefined,
+        }))
+        .filter((h) => h.ip.length > 0);
+
+      settleLanScan({
+        ok: p.ok !== false,
+        hits,
+        error: typeof p.error === "string" && p.error ? p.error : undefined,
+        subnet: typeof p.subnet === "string" ? p.subnet : undefined,
+      });
+    };
+
+    lanScanTimer = setTimeout(() => {
+      settleLanScan({ ok: false, hits: [], error: "搜尋逾時（45 秒）" });
+    }, 45_000);
+
+    try {
+      const res = b.scanLanPrinters!() as unknown;
+      const parsed = parseMaybeJson(res);
+      // 例如「拎唔到本機 IP」會即時回 ok:false —— 唔使等 45 秒。
+      if (parsed && parsed.ok === false) {
+        settleLanScan({
+          ok: false,
+          hits: [],
+          error: typeof parsed.error === "string" ? parsed.error : "搜尋未能開始",
+        });
+      }
+    } catch (e) {
+      settleLanScan({ ok: false, hits: [], error: e instanceof Error ? e.message : String(e) });
+    }
+  });
+}
+
+/** 取消進行中嘅網段掃描（離開設定頁／關閉精靈時叫，避免背景繼續掃）。 */
+export function stopNativeLanScan(): void {
+  const b = getNativeBridge() as (NativeBridge & { stopLanScan?: () => unknown }) | null;
+  try {
+    b?.stopLanScan?.();
+  } catch {
+    // 取消失敗無所謂：APK 側 job 會自然完成
+  }
+  settleLanScan({ ok: false, hits: [], error: "已取消" });
+}
+
 /**
  * Android：插住嘅 USB ESC/POS 打印機清單。
  *
