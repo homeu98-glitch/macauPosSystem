@@ -7,8 +7,10 @@ import { PrinterCandidate, discoverCompanionLanPrinters, enumerateCompanionBluet
 import { isAndroidNativeEnv, isDesktopCompanionEnv } from "@/lib/print-bridge/native-environment";
 import {
   LanScanHit,
+  hasNativeBtPairing,
   listNativeBtPrinters,
   listNativeUsbPrinters,
+  pairNativeBtPrinter,
   probeNativeLan,
   requestNativeBtPermission,
   scanNativeBtPrinters,
@@ -89,6 +91,10 @@ interface WizardState {
   btScanning: boolean;
   /** 藍牙掃描錯誤（權限不足／探索失敗）。空 = 冇錯。 */
   btScanError: string;
+  /** 正在配對嘅 MAC（`createBond` 進行中 → 該行顯示「配對中…」）。空 = 冇。 */
+  btPairingAddress: string;
+  /** 配對成功提示（唔係錯誤，用綠色）。 */
+  btNotice: string;
   btAddress?: string;
   btName?: string;
   /**
@@ -142,6 +148,8 @@ export function PrinterWizardModal({ open, onClose, onAdd, printZones, lockRole 
     btCandidates: [],
     btScanning: false,
     btScanError: "",
+    btPairingAddress: "",
+    btNotice: "",
     lanScanning: false,
     lanScanProgress: null,
     lanHits: [],
@@ -245,6 +253,8 @@ export function PrinterWizardModal({ open, onClose, onAdd, printZones, lockRole 
         btCandidates: [],
         btScanning: false,
         btScanError: "",
+        btPairingAddress: "",
+        btNotice: "",
         lanScanning: false,
         lanScanProgress: null,
         lanHits: [],
@@ -330,6 +340,7 @@ export function PrinterWizardModal({ open, onClose, onAdd, printZones, lockRole 
       onBtDiscoveryError?: (msg: string) => void;
       onBtPermissionNeeded?: () => void;
       onBtPermissionResult?: (granted: boolean) => void;
+      onBtPairResult?: (raw: Record<string, unknown>) => void;
     };
     w.onBtPrinterFound = (raw) => {
       const address = raw.address ? String(raw.address) : undefined;
@@ -340,6 +351,8 @@ export function PrinterWizardModal({ open, onClose, onAdd, printZones, lockRole 
         connectionType: "bluetooth",
         bluetoothName: raw.bluetoothName ? String(raw.bluetoothName) : undefined,
         bluetoothAddress: address,
+        // 探索結果會帶 bonded；未配對嘅機要喺 app 內配對先可以打印。
+        bonded: raw.bonded !== false,
       };
       setState((s) =>
         s.btCandidates.some((c) => c.bluetoothAddress === cand.bluetoothAddress)
@@ -358,12 +371,36 @@ export function PrinterWizardModal({ open, onClose, onAdd, printZones, lockRole 
       if (granted) void scanNativeBtPrinters();
       else setState((s) => ({ ...s, btScanning: false, btScanError: "未獲藍牙權限，請喺系統設定允許" }));
     };
+    // APK v1.2.0+ 嘅 app 內配對結果（createBond → BOND_STATE_CHANGED）。
+    // 配對成功只係「呢部機可以揀」，唔自動跳第 3 步 —— 店員要親眼見到成咗。
+    w.onBtPairResult = (raw) => {
+      const address = raw.address ? String(raw.address) : "";
+      const ok = raw.ok === true;
+      const message = String(raw.message ?? "");
+      setState((s) => {
+        if (!ok) {
+          return { ...s, btPairingAddress: "", btScanError: message || "配對失敗，請再試" };
+        }
+        return {
+          ...s,
+          btPairingAddress: "",
+          btScanError: "",
+          btNotice: message || "配對成功",
+          btCandidates: s.btCandidates.map((c) =>
+            c.bluetoothAddress && c.bluetoothAddress.toUpperCase() === address.toUpperCase()
+              ? { ...c, bonded: true }
+              : c,
+          ),
+        };
+      });
+    };
     return () => {
       w.onBtPrinterFound = undefined;
       w.onBtDiscoveryFinished = undefined;
       w.onBtDiscoveryError = undefined;
       w.onBtPermissionNeeded = undefined;
       w.onBtPermissionResult = undefined;
+      w.onBtPairResult = undefined;
     };
   }, [state.step, state.connectionType]);
 
@@ -375,7 +412,7 @@ export function PrinterWizardModal({ open, onClose, onAdd, printZones, lockRole 
    * 先顯示已配對清單，店員可以即刻揀，想加新機再等探索結果陸續出現。
    */
   async function scanBt() {
-    setState((s) => ({ ...s, btScanning: true, btScanError: "" }));
+    setState((s) => ({ ...s, btScanning: true, btScanError: "", btNotice: "" }));
     try {
       if (isAndroidNativeEnv()) {
         const bonded = await listNativeBtPrinters();
@@ -404,6 +441,39 @@ export function PrinterWizardModal({ open, onClose, onAdd, printZones, lockRole 
         ...s,
         btScanning: false,
         btScanError: e instanceof Error ? e.message : "藍牙掃描失敗",
+      }));
+    }
+  }
+
+  /**
+   * app 內配對藍牙打印機（APK v1.2.0+ `createBond`）。
+   *
+   * 🔴 為何唔叫店員去系統設定：POS 一體機／平板的設定頁好多時被廠商鎖住，
+   * 甚至冇藍牙頁。逼佢跳出去 = 裝唔到機。
+   *
+   * `pairNativeBtPrinter` 回 `ok` 只代表「已發起」，真正結果（成功／失敗／30s 逾時）
+   * 經 `window.onBtPairResult` 非同步返嚟，所以呢度唔可以即刻當成功。
+   */
+  async function pairBt(candidate: PrinterCandidate) {
+    const address = candidate.bluetoothAddress;
+    if (!address) {
+      setState((s) => ({ ...s, btScanError: "呢個裝置冇 MAC 位址，請重新搜尋" }));
+      return;
+    }
+    if (!hasNativeBtPairing()) {
+      setState((s) => ({
+        ...s,
+        btScanError: "呢個 APK 版本未支援 app 內配對，請喺 Android「設定 → 藍牙」配對一次",
+      }));
+      return;
+    }
+    setState((s) => ({ ...s, btPairingAddress: address, btScanError: "", btNotice: "" }));
+    const r = await pairNativeBtPrinter(address);
+    if (!r.ok) {
+      setState((s) => ({
+        ...s,
+        btPairingAddress: "",
+        btScanError: r.message || "無法發起配對，請確認打印機喺配對模式",
       }));
     }
   }
@@ -1045,8 +1115,14 @@ export function PrinterWizardModal({ open, onClose, onAdd, printZones, lockRole 
               <div className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs leading-relaxed text-sky-800">
                 📶 下面會先列<b>已配對</b>嘅裝置，再自動搜尋附近新機。
                 <br />
-                如果打印機未出現，請先喺 Android「設定 → 藍牙」配對一次，再返嚟重新搜尋。
+                未配對嘅機可以直接撳<b>「配對」</b>，唔使跳去系統設定（POS 一體機嘅設定好多時被鎖）。
               </div>
+
+              {state.btNotice ? (
+                <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-700">
+                  ✅ {state.btNotice}
+                </div>
+              ) : null}
 
               {state.btScanning ? (
                 <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-6 text-center text-sm text-slate-500">
@@ -1064,26 +1140,56 @@ export function PrinterWizardModal({ open, onClose, onAdd, printZones, lockRole 
                 <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-6 text-center text-sm text-amber-700">
                   未搵到藍牙打印機
                   <br />
-                  <span className="text-xs">請確認打印機已開機、並已完成系統配對</span>
+                  <span className="text-xs">請確認打印機已開機；未配對嘅機請先撳「配對」</span>
                 </div>
               ) : (
                 <div className="grid max-h-[400px] gap-2 overflow-y-auto">
-                  {state.btCandidates.map((c, i) => (
-                    <button
-                      key={c.bluetoothAddress ?? `${c.name}-${i}`}
-                      className="flex items-center justify-between rounded-2xl border-2 border-slate-200 bg-white px-4 py-3 text-left hover:border-slate-300"
-                      onClick={() => selectBtDevice(c)}
-                      type="button"
-                    >
-                      <div className="min-w-0">
-                        <div className="truncate text-sm font-bold text-slate-900">{c.name}</div>
-                        <div className="truncate text-xs text-slate-500">
-                          {c.bluetoothAddress ?? "（未取得 address）"}
-                        </div>
+                  {state.btCandidates.map((c, i) => {
+                    // 舊來源（desktop／舊 APK）冇 bonded 欄位 → 當已配對，唔好誤導店員重複配對。
+                    const paired = c.bonded !== false;
+                    const pairing =
+                      Boolean(state.btPairingAddress) &&
+                      c.bluetoothAddress?.toUpperCase() === state.btPairingAddress?.toUpperCase();
+                    return (
+                      <div
+                        key={c.bluetoothAddress ?? `${c.name}-${i}`}
+                        className={`flex items-center gap-2 rounded-2xl border-2 bg-white px-3 py-2 ${
+                          paired ? "border-slate-200" : "border-amber-200"
+                        }`}
+                      >
+                        <button
+                          className="min-w-0 flex-1 py-1 text-left disabled:opacity-60"
+                          onClick={() => selectBtDevice(c)}
+                          disabled={!paired || pairing}
+                          type="button"
+                        >
+                          <div className="flex items-center gap-2">
+                            <span className="truncate text-sm font-bold text-slate-900">{c.name}</span>
+                            {paired ? null : (
+                              <span className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-700">
+                                未配對
+                              </span>
+                            )}
+                          </div>
+                          <div className="truncate text-xs text-slate-500">
+                            {c.bluetoothAddress ?? "（未取得 address）"}
+                          </div>
+                        </button>
+                        {paired ? (
+                          <span className="text-slate-300">→</span>
+                        ) : (
+                          <button
+                            className="min-h-[44px] shrink-0 rounded-xl bg-slate-900 px-3 text-xs font-semibold text-white disabled:opacity-50"
+                            onClick={() => void pairBt(c)}
+                            disabled={Boolean(state.btPairingAddress)}
+                            type="button"
+                          >
+                            {pairing ? "配對中…" : "配對"}
+                          </button>
+                        )}
                       </div>
-                      <span className="text-slate-300">→</span>
-                    </button>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
 

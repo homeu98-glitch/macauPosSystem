@@ -544,6 +544,12 @@ export interface PrinterCandidate {
   usbProductId?: string;
   bluetoothName?: string;
   bluetoothAddress?: string;
+  /**
+   * 藍牙裝置是否已配對（Android APK v1.2.0+ 回傳）。
+   * `false` → 未配對，要先喺精靈撳「配對」（`createBond`）或者系統設定配對，
+   * 否則 SPP 連線一定失敗。undefined = 舊來源冇提供 → 當已配對。
+   */
+  bonded?: boolean;
   model?: string;
   charset?: string;
   paperSize?: string;

@@ -39,6 +39,15 @@ function resolveBuildEnv(): string {
 const BUILD_TIME = new Date().toISOString();
 
 const nextConfig: NextConfig = {
+  /**
+   * 建置輸出目錄，預設 `.next`（Vercel 走呢個）。
+   *
+   * 加環境變數覆寫係為咗本機打包 APK 離線 bundle：2026-10-29 實測本機 `.next`
+   * 會因為檔案鎖令 `next build` 永遠停在「Running next.config.ts」之後
+   * （0 CPU、冇子進程、冇錯誤訊息）—— 改用另一個 distDir 即刻正常。
+   * 對應工具：`macauPosAndroid/tools/bundle-web.cjs` 讀 `NEXT_DIST_DIR`。
+   */
+  distDir: process.env.NEXT_DIST_DIR || ".next",
   env: {
     NEXT_PUBLIC_BUILD_ID: resolveBuildId(),
     NEXT_PUBLIC_BUILD_TIME: BUILD_TIME,

@@ -148,6 +148,8 @@ interface NativeBridge {
   scanBtPrinters?: () => unknown;
   stopBtScan?: () => unknown;
   requestBtPermission?: () => unknown;
+  /** v1.2.0+：app 內 createBond()，結果經 window.onBtPairResult 回。 */
+  pairBtPrinter?: (address: string) => unknown;
 }
 
 /**
@@ -452,7 +454,7 @@ export async function listNativeBtPrinters(): Promise<PrinterCandidate[]> {
     const parsed = typeof res === "string" ? (JSON.parse(res) as { printers?: unknown[] }) : (res as { printers?: unknown[] });
     const list = parsed.printers ?? [];
     return list.map((raw) => {
-      const p = raw as { address?: string; name?: string; bluetoothName?: string };
+      const p = raw as { address?: string; name?: string; bluetoothName?: string; bonded?: boolean };
       const name = p.name || p.bluetoothName || p.address || "藍牙打印機";
       return {
         source: "bluetooth",
@@ -460,6 +462,8 @@ export async function listNativeBtPrinters(): Promise<PrinterCandidate[]> {
         connectionType: "bluetooth",
         bluetoothName: name,
         bluetoothAddress: p.address,
+        // 呢條清單只列已配對；缺欄位（舊 APK）一律當 true，唔好誤導店員再配對。
+        bonded: p.bonded !== false,
       } as PrinterCandidate;
     });
   } catch {
@@ -491,4 +495,36 @@ export async function requestNativeBtPermission(): Promise<{ ok: boolean }> {
   } catch {
     return { ok: false };
   }
+}
+
+/**
+ * Android v1.2.0+：喺 app 內配對藍牙打印機（`createBond()`）。
+ *
+ * 🔴 為何唔叫店員去系統設定配對：POS 一體機／平板的「設定」好多時被廠商鎖住，
+ * 或者冇藍牙頁；逼佢跳出去等於裝唔到機。呢個方法會即時發起配對，
+ * 真正結果（成功／失敗／30s 逾時）經 `window.onBtPairResult` 非同步回。
+ *
+ * 回傳 `{ ok }` 只代表「已發起」，唔代表配對成功。
+ */
+export async function pairNativeBtPrinter(address: string): Promise<{ ok: boolean; message?: string }> {
+  const b = getNativeBridge();
+  if (!b?.pairBtPrinter) {
+    return { ok: false, message: "呢個 APK 版本未支援 app 內配對，請喺系統設定配對" };
+  }
+  try {
+    const res = b.pairBtPrinter(address) as unknown;
+    const parsed =
+      typeof res === "string"
+        ? (JSON.parse(res) as { ok?: boolean; error?: string })
+        : (res as { ok?: boolean; error?: string });
+    return { ok: parsed.ok !== false, message: parsed.error };
+  } catch (e) {
+    return { ok: false, message: e instanceof Error ? e.message : "配對失敗" };
+  }
+}
+
+/** 目前 APK 有冇 app 內配對能力（舊版 APK 冇 → UI 要退返「去系統設定」提示）。 */
+export function hasNativeBtPairing(): boolean {
+  const b = getNativeBridge();
+  return typeof b?.pairBtPrinter === "function";
 }
