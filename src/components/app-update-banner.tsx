@@ -55,6 +55,9 @@ export function AppUpdateBanner() {
     } catch {
       // sessionStorage 讀唔到 = 當未略過，照樣檢查
     }
+    // 🔴 檢查到呢度 = 「呢次開啟未略過」——一定要亮返出嚟。
+    //    （初值 true 係為咗 SSR／未確定前唔出，避免 hydration mismatch。）
+    setDismissed(false);
     // 唔係 Android 原生殼（冇 checkAppUpdate 橋）就唔使做。
     const p = (window as unknown as { PosNative?: Record<string, unknown> }).PosNative;
     if (!p || typeof p.checkAppUpdate !== "function") return;
