@@ -4,6 +4,8 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
 import { AppSidebar } from "@/components/app-sidebar";
+import { AppVersionSection } from "@/components/app-version-section";
+import { isAndroidNativeShell } from "@/lib/app-update";
 import { StaffPermissionPanel } from "@/components/staff-permission-panel";
 import { useLang, useT, useTShort } from "@/components/lang-provider";
 import { LANG_DISPLAY_NAME, UI_LANGS } from "@/lib/i18n";
@@ -94,6 +96,7 @@ export function DeviceSettings() {
     | "kiosk"
     | "language"
     | "staff"
+    | "version"
   >("device");
 
   /**
@@ -122,6 +125,20 @@ export function DeviceSettings() {
       ledgerRefreshToken: session?.ledgerRefreshToken ?? null,
       isOwner: session?.role === "admin",
     });
+  }, []);
+
+  /**
+   * 「版本」tab 只喺 **Android 原生殼（APK）** 出現（2026-10-30，App OTA 1.2.3）。
+   *
+   * 同 `ownerCtx` 同一套道理：`isAndroidNativeShell()` 讀 `window.PosNative`，
+   * server render 必定 false ⇒ 一定要 mount 之後先亮出，兩邊首次 render 一致，
+   * 唔會 hydration mismatch。
+   * 舊版 APK（<1.2.3）冇 `checkAppUpdate` 橋 ⇒ 呢個 tab 都唔會出（正確：舊 APK
+   * 冇能力裝新包，見到「有更新」只會誤導）。
+   */
+  const [androidShell, setAndroidShell] = useState(false);
+  useEffect(() => {
+    setAndroidShell(isAndroidNativeShell());
   }, []);
   const [menuDraft, setMenuDraft] = useState(() => normalizeBootstrapPayload(cachedBootstrap));
   const [menuSaving, setMenuSaving] = useState(false);
@@ -1341,6 +1358,9 @@ export function DeviceSettings() {
             ["discounts", "折扣"],
             ["kiosk", "掃碼點餐"],
             ["language", "語言設置"],
+            // App 專屬（2026-10-30）：OTA 版本檢查／更新。只喺 Android 原生殼出現，
+            // 放喺「權限控制」之前 —— 唔好插喺更前，否則其餘分頁位置會位移。
+            ...(androidShell ? [["version", "版本"] as [string, string]] : []),
             // 店主專屬（2026-10-23）：員工角色／可見頁面／操作權限。
             // ⚠️ 放喺最後 —— 唔好插喺中間，否則現有分頁位置會位移，
             //    商家已經記熟位置（同側欄模組同一原則）。
@@ -1378,6 +1398,9 @@ export function DeviceSettings() {
   {/* 語言設置：獨立 tab（2026-10-13）—— 原先 LanguageSection 係「打印機」tab 底部一節，
       太難搵；依家升做頂層 tab，入設置頁一眼見到。 */}
   {activeTab === "language" ? <LanguageSection /> : null}
+
+  {/* App 版本（2026-10-30）：只喺 Android 原生殼出現，檢查／手動更新 APK。 */}
+  {activeTab === "version" && androidShell ? <AppVersionSection /> : null}
 
   {/* 權限控制（2026-10-23）：只店主見到。員工帳號存 POS 本地 ⇒ 員工唔需要 Ledger 戶口。 */}
   {activeTab === "staff" && ownerCtx?.isOwner && ownerCtx.storeId ? (

@@ -39,6 +39,28 @@ export const EN_DICT: Record<string, string> = {
   掃碼點餐: "QR self-order",
   語言設置: "Language",
 
+  // ─── 設置頁 · App 版本（2026-10-30，App OTA）───
+  // （「檢查中…」「未設定」「手動更新」「版本」字典已有，唔重複加。）
+  目前版本: "Current version",
+  最新版本: "Latest version",
+  更新包大小: "Update size",
+  "尚未檢查。": "Not checked yet.",
+  "檢查更新失敗：": "Update check failed: ",
+  重新檢查: "Check again",
+  "準備中…": "Preparing…",
+  "已經係最新版本。": "You're on the latest version.",
+  "有新版本可以更新。": "A new version is available.",
+  "有新版本 v{latest} 可以更新（目前 v{current}）。":
+    "Version v{latest} is available (current v{current}).",
+  "檢查同更新呢部機上面安裝嘅 App。更新唔會影響任何資料。":
+    "Check and update the app installed on this device. Updating does not affect any data.",
+  "下載中 {percent}%…": "Downloading {percent}%…",
+  "更新失敗：": "Update failed: ",
+  "已開啟安裝畫面，請喺彈出嘅安裝器按「安裝」。裝完 app 會重開，資料全部保留。":
+    "The installer has opened. Tap Install in the system prompt. The app restarts after installing; all data is kept.",
+  "需要「允許安裝未知應用」權限：已幫你開咗系統設定，開啟後返回再按一次「手動更新」。":
+    "The \"Install unknown apps\" permission is needed: system settings has been opened. Turn it on, come back, then tap \"Update now\" again.",
+
   // ─── 設置頁 · 語言切換 ───
   介面語言: "Interface language",
   語言: "Language",
@@ -686,6 +708,7 @@ export const EN_DICT: Record<string, string> = {
   "庫存充足": "Stock levels healthy",
   "目前未觸發優化建議，營運狀況健康。": "No optimisation suggestions triggered — operations look healthy.",
   "注意：本店進貨（收據）數據未能讀取，毛利估算未扣成本。": "Note: this store's purchase (receipt) data could not be read, so the gross profit estimate excludes cost.",
+  "注意：「全部商家」模式未能按店歸屬進貨（收據）成本，毛利估算未扣成本。請揀單一商家查看。": "Note: “All merchants” mode cannot attribute purchase (receipt) cost by store, so the gross profit estimate excludes cost. Please select a single merchant.",
   "載入中": "Loading",
   "正在載入報表數據…": "Loading report data…",
   "整合本機訂單、Ledger 線上單與會員數據，完成後一次顯示。": "Combining local orders, Ledger online orders and member data — shown all at once when ready.",

@@ -31,6 +31,7 @@ import { SelfOrderNoticeStack } from "@/components/self-order-notice-stack";
 import { SyncHealthModal } from "@/components/sync-health-modal";
 import { PosToolsMenu } from "@/components/pos-tools-menu";
 import { PosOfflineReloginBanner } from "@/components/pos-offline-relogin-banner";
+import { AppUpdateBanner } from "@/components/app-update-banner";
 import { OnlineOpenPill } from "@/components/online-open-pill";
 import { StoreOpenPill } from "@/components/store-open-pill";
 import { applyLedgerMerchantToBootstrap, resolveStoreDisplaySubtitle, resolveStoreDisplayTitle } from "@/lib/store-display";
@@ -5754,6 +5755,10 @@ export function PosApp() {
         <PosOfflineReloginBanner
           pendingSyncCount={queue.filter((event) => event.status === "pending").length}
         />
+        {/* 2026-10-30（App OTA）：Android 原生殼 + admin 有更新嘅 Android active 版本先出。
+            in-flow（推低內容、唔蓋控制項）；「暫時唔使」記 sessionStorage ——
+            每次 app 打開提示一次，關掉後等下一次開機（J 2026-10-30 定嘅規則）。 */}
+        <AppUpdateBanner />
         {posMode === "tables" ? (
           /*
            * 🔴 2026-10-14 小平板適配（HUAWEI MatePad SE 10.4" 實機）：
