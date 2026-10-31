@@ -21,11 +21,24 @@
 
 export const DELIVERY_DISPATCH_FLAG = "NEXT_PUBLIC_DELIVERY_DISPATCH";
 
-/** 未計入 build-time inline 嘅環境（例如 node --test）會走呢個 fallback。 */
+/**
+ * 🔴🔴 **一定要逐個字面寫 `process.env.NEXT_PUBLIC_XXX`**。
+ *
+ * Next 用 DefinePlugin 做**字面文字替換**：
+ * `process.env[name]`、`const { X } = process.env` 呢類寫法**唔會被替換**，
+ * 喺瀏覽器會變成 `undefined` ⇒ 旗標永遠 false。
+ *
+ * 2026-10-31 實案：商家已經喺 Vercel 設好三個 env = 1，但側欄「外送」仍然唔出，
+ * 就係因為原本寫成 `process.env[DELIVERY_DISPATCH_FLAG]`。
+ * （同一個坑 `src/lib/build-info.ts` 已經記錄過，今次又踩。）
+ *
+ * `env` 參數只俾 **unit test** 注入用；生產永遠走下面嘅字面量分支。
+ */
 export function isDeliveryDispatchEnabled(
-  env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
+  env?: Record<string, string | undefined>,
 ): boolean {
-  return String(env[DELIVERY_DISPATCH_FLAG] ?? "").trim() === "1";
+  if (env) return String(env[DELIVERY_DISPATCH_FLAG] ?? "").trim() === "1";
+  return String(process.env.NEXT_PUBLIC_DELIVERY_DISPATCH ?? "").trim() === "1";
 }
 
 /**
@@ -51,9 +64,10 @@ export function isDeliveryDispatchEnabled(
 export const DELIVERY_LIVE_FLAG = "NEXT_PUBLIC_DELIVERY_LIVE";
 
 export function isDeliveryLiveEnabled(
-  env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
+  env?: Record<string, string | undefined>,
 ): boolean {
-  return String(env[DELIVERY_LIVE_FLAG] ?? "").trim() === "1";
+  if (env) return String(env[DELIVERY_LIVE_FLAG] ?? "").trim() === "1";
+  return String(process.env.NEXT_PUBLIC_DELIVERY_LIVE ?? "").trim() === "1";
 }
 
 /**
@@ -77,7 +91,8 @@ export function isDeliveryLiveEnabled(
 export const DELIVERY_ONLINE_FLAG = "NEXT_PUBLIC_DELIVERY_ONLINE";
 
 export function isDeliveryOnlineEnabled(
-  env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
+  env?: Record<string, string | undefined>,
 ): boolean {
-  return String(env[DELIVERY_ONLINE_FLAG] ?? "").trim() === "1";
+  if (env) return String(env[DELIVERY_ONLINE_FLAG] ?? "").trim() === "1";
+  return String(process.env.NEXT_PUBLIC_DELIVERY_ONLINE ?? "").trim() === "1";
 }
