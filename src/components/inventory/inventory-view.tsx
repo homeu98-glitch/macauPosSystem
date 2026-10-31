@@ -1157,7 +1157,7 @@ function ReceiptFormModal({
       style={vvTop != null ? { top: `${vvTop}px` } : undefined}
     >
       <div
-        className="flex max-h-[calc(100dvh_-_24px)] w-full max-w-2xl touch-manipulation flex-col overflow-hidden rounded-3xl bg-white shadow-2xl"
+        className="flex max-h-[calc(100dvh_-_24px)] w-full max-w-5xl touch-manipulation flex-col overflow-hidden rounded-3xl bg-white shadow-2xl"
         style={vvH != null ? { height: `calc(${vvH}px - 24px)` } : undefined}
         onClick={(e) => e.stopPropagation()}
       >
@@ -1173,6 +1173,8 @@ function ReceiptFormModal({
         </div>
 
         <div ref={bodyRef} className="flex-1 space-y-5 overflow-y-auto overscroll-contain px-5 py-5">
+          {/* 2026-10-31：供應商／品類都係短欄位 —— 大屏橫向並排，唔好各佔一整行。 */}
+          <div className="grid gap-5 md:grid-cols-2">
           {/* ── 供應商：下拉（已有）＋ 即時新增 ── */}
           <div>
             <label className={labelCls}>供應商</label>
@@ -1320,6 +1322,8 @@ function ReceiptFormModal({
             )}
           </div>
 
+          </div>
+
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             <div>
               <label className={labelCls}>收據編號</label>
@@ -1383,6 +1387,8 @@ function ReceiptFormModal({
             </div>
           </div>
 
+          {/* 2026-10-31：三組都係 chip —— 大屏並排三欄，減少捲動高度。 */}
+          <div className="grid gap-5 md:grid-cols-3">
           {/* ── 付款方式：chip（主檔驅動） ── */}
           <div>
             <label className={labelCls}>付款方式</label>
@@ -1459,6 +1465,8 @@ function ReceiptFormModal({
                 </button>
               ))}
             </div>
+          </div>
+
           </div>
 
           {/* ── 單據相片（P3・非必填） ── */}
