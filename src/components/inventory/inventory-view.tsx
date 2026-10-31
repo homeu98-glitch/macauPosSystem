@@ -476,6 +476,14 @@ function ReceiptFormModal({
    *    令商家閂咗彈窗之後發現成頁跳咗位。
    */
   const bodyRef = useRef<HTMLDivElement>(null);
+  /**
+   * 品項區自己嘅 scroll 容器（2026-10-31 三欄排版）。
+   *
+   * 🔴 三欄之後 desktop 嘅 `bodyRef` 係 `overflow-hidden`（唔再整頁捲），
+   *    品項改用自己嗰個容器捲。`addItemRow()` 一定要捲呢個，
+   *    否則新行會落喺可視範圍以外（商家會以為「＋品項」冇反應，歷史實案）。
+   */
+  const itemsScrollRef = useRef<HTMLDivElement>(null);
   /** 每一行品項嘅 wrapper（index 對應 `form.items`），新增行之後用嚟捲到佢。 */
   const itemRowRefs = useRef<Array<HTMLDivElement | null>>([]);
   /** 彈窗最外層 backdrop（用嚟喺鍵盤彈起時錨住 visual viewport）。 */
@@ -692,7 +700,7 @@ function ReceiptFormModal({
     // 等新行掛咗 DOM 先度位。`requestAnimationFrame` 喺 React 18/19 嘅自動 batching
     // 之下都係 commit 之後嘅下一個 frame，唔使 `setTimeout` 魔術數字。
     requestAnimationFrame(() => {
-      const body = bodyRef.current;
+      const body = itemsScrollRef.current ?? bodyRef.current;
       // 一定係「最後一行」——唔用 `form.items.length`（快速連撳兩下會拿到舊長度）。
       const rows = itemRowRefs.current;
       const row = [...rows].reverse().find((el): el is HTMLDivElement => Boolean(el));
@@ -1157,7 +1165,7 @@ function ReceiptFormModal({
       style={vvTop != null ? { top: `${vvTop}px` } : undefined}
     >
       <div
-        className="flex max-h-[calc(100dvh_-_24px)] w-full max-w-5xl touch-manipulation flex-col overflow-hidden rounded-3xl bg-white shadow-2xl"
+        className="flex max-h-[calc(100dvh_-_24px)] w-full max-w-6xl touch-manipulation flex-col overflow-hidden rounded-3xl bg-white shadow-2xl"
         style={vvH != null ? { height: `calc(${vvH}px - 24px)` } : undefined}
         onClick={(e) => e.stopPropagation()}
       >
@@ -1172,9 +1180,13 @@ function ReceiptFormModal({
           </button>
         </div>
 
-        <div ref={bodyRef} className="flex-1 space-y-5 overflow-y-auto overscroll-contain px-5 py-5">
-          {/* 2026-10-31：供應商／品類都係短欄位 —— 大屏橫向並排，唔好各佔一整行。 */}
-          <div className="grid gap-5 md:grid-cols-2">
+        <div
+          ref={bodyRef}
+          className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-5 py-4 md:overflow-hidden"
+        >
+          {/* 三欄（2026-10-31 商家確認稿）：左＝基本資料／中＝日期付款＋合計／右＝品項（自己捲） */}
+          <div className="grid gap-5 md:h-full md:min-h-0 md:grid-cols-[280px_260px_minmax(0,1fr)]">
+          <div className="space-y-4 md:min-h-0">
           {/* ── 供應商：下拉（已有）＋ 即時新增 ── */}
           <div>
             <label className={labelCls}>供應商</label>
@@ -1322,153 +1334,16 @@ function ReceiptFormModal({
             )}
           </div>
 
-          </div>
-
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             <div>
               <label className={labelCls}>收據編號</label>
+              {/* 2026-10-31：多數人唔填，唔需要同其他欄一樣闊 */}
               <input
-                className={fieldCls}
+                className={`${fieldCls} max-w-[150px]`}
                 value={form.receipt_number}
                 onChange={(e) => setForm((f) => ({ ...f, receipt_number: e.target.value }))}
                 placeholder="選填"
               />
             </div>
-            <div>
-              <label className={labelCls}>收據日期</label>
-              {/* 確認稿：chips（今天／昨天／選日期…）。原生日曆要兩步先揀到一日，
-                  而實際九成單都係「今天」，所以收起日曆直到撳「選日期…」。 */}
-              <div className="flex flex-wrap gap-2">
-                {[
-                  { key: "today", label: "今天", value: todayStr() },
-                  { key: "yesterday", label: "昨天", value: yesterdayStr() },
-                ].map((c) => (
-                  <button
-                    key={c.key}
-                    type="button"
-                    className={chipCls(form.date === c.value)}
-                    onClick={() => {
-                      setForm((f) => ({ ...f, date: c.value }));
-                      setShowDatePicker(false);
-                    }}
-                  >
-                    {c.label}
-                  </button>
-                ))}
-                <button
-                  type="button"
-                  className={chipCls(!isQuickDate)}
-                  onClick={() => setShowDatePicker(true)}
-                >
-                  {isQuickDate ? "選日期…" : form.date}
-                </button>
-              </div>
-              {showDatePicker && (
-                <input
-                  type="date"
-                  className={`${fieldCls} mt-2`}
-                  value={form.date}
-                  autoFocus
-                  onChange={(e) => setForm((f) => ({ ...f, date: e.target.value }))}
-                  aria-label="收據日期"
-                />
-              )}
-              {/* 🔴 2026-10-07：顯示「錄入時間」（年月日時分秒）。
-                  單據日期係商家填嘅；錄入時間係系統寫入嘅，兩者係唔同概念 ——
-                  補登舊單時一定唔同日，所以要寫明係邊個時間，唔可以混淆。 */}
-              {initial?.created_at && (
-                <p className="mt-2 text-xs text-slate-500 tabular-nums">
-                  錄入時間：{formatReceiptStamp(initial.receipt_date, initial.created_at)}
-                  {isBackdatedReceipt(initial.receipt_date, initial.created_at) && (
-                    <span className="ml-1 text-amber-600">（補登，非當日錄入）</span>
-                  )}
-                </p>
-              )}
-            </div>
-          </div>
-
-          {/* 2026-10-31：三組都係 chip —— 大屏並排三欄，減少捲動高度。 */}
-          <div className="grid gap-5 md:grid-cols-3">
-          {/* ── 付款方式：chip（主檔驅動） ── */}
-          <div>
-            <label className={labelCls}>付款方式</label>
-            <div className={"flex flex-wrap gap-2 rounded-xl" + errRing(fieldErr?.kind === "payment_method")}>
-              {paymentMethods.length === 0 ? (
-                <p className="rounded-xl bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                  系統未設定任何「進貨」付款方式，請聯絡管理員喺後台設定。
-                </p>
-              ) : (
-                paymentMethods.map((m) => (
-                  <button
-                    key={m.code}
-                    type="button"
-                    className={chipCls(form.payment_method === m.code)}
-                    onClick={() => setForm((f) => ({ ...f, payment_method: m.code }))}
-                  >
-                    {m.label}
-                  </button>
-                ))
-              )}
-            </div>
-            {/* 舊收據嘅付款方式若唔喺主檔（已停用／被改），仍然要顯示得到，否則一儲存就靜靜改走。 */}
-            {form.payment_method &&
-              !paymentMethods.some((m) => m.code === form.payment_method) && (
-                <p className="mt-1.5 text-xs text-amber-700">
-                  原本係「{labelMap[form.payment_method] ?? form.payment_method}」（呢個方式已停用或唔喺主檔）。
-                  揀上面任何一個就會覆蓋。
-                </p>
-              )}
-          </div>
-
-          <div>
-            {/*
-             * 🔴 付款狀態標題同「月結」提示**必須排成同一行**。
-             *    POS 係觸屏，modal 高度得 100dvh 減 24px；獨立一行提示會把
-             *    下方「單據照片」區推出可視範圍（實測溢出 58px）。
-             *    收埋做標題右側一行細字＝零額外高度，商家照樣睇得到。
-             */}
-            <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
-              <label className={labelCls}>付款狀態</label>
-              <span className="text-xs leading-snug text-slate-400">
-                「月結」通常先記「未付款」，月底結算後記得返嚟改做「已付款」。
-              </span>
-            </div>
-            <div className={"flex flex-wrap gap-2 rounded-xl" + errRing(fieldErr?.kind === "payment_status")}>
-              {([
-                { code: "unpaid", label: "未付款" },
-                { code: "paid", label: "已付款" },
-              ] as const).map((s) => (
-                <button
-                  key={s.code}
-                  type="button"
-                  className={chipCls(form.payment_status === s.code)}
-                  onClick={() => setForm((f) => ({ ...f, payment_status: s.code }))}
-                >
-                  {s.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* ── 幣值：chip（每張收據一個幣值）── */}
-          <div>
-            <label className={labelCls}>幣值</label>
-            <div className="flex flex-wrap gap-2">
-              {(currencies.length === 0 ? ["MOP"] : currencies).map((c) => (
-                <button
-                  key={c}
-                  type="button"
-                  className={chipCls(form.currency === c)}
-                  onClick={() => setForm((f) => ({ ...f, currency: c }))}
-                >
-                  {c}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          </div>
-
           {/* ── 單據相片（P3・非必填） ── */}
           <div>
             <div className="mb-1.5 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
@@ -1590,9 +1465,148 @@ function ReceiptFormModal({
              */}
           </div>
 
-          {/* ── 品項：支援歷史品項快速選取 ── */}
+          </div>
+
+          <div className="flex flex-col gap-4 md:min-h-0">
+            <div>
+              <label className={labelCls}>收據日期</label>
+              {/* 確認稿：chips（今天／昨天／選日期…）。原生日曆要兩步先揀到一日，
+                  而實際九成單都係「今天」，所以收起日曆直到撳「選日期…」。 */}
+              <div className="flex flex-wrap gap-2">
+                {[
+                  { key: "today", label: "今天", value: todayStr() },
+                  { key: "yesterday", label: "昨天", value: yesterdayStr() },
+                ].map((c) => (
+                  <button
+                    key={c.key}
+                    type="button"
+                    className={chipCls(form.date === c.value)}
+                    onClick={() => {
+                      setForm((f) => ({ ...f, date: c.value }));
+                      setShowDatePicker(false);
+                    }}
+                  >
+                    {c.label}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  className={chipCls(!isQuickDate)}
+                  onClick={() => setShowDatePicker(true)}
+                >
+                  {isQuickDate ? "選日期…" : form.date}
+                </button>
+              </div>
+              {showDatePicker && (
+                <input
+                  type="date"
+                  className={`${fieldCls} mt-2`}
+                  value={form.date}
+                  autoFocus
+                  onChange={(e) => setForm((f) => ({ ...f, date: e.target.value }))}
+                  aria-label="收據日期"
+                />
+              )}
+              {/* 🔴 2026-10-07：顯示「錄入時間」（年月日時分秒）。
+                  單據日期係商家填嘅；錄入時間係系統寫入嘅，兩者係唔同概念 ——
+                  補登舊單時一定唔同日，所以要寫明係邊個時間，唔可以混淆。 */}
+              {initial?.created_at && (
+                <p className="mt-2 text-xs text-slate-500 tabular-nums">
+                  錄入時間：{formatReceiptStamp(initial.receipt_date, initial.created_at)}
+                  {isBackdatedReceipt(initial.receipt_date, initial.created_at) && (
+                    <span className="ml-1 text-amber-600">（補登，非當日錄入）</span>
+                  )}
+                </p>
+              )}
+            </div>
+          {/* ── 付款方式：chip（主檔驅動） ── */}
           <div>
-            <div className="mb-1.5 flex items-center justify-between">
+            <label className={labelCls}>付款方式</label>
+            <div className={"flex flex-wrap gap-2 rounded-xl" + errRing(fieldErr?.kind === "payment_method")}>
+              {paymentMethods.length === 0 ? (
+                <p className="rounded-xl bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                  系統未設定任何「進貨」付款方式，請聯絡管理員喺後台設定。
+                </p>
+              ) : (
+                paymentMethods.map((m) => (
+                  <button
+                    key={m.code}
+                    type="button"
+                    className={chipCls(form.payment_method === m.code)}
+                    onClick={() => setForm((f) => ({ ...f, payment_method: m.code }))}
+                  >
+                    {m.label}
+                  </button>
+                ))
+              )}
+            </div>
+            {/* 舊收據嘅付款方式若唔喺主檔（已停用／被改），仍然要顯示得到，否則一儲存就靜靜改走。 */}
+            {form.payment_method &&
+              !paymentMethods.some((m) => m.code === form.payment_method) && (
+                <p className="mt-1.5 text-xs text-amber-700">
+                  原本係「{labelMap[form.payment_method] ?? form.payment_method}」（呢個方式已停用或唔喺主檔）。
+                  揀上面任何一個就會覆蓋。
+                </p>
+              )}
+          </div>
+
+          <div>
+            {/*
+             * 🔴 付款狀態標題同「月結」提示**必須排成同一行**。
+             *    POS 係觸屏，modal 高度得 100dvh 減 24px；獨立一行提示會把
+             *    下方「單據照片」區推出可視範圍（實測溢出 58px）。
+             *    收埋做標題右側一行細字＝零額外高度，商家照樣睇得到。
+             */}
+            <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
+              <label className={labelCls}>付款狀態</label>
+              <span className="text-xs leading-snug text-slate-400">
+                「月結」通常先記「未付款」，月底結算後記得返嚟改做「已付款」。
+              </span>
+            </div>
+            <div className={"flex flex-wrap gap-2 rounded-xl" + errRing(fieldErr?.kind === "payment_status")}>
+              {([
+                { code: "unpaid", label: "未付款" },
+                { code: "paid", label: "已付款" },
+              ] as const).map((s) => (
+                <button
+                  key={s.code}
+                  type="button"
+                  className={chipCls(form.payment_status === s.code)}
+                  onClick={() => setForm((f) => ({ ...f, payment_status: s.code }))}
+                >
+                  {s.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* ── 幣值：chip（每張收據一個幣值）── */}
+          <div>
+            <label className={labelCls}>幣值</label>
+            <div className="flex flex-wrap gap-2">
+              {(currencies.length === 0 ? ["MOP"] : currencies).map((c) => (
+                <button
+                  key={c}
+                  type="button"
+                  className={chipCls(form.currency === c)}
+                  onClick={() => setForm((f) => ({ ...f, currency: c }))}
+                >
+                  {c}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="mt-auto flex items-center justify-between rounded-xl bg-slate-50 px-4 py-3 text-base font-semibold text-slate-900 ring-1 ring-slate-200">
+            <span>合計（{form.currency || "MOP"}）</span>
+            <span>{fmtMoney(form.currency, total)}</span>
+          </div>
+          </div>
+
+          <div className="flex min-h-0 flex-col @container">
+          {/* ── 品項：支援歷史品項快速選取 ── */}
+          <div className="flex min-h-0 flex-1 flex-col">
+            <div className="mb-1.5 flex shrink-0 items-center justify-between">
               <label className="text-sm font-medium text-slate-700">
                 品項
                 {/* 🔴 2026-10-26：行數要即刻睇得到。商家回報「撳＋品項冇反應」時，
@@ -1609,7 +1623,10 @@ function ReceiptFormModal({
                 ＋ 品項
               </button>
             </div>
-            <div className="space-y-3">
+            <div
+              ref={itemsScrollRef}
+              className="-mr-1 min-h-0 flex-1 space-y-3 overflow-y-auto pr-1"
+            >
               {form.items.map((it, i) => {
                 const suggestions = pickerIndex === i ? suggestionsFor(it.name) : [];
                 return (
@@ -1633,7 +1650,7 @@ function ReceiptFormModal({
                         2026-10-07：單位軌由 5.5rem 加闊到 8rem。5.5rem 扣掉格內
                         `✎` 掣（40px）＋ `fieldCls` 嘅 `px-4`（32px）＋ native 箭咀
                         只剩約 12px ⇒ 揀完單位淨係見到個箭咀。詳見 `unitFieldCls` 註解。 */}
-                    <div className="grid grid-cols-2 items-center gap-2 sm:grid-cols-[minmax(0,1fr)_6.5rem_9rem_8rem_auto]">
+                    <div className="grid grid-cols-2 items-center gap-2 @lg:grid-cols-[minmax(0,1fr)_6.5rem_9rem_8rem_auto]">
                       <div className="col-span-2 min-w-0 sm:col-span-1">
                         <input
                           className={fieldCls + errRing(itemFieldErr(i, "name"))}
@@ -1878,14 +1895,12 @@ function ReceiptFormModal({
               </div>
             </div>
           )}
+          </div>
+          </div>
         </div>
 
         {/* 🔴 sticky footer：合計 ＋ 儲存 永遠可見（觸屏長表單唔使捲到底先撳到儲存）。 */}
-        <div className="shrink-0 space-y-3 border-t border-slate-200 bg-white px-5 py-4">
-          <div className="flex items-center justify-between rounded-xl bg-slate-50 px-4 py-3 text-base font-semibold text-slate-900 ring-1 ring-slate-200">
-            <span>合計（{form.currency || "MOP"}）</span>
-            <span>{fmtMoney(form.currency, total)}</span>
-          </div>
+        <div className="shrink-0 space-y-3 border-t border-slate-200 bg-white px-5 py-4 sm:flex sm:items-center sm:justify-end sm:gap-3 sm:space-y-0">
 
           {err && (
             <div className="rounded-xl bg-red-50 px-4 py-3 text-sm text-red-700 ring-1 ring-red-200">{err}</div>
@@ -1895,7 +1910,7 @@ function ReceiptFormModal({
             type="button"
             onClick={save}
             disabled={saving}
-            className="w-full rounded-2xl bg-emerald-600 py-3.5 text-base font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
+            className="w-full rounded-2xl bg-emerald-600 py-3.5 text-base font-semibold text-white hover:bg-emerald-700 disabled:opacity-60 sm:w-auto sm:px-12"
           >
             {saving ? (pendingPhotos.length > 0 ? "上傳相片並儲存中…" : "儲存中…") : "儲存收據"}
           </button>

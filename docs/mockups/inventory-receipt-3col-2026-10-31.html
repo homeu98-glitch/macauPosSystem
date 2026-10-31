@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<title>庫存 · 新增收據 · 三欄排版確認稿 — 2026-10-31</title>
+<style>
+  :root{
+    --s50:#f8fafc; --s100:#f1f5f9; --s200:#e2e8f0; --s300:#cbd5e1; --s400:#94a3b8;
+    --s500:#64748b; --s600:#475569; --s700:#334155; --s800:#1e293b; --s900:#0f172a;
+    --g600:#059669; --line:#e8edf3;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:#0f172a;color:#e2e8f0;
+    font-family:"Segoe UI","PingFang TC","Microsoft JhengHei",system-ui,sans-serif}
+  .wrap{padding:14px 16px 24px;max-width:1240px;margin:0 auto}
+  h1{font-size:15px;margin:0 0 6px;font-weight:700}
+  .sub{font-size:12px;color:#94a3b8;line-height:1.7;margin:0 0 10px}
+  .sub b{color:#fbbf24}
+  .legend{display:flex;flex-wrap:wrap;gap:6px 16px;margin:0 0 10px;font-size:11.5px;color:#94a3b8}
+  .legend i{display:inline-grid;place-items:center;width:16px;height:16px;border-radius:5px;
+    background:#fbbf24;color:#0f172a;font-style:normal;font-weight:800;font-size:10px;margin-right:5px}
+
+  .stage{position:relative;width:1180px;height:820px;transform-origin:top left}
+  .frame{position:relative;width:1180px;height:820px;border-radius:16px;overflow:hidden;
+    background:#eef2f7;box-shadow:0 24px 60px rgba(0,0,0,.45)}
+  .bg{position:absolute;inset:0;background:radial-gradient(900px 500px at 20% 0%,#f8fafc,#e6ecf4 60%,#e2e8f0)}
+  .bg .dim{position:absolute;inset:0;background:rgba(15,23,42,.42)}
+
+  .modal{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+    width:1140px;height:742px;background:#fff;border-radius:22px;overflow:hidden;
+    box-shadow:0 30px 70px rgba(15,23,42,.35);color:var(--s900);display:flex;flex-direction:column}
+  .mh{flex-shrink:0;display:flex;align-items:center;justify-content:space-between;
+    padding:16px 20px;border-bottom:1px solid var(--line)}
+  .mh h2{font-size:16px;margin:0;font-weight:800}
+  .close{border-radius:999px;background:var(--s100);color:var(--s700);padding:8px 16px;
+    font-size:12.5px;font-weight:700}
+
+  .body{flex:1;min-height:0;display:grid;grid-template-columns:326px 300px 1fr;gap:0;overflow:hidden}
+  .col{padding:16px 18px;min-height:0}
+  .col.l{border-right:1px solid var(--line)}
+  .col.m{border-right:1px solid var(--line);background:#fcfdfe;display:flex;flex-direction:column}
+  .col.r{display:flex;flex-direction:column;padding:16px 0 0;min-height:0}
+
+  .f{margin-bottom:14px}
+  .f:last-child{margin-bottom:0}
+  .lb{display:block;font-size:11px;font-weight:800;color:var(--s600);margin-bottom:5px}
+  .lb .req{color:#e11d48}
+  .lb .opt{font-weight:600;color:var(--s400)}
+  .hint{font-size:10px;color:var(--s400);line-height:1.5;margin-top:4px}
+
+  .in{display:flex;align-items:center;min-height:40px;border:1px solid var(--s200);
+    border-radius:11px;padding:0 11px;font-size:12.5px;background:#fff}
+  .in.ph{color:var(--s400)}
+  .in.sm{max-width:150px}
+  .in .chev{margin-left:auto;color:var(--s400);font-size:10px}
+  .row{display:flex;gap:8px;align-items:center}
+  .row .in{flex:1}
+  .add{white-space:nowrap;border-radius:11px;background:var(--s900);color:#fff;padding:11px 13px;
+    font-size:12px;font-weight:800}
+  .link{font-size:10.5px;color:var(--s500);text-decoration:underline;text-underline-offset:2px}
+
+  .chips{display:flex;flex-wrap:wrap;gap:6px}
+  .chip{border-radius:11px;background:var(--s100);color:var(--s700);padding:9px 13px;
+    font-size:12.5px;font-weight:700}
+  .chip.on{background:var(--s900);color:#fff}
+
+  .upl{border-radius:12px;background:var(--s100);height:44px;display:grid;place-items:center;
+    font-size:12.5px;font-weight:700;color:var(--s700);margin-top:4px}
+  .thumbs{display:flex;gap:6px;margin-top:8px}
+  .thumb{width:56px;height:56px;border-radius:9px;background:linear-gradient(135deg,#cbd5e1,#e2e8f0);
+    display:grid;place-items:center;font-size:9px;color:var(--s500);position:relative}
+  .thumb b{position:absolute;right:-4px;top:-4px;width:16px;height:16px;border-radius:999px;
+    background:#ef4444;color:#fff;font-size:9px;display:grid;place-items:center}
+
+  /* ── 右欄：品項（獨立捲動）── */
+  .rhead{flex-shrink:0;padding:0 18px 10px;display:flex;align-items:center;gap:10px;
+    border-bottom:1px solid var(--line)}
+  .rhead .t{font-size:11px;font-weight:800;color:var(--s600)}
+  .rhead .n{font-size:10px;color:var(--s400)}
+  .rhead .sp{margin-left:auto}
+  .plus{border-radius:11px;background:var(--s900);color:#fff;padding:10px 14px;
+    font-size:12px;font-weight:800;white-space:nowrap}
+
+  .scroll{flex:1;min-height:0;overflow-y:auto;padding:12px 18px 8px;position:relative}
+  .scroll::-webkit-scrollbar{width:8px}
+  .scroll::-webkit-scrollbar-thumb{background:#cbd5e1;border-radius:8px}
+
+  .item{display:grid;grid-template-columns:minmax(0,1fr) 84px 104px 74px 34px;gap:6px;
+    align-items:center;margin-bottom:8px}
+  .item .in{min-height:42px;font-size:12px}
+  .qty{display:grid;grid-template-columns:auto 1fr auto;align-items:center;
+    border:1px solid var(--s200);border-radius:11px;min-height:42px;overflow:hidden}
+  .qty span{display:grid;place-items:center;width:30px;color:var(--s600);font-weight:800}
+  .qty b{text-align:center;font-size:12.5px;font-variant-numeric:tabular-nums}
+  .del{display:grid;place-items:center;height:42px;border-radius:11px;background:#fef2f2;
+    color:#ef4444;font-size:14px;font-weight:800}
+
+  .rfoot{flex-shrink:0;padding:10px 18px 14px;border-top:1px solid var(--line);background:#fff}
+  .total{display:flex;align-items:center;justify-content:space-between;
+    border-radius:12px;background:var(--s50);padding:12px 14px;font-size:13px;font-weight:800}
+  .total b{font-size:15px;font-variant-numeric:tabular-nums}
+
+  .mf{flex-shrink:0;display:flex;align-items:center;gap:10px;padding:12px 20px;
+    border-top:1px solid var(--line);background:#fff}
+  .mf .sp{margin-left:auto}
+  .btn{border-radius:12px;padding:12px 26px;font-size:13px;font-weight:800}
+  .btn.primary{background:var(--g600);color:#fff}
+
+  .scrollhint{position:absolute;right:6px;bottom:8px;background:rgba(15,23,42,.82);color:#fff;
+    font-size:10px;font-weight:700;border-radius:999px;padding:4px 9px}
+
+  .anno{position:absolute;font-size:10.5px;font-weight:800;color:#0f172a;background:#fbbf24;
+    border-radius:8px;padding:3px 8px;box-shadow:0 2px 6px rgba(0,0,0,.15)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>庫存 · 新增收據 — 三欄排版確認稿（2026-10-31）</h1>
+  <p class="sub">
+    左：基本資料（供應商／品類／收據編號，編號縮短）＋ 單據照片　·　
+    中：日期／付款方式／付款狀態／幣值 ＋ <b>合計</b>　·　右：<b>只放品項</b>，區內<b>獨立捲動</b>。<br>
+    品項加到十幾行都唔會推走左／中欄，亦唔會令成個彈窗捲。
+  </p>
+
+  <div class="legend">
+    <span><i>1</i>收據編號縮短（多數人唔填）</span>
+    <span><i>2</i>照片放左欄底部，縮圖橫向一行</span>
+    <span><i>3</i>右欄品項獨立 scroll（見捲軸）</span>
+    <span><i>4</i>合計貼中欄底、儲存固定底部，都唔會被品項推走</span>
+  </div>
+
+  <div style="overflow:hidden;width:100%;border-radius:16px">
+  <div class="stage" id="stage">
+    <div class="frame">
+      <div class="bg"><div class="dim"></div></div>
+
+      <div class="modal">
+        <div class="mh">
+          <h2>新增收據</h2>
+          <span class="close">關閉</span>
+        </div>
+
+        <div class="body">
+          <!-- ── 左欄 ── -->
+          <div class="col l">
+            <div class="f">
+              <label class="lb">供應商</label>
+              <div class="row">
+                <div class="in ph">— 選擇供應商 — <span class="chev">▾</span></div>
+                <span class="add">＋ 新增</span>
+              </div>
+              <div class="hint">由已建立的供應商選擇；揀現有唔會重複建立。</div>
+            </div>
+
+            <div class="f">
+              <label class="lb">品類 <span class="req">＊</span></label>
+              <div class="in ph">輸入品類（必填，例如：食材）</div>
+              <div class="hint">未建立清單可按「其他（手動輸入）」。</div>
+            </div>
+
+            <div class="f">
+              <label class="lb">收據編號 <span class="opt">（選填）</span></label>
+              <div class="in sm ph">選填</div>
+            </div>
+
+            <div class="f">
+              <label class="lb">單據照片 <span class="opt">（選填）</span></label>
+              <div class="upl">📷 上傳單據照片</div>
+              <div class="thumbs">
+                <div class="thumb">單據 1<b>×</b></div>
+                <div class="thumb">單據 2<b>×</b></div>
+                <div class="thumb" style="background:none;border:1px dashed var(--s300)">＋</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- ── 中欄 ── -->
+          <div class="col m">
+            <div class="f">
+              <label class="lb">收據日期</label>
+              <div class="chips">
+                <span class="chip on">今天</span>
+                <span class="chip">昨天</span>
+                <span class="chip">選日期…</span>
+              </div>
+            </div>
+
+            <div class="f">
+              <label class="lb">付款方式</label>
+              <div class="chips">
+                <span class="chip on">月結</span>
+                <span class="chip">交貨付款</span>
+              </div>
+            </div>
+
+            <div class="f">
+              <label class="lb">付款狀態</label>
+              <div class="chips" style="margin-bottom:6px">
+                <span class="chip on">未付款</span>
+                <span class="chip">已付款</span>
+              </div>
+              <div class="hint" style="margin-top:0">「月結」通常先記未付款，月底結算後記得返嚟改。</div>
+            </div>
+
+            <div class="f">
+              <label class="lb">幣值</label>
+              <div class="chips">
+                <span class="chip on">MOP</span>
+                <span class="chip">HKD</span>
+                <span class="chip">RMB</span>
+              </div>
+            </div>
+
+            <!-- 合計貼中欄底：右欄留返 100% 俾品項 -->
+            <div style="margin-top:auto">
+              <div class="total"><span>合計（MOP）</span><b>MOP 1,286.00</b></div>
+              <div class="hint" style="margin-top:6px">跟幣值同品項自動計算，唔可以手改。</div>
+            </div>
+          </div>
+
+          <!-- ── 右欄：品項 ── -->
+          <div class="col r">
+            <div class="rhead">
+              <span class="t">品項</span>
+              <span class="n">共 6 行</span>
+              <span class="sp"></span>
+              <span class="plus">＋ 品項</span>
+            </div>
+
+            <div class="scroll">
+              <div class="item">
+                <div class="in">牛腩</div>
+                <div class="in ph">單價</div>
+                <div class="qty"><span>−</span><b>2</b><span>＋</span></div>
+                <div class="in ph">單位</div>
+                <div class="del">×</div>
+              </div>
+              <div class="item">
+                <div class="in">急凍蝦</div>
+                <div class="in ph">單價</div>
+                <div class="qty"><span>−</span><b>1</b><span>＋</span></div>
+                <div class="in ph">單位</div>
+                <div class="del">×</div>
+              </div>
+              <div class="item">
+                <div class="in">米</div>
+                <div class="in ph">單價</div>
+                <div class="qty"><span>−</span><b>4</b><span>＋</span></div>
+                <div class="in ph">單位</div>
+                <div class="del">×</div>
+              </div>
+              <div class="item">
+                <div class="in ph">品名</div>
+                <div class="in ph">單價</div>
+                <div class="qty"><span>−</span><b>1</b><span>＋</span></div>
+                <div class="in ph">單位</div>
+                <div class="del" style="opacity:.45">×</div>
+              </div>
+              <div class="item" style="opacity:.55">
+                <div class="in ph">品名</div>
+                <div class="in ph">單價</div>
+                <div class="qty"><span>−</span><b>1</b><span>＋</span></div>
+                <div class="in ph">單位</div>
+                <div class="del" style="opacity:.3">×</div>
+              </div>
+              <div class="item" style="opacity:.35">
+                <div class="in ph">品名</div>
+                <div class="in ph">單價</div>
+                <div class="qty"><span>−</span><b>1</b><span>＋</span></div>
+                <div class="in ph">單位</div>
+                <div class="del" style="opacity:.2">×</div>
+              </div>
+              <div class="scrollhint">↓ 品項區可獨立捲動</div>
+            </div>
+
+          </div>
+        </div>
+
+        <div class="mf">
+          <span class="sp"></span>
+          <span class="btn primary">儲存收據</span>
+        </div>
+      </div>
+
+    </div>
+  </div>
+  </div>
+</div>
+
+<script>
+  const stage = document.getElementById('stage');
+  const fit = () => {
+    const avail = Math.min(document.documentElement.clientWidth - 32, 1200);
+    const scale = Math.min(1, avail / 1180);
+    stage.style.transform = 'scale(' + scale + ')';
+    stage.parentElement.style.height = (820 * scale) + 'px';
+  };
+  window.addEventListener('resize', fit);
+  fit();
+</script>
+</body>
+</html>
