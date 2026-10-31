@@ -324,7 +324,8 @@ export function DeliveryDispatchModal({
       onClose={onClose}
       // 手機彈鍵盤時跟視覺視窗縮放，唔好把整個彈窗推上去
       trackVisualViewport
-      widthClassName="max-w-3xl"
+      // 2026-10-31：4 行橫向排版需要更闊嘅彈窗，唔係三欄會擠到溢出（車手費 chip 垂直疊起＋橫向捲軸）。
+      widthClassName="max-w-5xl"
       header={
         <div className="flex items-start gap-3">
           <div className="min-w-0 flex-1">
@@ -444,7 +445,8 @@ export function DeliveryDispatchModal({
 
         <div className="block">
           <span className="mb-1 block text-xs font-semibold text-slate-600">{t("車手費（MOP）")}</span>
-          <div className="flex items-center gap-2">
+          {/* 2026-10-31：`flex-wrap` 做安全網 —— 欄窄時自訂輸入框自然落到 chip 下面，唔會横向溢出。 */}
+          <div className="flex flex-wrap items-center gap-2">
             {/* 常用金額一撳即填；想特別金額就直接改右邊個輸入框 */}
             <div className="flex flex-wrap gap-1.5">
               {FEE_PRESETS_MOP.map((amount) => {

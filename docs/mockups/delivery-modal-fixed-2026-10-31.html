@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root{ --s900:#0f172a; --ln:#e2e8f0; --or:#ea580c; --em:#059669; }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,"PingFang HK","Microsoft JhengHei",sans-serif;background:#475569;padding:28px;color:var(--s900)}
+  .scrim{display:flex;justify-content:center}
+  .modal{width:100%;max-width:1024px;background:#fff;border-radius:24px;box-shadow:0 30px 80px rgba(0,0,0,.35);display:flex;flex-direction:column;max-height:calc(100vh - 24px);overflow:hidden}
+  .head{padding:18px 22px;border-bottom:1px solid var(--ln);display:flex;align-items:flex-start;gap:14px}
+  .head h3{margin:0;font-size:17px;font-weight:800}
+  .tag{font-size:11px;font-weight:700;padding:3px 8px;border-radius:8px;background:#fff7ed;color:#c2410c}
+  .sub{margin-top:6px;font-size:12px;color:#64748b}
+  .body{padding:18px 22px;overflow-y:auto;display:flex;flex-direction:column;gap:14px}
+  .row{display:grid;gap:16px}
+  .r1{grid-template-columns:1fr 1.15fr 1.4fr}
+  .r2{grid-template-columns:170px 1fr}
+  .r3{grid-template-columns:repeat(3,1fr)}
+  label{display:block;font-size:12px;font-weight:700;color:#475569;margin-bottom:5px}
+  .req{color:#f43f5e}
+  input,select{width:100%;border:1px solid #cbd5e1;border-radius:12px;padding:10px 12px;font-size:14px;outline:none}
+  .phonebox{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:5px}
+  .chipbtn{background:#f1f5f9;border:none;border-radius:10px;padding:4px 8px;font-size:11px;font-weight:700;color:#334155;cursor:pointer}
+  .feebox{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+  .feebtn{min-width:44px;border-radius:12px;padding:8px 8px;font-size:12px;font-weight:800;border:none;background:#f1f5f9;color:#334155;cursor:pointer}
+  .feebtn.on{background:#0f172a;color:#fff}
+  .feeinput{width:80px;flex:none;text-align:center;font-weight:800}
+  .hint{background:#f8fafc;border-radius:12px;padding:10px 12px;font-size:11px;line-height:1.6;color:#64748b}
+  .seg2{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
+  .seg2 button{border:none;border-radius:12px;padding:10px;font-size:14px;font-weight:700;background:#f1f5f9;color:#475569;cursor:pointer}
+  .seg2 button.on{background:#0f172a;color:#fff}
+  .notechips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px}
+  .notechips button{background:#f1f5f9;border:none;border-radius:999px;padding:4px 10px;font-size:11px;font-weight:700;color:#334155;cursor:pointer}
+  textarea{width:100%;min-height:56px;border:1px solid #cbd5e1;border-radius:12px;padding:10px 12px;font-size:14px;resize:none}
+  .warn{background:#fffbeb;border-radius:12px;padding:10px 12px;font-size:11px;font-weight:700;line-height:1.6;color:#92400e}
+  .foot{border-top:1px solid var(--ln);padding:14px 22px;display:flex;align-items:center;gap:8px}
+  .foot .msg{font-size:12px;color:#64748b;flex:1;min-width:0}
+  .cancel{background:#f1f5f9;border:none;border-radius:12px;padding:10px 16px;font-size:14px;font-weight:700;color:#334155;cursor:pointer}
+  .confirm{background:var(--or);border:none;border-radius:12px;padding:10px 22px;font-size:14px;font-weight:800;color:#fff;cursor:pointer}
+</style>
+</head>
+<body>
+<div class="scrim"><div class="modal">
+  <div class="head">
+    <div style="flex:1;min-width:0">
+      <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+        <h3>外送派單</h3>
+        <span class="tag">ORD-20419</span>
+        <span class="tag" style="background:#fffbeb;color:#92400e">澳覓</span>
+      </div>
+      <div class="sub">客付合計 MOP 168.00 · 單號維持不變　·　已由平台單帶入，可以修改</div>
+    </div>
+  </div>
+
+  <div class="body">
+    <!-- 第 1 行 -->
+    <div class="row r1">
+      <div>
+        <label>收件人 <span style="font-weight:400;color:#94a3b8">（選填）</span></label>
+        <input placeholder="例如：陳小姐">
+      </div>
+      <div>
+        <div class="phonebox">
+          <label style="margin:0">聯絡電話 <span class="req">＊</span></label>
+          <button class="chipbtn">已寫在單上</button>
+        </div>
+        <input placeholder="6612 3456" value="6612 3456">
+      </div>
+      <div>
+        <label>車手費（MOP）</label>
+        <div class="feebox">
+          <button class="feebtn on">30</button>
+          <button class="feebtn">35</button>
+          <button class="feebtn">40</button>
+          <button class="feebtn">50</button>
+          <button class="feebtn">60</button>
+          <input class="feeinput" value="30">
+        </div>
+      </div>
+    </div>
+
+    <!-- 第 2 行 -->
+    <div class="row r2">
+      <div>
+        <label>地區 <span class="req">＊</span></label>
+        <select><option>請選擇地區</option><option>澳門半島</option><option>氹仔</option><option>路環</option><option>其他（下面自己打）</option></select>
+      </div>
+      <div>
+        <label>詳細地址 <span style="font-weight:400;color:#94a3b8">（選填）</span></label>
+        <input placeholder="例如 88 號 5 樓 A（可後補）">
+      </div>
+    </div>
+    <div class="hint">車手靠上面嘅地址送貨，請寫清楚樓層、單位、入口；到達時車手可以一鍵致電客人。</div>
+
+    <!-- 第 3 行 -->
+    <div class="row r3">
+      <div>
+        <label>邊個付車手費</label>
+        <div class="seg2">
+          <button class="on">商戶支付</button>
+          <button>客人支付</button>
+        </div>
+      </div>
+      <div>
+        <label>代收貨款</label>
+        <div class="seg2">
+          <button>需要代收</button>
+          <button class="on">唔需要</button>
+        </div>
+      </div>
+      <div>
+        <label>代收金額（MOP）</label>
+        <input placeholder="需要代收時才填" disabled style="background:#f8fafc;color:#94a3b8">
+      </div>
+    </div>
+
+    <!-- 第 4 行 -->
+    <div>
+      <label>送貨備註</label>
+      <div class="notechips">
+        <button>到達前請致電</button>
+        <button>不要按門鈴</button>
+        <button>放喺管理處</button>
+        <button>放喺門口即可，唔使拍門</button>
+        <button>有小朋友／寵物，請輕聲</button>
+      </div>
+      <textarea placeholder="例如：管理處交收、到達請致電"></textarea>
+    </div>
+
+    <div class="hint">車手只會見到送貨所需資料（電話、地址、備註），唔會見到訂單金額。</div>
+    <div class="warn">車手平台未接通：現時只會儲存派單資料，唔會真的叫車。</div>
+  </div>
+
+  <div class="foot">
+    <div class="msg">車手費 MOP 30.00 · 商戶支付</div>
+    <button class="cancel">取消</button>
+    <button class="confirm">確認派單</button>
+  </div>
+</div></div>
+</body>
+</html>
