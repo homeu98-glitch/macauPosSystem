@@ -1962,6 +1962,20 @@ export const EN_DICT: Record<string, string> = {
   "已由平台單帶入，可以修改": "Filled from the platform order — you can edit",
   "平台只提供遮罩電話（{phone}），請自行輸入可聯絡號碼。":
     "The platform only provides a masked phone ({phone}); please enter a reachable number.",
+  // ─── Dispatch modal quick picks (2026-10-31) ───
+  已寫在單上: "Already on the ticket",
+  "填入舖頭電話：{tel}": "Fill in the shop phone: {tel}",
+  "未設定舖頭電話，請自行輸入": "No shop phone configured — please type one",
+  請選擇地區: "Choose a district",
+  "其他（下面自己打）": "Other (type below)",
+  "請輸入地址（例如：橫琴口岸 3 號門）": "Enter the address (e.g. Hengqin Port Gate 3)",
+  "詳細地址（可後補）例如 88 號 5 樓 A": "Street address (optional for now), e.g. 88, 5A",
+  "揀「其他」要自己填地址。": "You picked “Other” — please type the address.",
+  到達前請致電: "Call before arriving",
+  不要按門鈴: "Do not ring the bell",
+  放喺管理處: "Leave at the management office",
+  "放喺門口即可，唔使拍門": "Leave at the door, no need to knock",
+  "有小朋友／寵物，請輕聲": "Baby/pet inside — please keep quiet",
   "時價菜落單時由店員輸入當次價錢；呢度填嘅只係參考價，會顯示喺菜品列表。": "Staff enter the actual price when ordering; the value here is only a reference price shown in the item list.",
 
   // ─── Delivery dispatch (2026-10-31, components/delivery/*, pos/delivery/*) ───

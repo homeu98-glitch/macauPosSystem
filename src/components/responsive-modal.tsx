@@ -1,6 +1,6 @@
 "use client";
 
-import { CSSProperties, ReactNode, Ref, useRef } from "react";
+import { CSSProperties, ReactNode, Ref, useEffect, useRef } from "react";
 
 import { useT } from "@/components/lang-provider";
 
@@ -22,6 +22,20 @@ type ResponsiveModalProps = {
   showCloseButton?: boolean;
   placement?: "center" | "bottom";
   allowPointerEventsOnOverlay?: boolean;
+  /**
+   * 跟住**視覺視窗（visual viewport）**縮放（2026-10-31，預設 `false`）。
+   *
+   * 病：手機彈出鍵盤時，Android WebView／iOS Safari 會縮細可視高度，
+   * 但 `fixed inset-0` 仍然以**版面視窗**計 —— 瀏覽器於是幫你「推頁面」去
+   * 追焦點，成個彈窗被推走，打字時睇唔到自己打咩。
+   *
+   * 開咗之後：overlay 嘅高度／上緣跟 `visualViewport.height/offsetTop`，
+   * 彈窗就唔會被推走，只會喺自己範圍內滾動。
+   *
+   * ⚠️ 只喺**有輸入框**嘅彈窗開（例如外送派單）；其他彈窗保持原狀，
+   *    避免影響已驗收嘅版面。
+   */
+  trackVisualViewport?: boolean;
 };
 
 export function ResponsiveModal({
@@ -42,6 +56,7 @@ export function ResponsiveModal({
   showCloseButton = true,
   placement = "center",
   allowPointerEventsOnOverlay = true,
+  trackVisualViewport = false,
 }: ResponsiveModalProps) {
   const t = useT();
   /**
@@ -57,8 +72,39 @@ export function ResponsiveModal({
    * 遮罩時先叫 onClose。面板內嘅撳（包括边缘滾動）一律唔會意外關閉彈窗。
    */
   const backdropPressStartedOnBackdrop = useRef(false);
+  const overlayRef = useRef<HTMLDivElement>(null);
+
+  // 跟視覺視窗：唔加呢段，手機鍵盤一彈就會把成個彈窗推走（見 prop 註解）
+  useEffect(() => {
+    if (!trackVisualViewport) return;
+    const vv = typeof window === "undefined" ? null : window.visualViewport;
+    if (!vv) return;
+    const apply = () => {
+      const el = overlayRef.current;
+      if (!el) return;
+      el.style.height = `${vv.height}px`;
+      el.style.top = `${vv.offsetTop}px`;
+      // `inset-0` 會同時定死 bottom；唔清走嘅話高度會被拉返做版面高度
+      el.style.bottom = "auto";
+    };
+    apply();
+    vv.addEventListener("resize", apply);
+    vv.addEventListener("scroll", apply);
+    return () => {
+      vv.removeEventListener("resize", apply);
+      vv.removeEventListener("scroll", apply);
+      const el = overlayRef.current;
+      if (el) {
+        el.style.height = "";
+        el.style.top = "";
+        el.style.bottom = "";
+      }
+    };
+  }, [trackVisualViewport]);
+
   return (
     <div
+      ref={overlayRef}
       className={`fixed inset-0 ${zIndexClassName} ${placement === "bottom" ? "flex items-end justify-center" : "grid place-items-center"} bg-slate-900/45 p-2 sm:p-4 ${allowPointerEventsOnOverlay ? "" : "pointer-events-none"} ${overlayClassName}`}
       onPointerDown={(event) => {
         backdropPressStartedOnBackdrop.current = event.target === event.currentTarget;
@@ -72,7 +118,11 @@ export function ResponsiveModal({
       <div
         ref={panelRef}
         style={panelStyle}
-        className={`flex w-full ${widthClassName} max-h-[calc(100dvh-16px)] flex-col overflow-hidden rounded-3xl bg-white shadow-2xl sm:max-h-[calc(100dvh-32px)] ${allowPointerEventsOnOverlay ? "" : "pointer-events-auto"} ${panelClassName}`}
+        className={`flex w-full ${widthClassName} ${
+          trackVisualViewport
+            ? "max-h-full"
+            : "max-h-[calc(100dvh-16px)] sm:max-h-[calc(100dvh-32px)]"
+        } flex-col overflow-hidden rounded-3xl bg-white shadow-2xl ${allowPointerEventsOnOverlay ? "" : "pointer-events-auto"} ${panelClassName}`}
         onClick={(event) => event.stopPropagation()}
       >
         {header ? (

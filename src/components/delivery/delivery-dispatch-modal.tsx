@@ -3,8 +3,16 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { useT } from "@/components/lang-provider";
+import { loadBootstrapCache } from "@/lib/storage";
 import { ResponsiveModal } from "@/components/responsive-modal";
 import { isDeliveryLiveEnabled } from "@/lib/pos/delivery/flag";
+import {
+  composeDeliveryAddress,
+  isAddressReady,
+  MACAU_DELIVERY_ZONES,
+  matchZoneFromAddress,
+  OTHER_ZONE,
+} from "@/lib/pos/delivery/zones";
 import type { PosDeliveryJob } from "@/lib/pos/delivery/types";
 import type { DeliveryDispatchTarget } from "@/lib/pos/delivery/use-delivery-dispatch";
 
@@ -47,6 +55,27 @@ type SubmitState = { status: "idle" } | { status: "saving" } | { status: "error"
 /** 車手費預設值（MOP）—— 同 Ledger `siteb-dispatch-fee-options` 嘅預設一致。 */
 const DEFAULT_FEE_MOP = 30;
 
+/**
+ * 車手費快速選項（2026-10-31 商家指定）。
+ * 全部都喺 Ledger `SITE_B_DISPATCH_FEE_OPTIONS_MOP`（20–150，每 5 一個）之內，
+ * 所以將來接 B1 一定過得到驗證。想自訂就打下面個輸入框。
+ */
+const FEE_PRESETS_MOP = [30, 35, 40, 50, 60] as const;
+
+/**
+ * 送貨備註快速選項（2026-10-31）。
+ *
+ * 揀自網上「速遞／外送備註」常見建議（唔好按門鈴、放管理處、到達前致電…），
+ * 呢五句覆蓋大部分情況。⚠️ 只係「撳一下填入」，商家仍然可以自由改。
+ */
+const NOTE_PRESETS = [
+  "到達前請致電",
+  "不要按門鈴",
+  "放喺管理處",
+  "放喺門口即可，唔使拍門",
+  "有小朋友／寵物，請輕聲",
+] as const;
+
 /** 錯誤碼 → 字典 key（全部都要喺中英字典出現）。 */
 const ERROR_KEYS: Record<string, string> = {
   bad_source: "訂單來源唔正確",
@@ -85,7 +114,10 @@ export function DeliveryDispatchModal({
 
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
-  const [address, setAddress] = useState("");
+  /** 送貨區份（`MACAU_DELIVERY_ZONES` 之一，或「其他」）。 */
+  const [zone, setZone] = useState("");
+  /** 詳細地址（可以留空 —— 商家之後補，車手靠電話問）。 */
+  const [addressDetail, setAddressDetail] = useState("");
   const [note, setNote] = useState("");
   const [fee, setFee] = useState(String(DEFAULT_FEE_MOP));
   const [feePaidBy, setFeePaidBy] = useState<"shop" | "customer">("shop");
@@ -106,7 +138,13 @@ export function DeliveryDispatchModal({
     if (!target) return;
     setName(target.defaultCustomerName ?? "");
     setPhone(target.defaultCustomerPhone ?? "");
-    setAddress(target.defaultCustomerAddress ?? "");
+    // 有預設地址（線上單帶入）就順手拆區份，等商家只需要確認
+    {
+      const preset = target.defaultCustomerAddress ?? "";
+      const matched = matchZoneFromAddress(preset);
+      setZone(matched ?? "");
+      setAddressDetail(matched ? preset.slice(matched.length).trim() : preset);
+    }
     setNote("");
     setFee(String(DEFAULT_FEE_MOP));
     setFeePaidBy("shop");
@@ -148,7 +186,16 @@ export function DeliveryDispatchModal({
         const data = json.prefill ?? {};
         if (data.name) setName((prev) => prev || (data.name as string));
         if (data.phone) setPhone((prev) => prev || (data.phone as string));
-        if (data.address) setAddress((prev) => prev || (data.address as string));
+        if (data.address) {
+          const raw = data.address as string;
+          const matched = matchZoneFromAddress(raw);
+          if (matched) {
+            setZone(matched);
+            setAddressDetail((prev) => prev || raw.slice(matched.length).trim());
+          } else {
+            setAddressDetail((prev) => prev || raw);
+          }
+        }
         if (data.remark) setNote((prev) => prev || (data.remark as string));
         setMaskedPhone(data.phoneMasked ?? null);
         setPrefill("done");
@@ -164,10 +211,13 @@ export function DeliveryDispatchModal({
   const filled = useMemo(() => {
     return {
       phone: phone.trim().length > 0,
-      address: address.trim().length > 0,
+      // 只有區份都夠（詳細地址可以後補）—— 見 `zones.ts` `isAddressReady()`
+      address: isAddressReady(zone, addressDetail),
     };
-  }, [phone, address]);
+  }, [phone, zone, addressDetail]);
   const ready = filled.phone && filled.address;
+  /** 舖頭電話（收據抬頭用嗰個）—— 「已寫在單上」一撳就填呢個。 */
+  const [storeTel] = useState(() => loadBootstrapCache()?.storeTel?.trim() ?? "");
 
   if (!target) return null;
 
@@ -205,7 +255,7 @@ export function DeliveryDispatchModal({
           customer: {
             name: name.trim(),
             phone: phone.trim(),
-            address: address.trim(),
+            address: composeDeliveryAddress(zone, addressDetail),
             note: note.trim(),
             // 冇座標：商家只知地址（見上面註解）。`job-input` 會存 NULL。
           },
@@ -235,12 +285,27 @@ export function DeliveryDispatchModal({
     }
   }
 
+  /**
+   * 備註快速選項：撳一下加入（可以連撳幾個），已經有就唔重複。
+   * ⚠️ 用 `；` 分隔而唔係覆蓋 —— 商家通常會同時要「到達前請致電」+「不要按門鈴」。
+   */
+  function appendNote(value: string) {
+    setNote((prev) => {
+      const current = prev.trim();
+      if (!current) return value;
+      if (current.includes(value)) return current;
+      return `${current}；${value}`;
+    });
+  }
+
   const inputClass =
     "w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none focus:border-orange-400 focus:ring-2 focus:ring-orange-100";
 
   return (
     <ResponsiveModal
       onClose={onClose}
+      // 手機彈鍵盤時跟視覺視窗縮放，唔好把整個彈窗推上去
+      trackVisualViewport
       widthClassName="max-w-3xl"
       header={
         <div className="flex items-start gap-3">
@@ -321,10 +386,23 @@ export function DeliveryDispatchModal({
             />
           </label>
 
-          <label className="block">
-            <span className="mb-1 block text-xs font-semibold text-slate-600">
-              {t("聯絡電話")} <span className="text-rose-500">＊</span>
-            </span>
+          <div className="block">
+            <div className="mb-1 flex items-center justify-between gap-2">
+              <span className="text-xs font-semibold text-slate-600">
+                {t("聯絡電話")} <span className="text-rose-500">＊</span>
+              </span>
+              {/* 「已寫在單上」＝用**舖頭電話**（收據抬頭嗰個），車手打返舖頭就得。
+                  冇設過舖頭電話就 disable，唔好撳完得個吉。 */}
+              <button
+                className="rounded-lg bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-700 disabled:opacity-40"
+                disabled={!storeTel}
+                onClick={() => setPhone(storeTel)}
+                title={storeTel ? t("填入舖頭電話：{tel}", { tel: storeTel }) : t("未設定舖頭電話，請自行輸入")}
+                type="button"
+              >
+                {t("已寫在單上")}
+              </button>
+            </div>
             <input
               className={inputClass}
               inputMode="tel"
@@ -338,19 +416,43 @@ export function DeliveryDispatchModal({
                 {t("平台只提供遮罩電話（{phone}），請自行輸入可聯絡號碼。", { phone: maskedPhone })}
               </span>
             ) : null}
-          </label>
+          </div>
 
-          <label className="block">
+          <div className="block">
             <span className="mb-1 block text-xs font-semibold text-slate-600">
               {t("送貨地址")} <span className="text-rose-500">＊</span>
             </span>
+            {/* 先揀區份（商家一定知），詳細地址可以後補 —— 打完整地址喺平板好痛苦 */}
+            <select
+              className={`${inputClass} mb-2 ${zone ? "" : "text-slate-400"}`}
+              onChange={(event) => setZone(event.target.value)}
+              value={zone}
+            >
+              <option value="">{t("請選擇地區")}</option>
+              {MACAU_DELIVERY_ZONES.map((item) => (
+                <option key={item} value={item}>
+                  {item}
+                </option>
+              ))}
+              <option value={OTHER_ZONE}>{t("其他（下面自己打）")}</option>
+            </select>
             <input
               className={inputClass}
-              onChange={(event) => setAddress(event.target.value)}
-              placeholder={t("例如：黑沙環中街 88 號 5 樓 A")}
-              value={address}
+              onChange={(event) => setAddressDetail(event.target.value)}
+              placeholder={
+                zone === OTHER_ZONE
+                  ? t("請輸入地址（例如：橫琴口岸 3 號門）")
+                  : t("詳細地址（可後補）例如 88 號 5 樓 A")
+              }
+              value={addressDetail}
             />
-          </label>
+            {/* 揀「其他」但未打地址 → 明確講唔夠，唔好等撳咗確認才彈錯 */}
+            {zone === OTHER_ZONE && !addressDetail.trim() ? (
+              <span className="mt-1 block text-[11px] font-semibold text-rose-600">
+                {t("揀「其他」要自己填地址。")}
+              </span>
+            ) : null}
+          </div>
 
           {/* 🔴 刻意冇「座標」輸入（2026-10-31 商家拍板）：
               商家最多只知地址，冇可能提供經緯度。車手 App 嘅導航掣失效時，
@@ -360,30 +462,61 @@ export function DeliveryDispatchModal({
             {t("車手靠上面嘅地址送貨，請寫清楚樓層、單位、入口；到達時車手可以一鍵致電客人。")}
           </div>
 
-          <label className="block">
+          <div className="block">
             <span className="mb-1 block text-xs font-semibold text-slate-600">{t("送貨備註")}</span>
+            {/* 一撳即填（可以連撳幾個），填完仲可以自己改 */}
+            <div className="mb-2 flex flex-wrap gap-1.5">
+              {NOTE_PRESETS.map((preset) => (
+                <button
+                  key={preset}
+                  className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-700"
+                  onClick={() => appendNote(preset)}
+                  type="button"
+                >
+                  {t(preset)}
+                </button>
+              ))}
+            </div>
             <textarea
               className={`${inputClass} min-h-[64px] resize-none`}
               onChange={(event) => setNote(event.target.value)}
               placeholder={t("例如：管理處交收、到達請致電")}
               value={note}
             />
-          </label>
+          </div>
         </div>
 
         {/* 右欄：費用 */}
         <div className="space-y-3">
           <div className="text-xs font-bold uppercase tracking-wide text-slate-400">{t("費用同收款")}</div>
 
-          <label className="block">
+          <div className="block">
             <span className="mb-1 block text-xs font-semibold text-slate-600">{t("車手費（MOP）")}</span>
+            {/* 常用金額一撳即填；想特別金額就直接改下面個輸入框 */}
+            <div className="mb-2 flex flex-wrap gap-1.5">
+              {FEE_PRESETS_MOP.map((amount) => {
+                const active = toNumber(fee) === amount;
+                return (
+                  <button
+                    key={amount}
+                    className={`min-w-[52px] rounded-xl px-2.5 py-1.5 text-xs font-bold tabular-nums ${
+                      active ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-700"
+                    }`}
+                    onClick={() => setFee(String(amount))}
+                    type="button"
+                  >
+                    {amount}
+                  </button>
+                );
+              })}
+            </div>
             <input
               className={inputClass}
               inputMode="decimal"
               onChange={(event) => setFee(event.target.value)}
               value={fee}
             />
-          </label>
+          </div>
 
           <div>
             <span className="mb-1 block text-xs font-semibold text-slate-600">{t("邊個付車手費")}</span>
