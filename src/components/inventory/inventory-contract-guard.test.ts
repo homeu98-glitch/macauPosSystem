@@ -119,15 +119,46 @@ describe("品項 row：唔可以再出現 w-full 同 w-<number> 打架", () => {
     assert.equal(bad, false, "發現 `${…Cls} w-<number>`：w-full 會壓過 w-<number>（cascade 地雷）");
   });
 
-  it("品項 row 一律用 grid 固定軌寬（flex + 百分比 basis 會搶位）", () => {
+  /**
+   * 🔴 2026-10-31：品項 row 嘅欄寬分配（商家截圖回報「品名太細、數量同單位太多位」）。
+   *
+   * 病根：row 嘅 grid template 用 **viewport** 斷點（`sm:`），但品項欄位喺
+   *      **右邊欄**（實際闊度遠細過 viewport）⇒ 5 條固定軌食晒右欄，
+   *      品名 `1fr` 被壓到 ~80px（0 寬事故）。
+   *
+   * ⚠️ 按 §6.1 教訓：守**行為不變量**（用 container query + 品名佔 1fr），
+   *    唔係守死一句代碼 —— 具體 rem 數值下面另外用幾何守衛守住。
+   */
+  it("品項 row 要用 container query（@lg:）而唔係 viewport 斷點，且品名佔 1fr", () => {
     const src = read(VIEW);
-    // 2026-09-26：數量由純輸入框改成 stepper ⇒ 數量軌由 5rem 加闊到 10rem。
-    // 2026-10-06：新增「單位」欄 ⇒ 軌變 6 軌 [品名_單價_數量_單位_刪除]。
+    // ① grid template 必須係 container query（@lg:），唔可以係 sm:/md:/lg:（viewport）。
     assert.ok(
-      /sm:grid-cols-\[minmax\(0,1fr\)_6\.5rem_9rem_[\d.]+rem_auto\]/.test(src),
-      "品項 row 要係 grid 固定軌（品名 minmax(0,1fr) + 單價/數量/單位/刪除四個固定軌）",
+      /@lg:grid-cols-\[minmax\(0,1fr\)_[\d.]+rem_[\d.]+rem_[\d.]+rem_auto\]/.test(src),
+      "品項 row 嘅 grid template 要用 container query（@lg:）—— viewport 斷點會令右欄被壓到 0 寬",
     );
-    assert.ok(/col-span-2 min-w-0 sm:col-span-1/.test(src), "品名欄窄螢幕要佔一整行");
+    assert.equal(
+      /sm:grid-cols-\[minmax\(0,1fr\)_/.test(src),
+      false,
+      "品項 row 唔可以再用 sm:（viewport）做欄位切換，右欄實際闊度同 viewport 唔一樣",
+    );
+
+    // ② 品名欄要佔 1fr（最大嗰格），而且 col-span 要跟同一個 container breakpoint。
+    assert.ok(
+      /col-span-2 min-w-0 @lg:col-span-1/.test(src),
+      "品名欄窄螢幕要佔一整行，而且 col-span 要跟 grid 一樣用 @lg:（container）",
+    );
+
+    // ③ 🔴 品名用 textarea（可以折行顯示兩行）而唔係 input（永遠一行 ⇒ 長名被切走）。
+    assert.ok(/<textarea/.test(src), "品名欄要用 textarea（長名要可以顯示兩行）");
+    assert.ok(
+      /const nameFieldCls =/.test(src) && /max-h-\[4\.75rem\]/.test(src),
+      "品名欄要有 max-h 封頂（最多兩行，唔可以無限撐高 row）",
+    );
+    // 自動增高：受控 textarea 唔會自己長，必須有 JS 量度 scrollHeight。
+    assert.ok(
+      /nameAreaRefs/.test(src) && /scrollHeight/.test(src),
+      "品名 textarea 要有自動增高邏輯（量 scrollHeight），否則長名會被 max-h 切走",
+    );
   });
 
   /**
@@ -137,20 +168,24 @@ describe("品項 row：唔可以再出現 w-full 同 w-<number> 打架", () => {
    *     而個 `<select>` 沿用 `fieldCls`（含 `px-4` ＝ 左右 32px），再加 native
    *     下拉箭咀 ≈ 20px ⇒ 88 − 40 − 4 − 32 − 20 < 0 ⇒ **淨係剩個箭咀**。
    *
+   * 2026-10-31 更新：單位軌收窄到 6rem（商家：2 個字就夠），所以
+   *    「▾ 切換掣」唔可以再並排 —— 改為 **absolute 疊喺輸入框右邊**，
+   *    輸入框用 `pr-12` 預留位。
+   *
    * ⚠️ 按 §6.1 教訓：呢度**守行為不變量（幾何上擺得落）**，唔係守死一句代碼。
    *    否則將來任何一次無意嘅 padding／按鈕改動都會令測試報錯，但真 bug
    *    （例如把掣塞返入 select 同一格）反而可能唔爆。
    */
-  it("🔴 單位欄一定要擺得落：軌闊 ≥ 7rem、select 用窄 padding、唔可以同文字掣並排", () => {
+  it("🔴 單位欄一定要擺得落：軌闊夠 2 個中文字、select 用窄 padding、掣唔可以並排", () => {
     const src = read(VIEW);
 
     // ① 軌闊：直接由 grid template 抽出單位軌（4th）嘅 rem 數值。
-    const tracks = /sm:grid-cols-\[minmax\(0,1fr\)_([\d.]+)rem_([\d.]+)rem_([\d.]+)rem_auto\]/.exec(src);
+    const tracks = /@lg:grid-cols-\[minmax\(0,1fr\)_([\d.]+)rem_([\d.]+)rem_([\d.]+)rem_auto\]/.exec(src);
     assert.ok(tracks, "搵唔到品項 row 嘅 grid 模板");
     const unitRem = Number(tracks[3]);
-    // 8rem − px-3(24) − native 箭咀(20) ≈ 84px 文字空間，夠放 3–4 個中文字。
-    // 門檻 7rem：再窄就會跌返入「只剩箭咀」區間。
-    assert.ok(unitRem >= 7, `單位軌要 ≥ 7rem，而家係 ${unitRem}rem（太窄會顯示不全）`);
+    // 6rem(96px) − px-3(24) − native 箭咀(20) ≈ 52px 文字空間，夠放 2–3 個中文字。
+    // 門檻 5rem：再窄就會跌返入「只剩箭咀」區間（商家要求：至少要見到 2 個字）。
+    assert.ok(unitRem >= 5, `單位軌要 ≥ 5rem（夠顯示 2 個中文字），而家係 ${unitRem}rem`);
 
     // ② select／input 要用窄 padding 嘅專用 class，唔可以用含 px-4 嘅 fieldCls。
     assert.ok(/const unitFieldCls =/.test(src), "要有單位專用嘅 field class");
@@ -171,6 +206,19 @@ describe("品項 row：唔可以再出現 w-full 同 w-<number> 打架", () => {
     assert.ok(
       !/grid-cols-\[[^\]]*_auto\]/.test(wrapper),
       `select 唔可以同掣並排（會把文字欄夾窄）：${wrapper.trim().slice(0, 160)}`,
+    );
+
+    // ④ 🔴 手動輸入模式嘅「▾ 切換掣」必須係 absolute 疊喺輸入框右邊，
+    //    而且輸入框要預留 `pr-12` 俾佢（否則輸入框得 ~12px 文字空間）。
+    assert.ok(/const unitManualFieldCls =/.test(src), "要有手動輸入單位嘅專用 field class");
+    const manualClsBody = /const unitManualFieldCls =\s*\n?\s*"([^"]+)"/.exec(src)?.[1] ?? "";
+    assert.ok(
+      manualClsBody.includes("pr-12"),
+      `unitManualFieldCls 要用 pr-12 預留畀 absolute 切換掣：${manualClsBody}`,
+    );
+    assert.ok(
+      /const unitToggleCls =[\s\S]{0,400}?absolute/.test(src),
+      "單位切換掣要 absolute 疊喺輸入框右邊（並排會令輸入框淨返 ~12px 文字空間）",
     );
   });
 
@@ -333,7 +381,8 @@ describe("付款方式：admin 主檔驅動（唔可以再硬編碼）", () => {
   });
 
   it("收據讀取／寫入都要行 normalizer（否則篩選同 paid/unpaid 會靜默計錯）", () => {
-    const list = read("src/app/api/inventory/receipts/route.ts");
+    // 2026-10-27：讀取路徑已抽去共用 module（admin 報表用同一份口徑）。
+    const list = read("src/lib/expense-receipts-read.server.ts");
     assert.ok(/payment_method: normalizePaymentMethod\(getRaw\("payment_method"\)\)/.test(list));
     assert.ok(/payment_status: normalizePaymentStatus\(getRaw\("payment_status"\)\)/.test(list));
     const patch = read("src/app/api/inventory/receipts/[id]/route.ts");
@@ -1657,5 +1706,72 @@ describe('收據彈窗：iPad 觸控對位（2026-10-27）', () => {
   it('彈窗 body 要 overscroll-contain（唔好將捲動手勢傳去背景）', () => {
     const src = read(VIEW);
     assert.ok(/overflow-y-auto overscroll-contain/.test(src), '短表單／長表單都唔應該拖到背景');
+  });
+});
+
+/**
+ * 🔴🔴 2026-10-31：收據彈窗三欄 —— 品項區「加咗好多都唔會捲」嘅防復發守衛。
+ *
+ * 商家截圖回報：加咗 10 行品項，彈窗啲行被 sticky footer 斬半，而且**拖唔到**。
+ *
+ * 病根（純 CSS，唔涉及業務邏輯）：
+ *   三欄 grid 只有 `grid-cols-[…]`（**欄**），**row 軌係預設 `auto`** ⇒
+ *   唯一嗰條 row 會按內容撐高 ⇒ row 高過彈窗 body ⇒
+ *   ① 右欄個 `overflow-y-auto` 因為「內容啱啱好塞得落」而永遠唔會出捲軸；
+ *   ② body 喺 `md:` 係 `overflow-hidden` ⇒ 溢出部分直接被切走（商家見到被斬半）。
+ *
+ * ⇒ 三個配套（缺一個都會復發）：
+ *   ① `md:grid-rows-[minmax(0,1fr)]`：row 高度 = grid 高度，唔再被內容撐高；
+ *   ② body 用 **flex 鏈**（`md:flex md:flex-col` ＋ grid `md:flex-1 md:min-h-0`）分配高度
+ *      —— 唔可以用 `md:h-full`（百分比喺 flex item 入面唔可靠）；
+ *   ③ 三欄各自 `md:min-h-0`（grid item 預設 `min-height:auto` 會被內容撐大，令 ① 失效）。
+ */
+describe('收據彈窗三欄：品項區一定要可以捲動（2026-10-31）', () => {
+  it('三欄 grid 一定要寫死 row 軌高（minmax(0,1fr)），唔可以留 auto', () => {
+    const src = read(VIEW);
+    assert.ok(
+      /md:grid-rows-\[minmax\(0,1fr\)\]/.test(src),
+      '🔴 grid 一定要有 md:grid-rows-[minmax(0,1fr)] —— row 軌預設 auto 會被內容撐高，內部容器就永遠唔會出捲軸',
+    );
+  });
+
+  it('body 要用 flex 鏈分配高度（md:flex md:flex-col + grid md:flex-1 md:min-h-0）', () => {
+    const src = read(VIEW);
+    assert.ok(
+      /md:flex md:flex-col/.test(src),
+      '🔴 body 要有 md:flex md:flex-col —— 用百分比 h-full 喺 flex item 入面唔可靠',
+    );
+    // 搵出三欄 grid 嗰個 class 字串（`grid gap-5 …`），再喺入面查 flex-1 / min-h-0。
+    // ⚠️ 唔好寫死 class 次序（Tailwind class 排序同書寫次序無關）。
+    const gridCls = /className="(grid gap-5[^"]*)"/.exec(src)?.[1] ?? '';
+    assert.ok(gridCls.length > 0, '搵唔到三欄 grid 嘅 class');
+    assert.ok(
+      /\bmd:flex-1\b/.test(gridCls),
+      `🔴 grid 要有 md:flex-1 —— 高度由 flex 算法決定，唔靠百分比：${gridCls}`,
+    );
+    assert.ok(
+      /\bmd:min-h-0\b/.test(gridCls),
+      `🔴 grid 要有 md:min-h-0：${gridCls}`,
+    );
+  });
+
+  it('三欄都要有 md:min-h-0（min-height:auto 會令 row 軌封頂失效）', () => {
+    const src = read(VIEW);
+    // 抽查三個欄位容器（基本資料／日期付款／品項）都有 md:min-h-0。
+    const minH0 = (src.match(/md:min-h-0/g) ?? []).length;
+    assert.ok(minH0 >= 3, `🔴 三欄都要有 md:min-h-0，而家只有 ${minH0} 個`);
+    assert.ok(
+      /flex min-h-0 flex-col @container/.test(src),
+      '品項欄（@container）一定要有 min-h-0',
+    );
+  });
+
+  it('品項 scroll 容器要係 flex-1 + min-h-0 + overflow-y-auto（先可以真正捲）', () => {
+    const src = read(VIEW);
+    assert.ok(/ref=\{itemsScrollRef\}/.test(src), '品項列表要有 itemsScrollRef');
+    assert.ok(
+      /min-h-0 flex-1 space-y-3 overflow-y-auto/.test(src),
+      '🔴 品項列表容器要 min-h-0 + flex-1 + overflow-y-auto',
+    );
   });
 });

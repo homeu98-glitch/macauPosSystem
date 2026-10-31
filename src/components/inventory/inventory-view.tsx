@@ -486,6 +486,14 @@ function ReceiptFormModal({
   const itemsScrollRef = useRef<HTMLDivElement>(null);
   /** 每一行品項嘅 wrapper（index 對應 `form.items`），新增行之後用嚟捲到佢。 */
   const itemRowRefs = useRef<Array<HTMLDivElement | null>>([]);
+  /**
+   * 每一行品名 textarea（index 對應 `form.items`）——用嚟自動增高（2026-10-31）。
+   *
+   * 🔴 品名改成 textarea 之後，`<input>` 唔再會自動換行，所以要自己計高度：
+   *    `scrollHeight` 反映實際內容高度（1 行／2 行），再 cap 喺 2 行。
+   *    冇呢段嘢，長品名會被 `max-h` 直接切走（商家投訴嘅原問題）。
+   */
+  const nameAreaRefs = useRef<Array<HTMLTextAreaElement | null>>([]);
   /** 彈窗最外層 backdrop（用嚟喺鍵盤彈起時錨住 visual viewport）。 */
   const overlayRef = useRef<HTMLDivElement>(null);
   /**
@@ -674,6 +682,27 @@ function ReceiptFormModal({
       setVvH(null);
     };
   }, [open]);
+
+  /**
+   * 🔴 2026-10-31：品名 textarea 自動增高（最多兩行）。
+   *
+   * 病：textarea 預設 `rows={1}` ⇒ 內容超過一行就會出現內部捲軸，長品名
+   *     （例如「澳洲新鮮三文魚柳 300g」）睇唔晒 —— 商家講「顯示不全會影響很大」。
+   * ⇒ 每次 `form.items` 變動（打字／貼上／建議填入）都重新量度 `scrollHeight`，
+   *     高度由 CSS `max-h-[4.75rem]`（兩行）封頂。
+   *
+   * ⚠️ 一定要喺 `form.items` 變動後先量（受控 textarea 嘅 value 係 render 之後先更新）。
+   * ⚠️ `overflow-hidden` 係刻意：唔想 textarea 自己出捲軸（會令 row 高度再飄）。
+   * ⚠️ 呢個 effect **必須** 喺 `if (!open) return null;` 之前（hook 順序）。
+   */
+  useEffect(() => {
+    for (const el of nameAreaRefs.current) {
+      if (!el) continue;
+      el.style.height = "auto";
+      // +2px：textarea 有 border，scrollHeight 唔包 border，唔加就會差少少見到截斷。
+      el.style.height = `${el.scrollHeight + 2}px`;
+    }
+  }, [form.items]);
 
   if (!open) return null;
 
@@ -1117,13 +1146,36 @@ function ReceiptFormModal({
    * 單位欄嘅「模式切換」細掣（手動輸入 ⇄ 從清單揀）。
    *
    * 🔴 必須係 **固定 40px 方形**，唔可以用 `px-3` 加文字：品項 row 嘅單位軌
-   *    得 8rem，掣一闊就會再次把輸入框／下拉夾到顯示不全（就係原本 `✎` 咁嘅病）。
+   *    得 6rem，掣一闊就會再次把輸入框／下拉夾到顯示不全（就係原本 `✎` 咁嘅病）。
    *    40px 亦啱好係觸屏點擊目標下限。
    * ⚠️ 圖示語意：`▾` ＝ 從清單揀（同一個 select 自己嘅下拉箭咀），
    *    唔使靠 `title`／aria-label 以外嘅提示；兩個模式都靠 `aria-label` 講明。
+   *
+   * 2026-10-31：改成 **absolute 疊喺輸入框右邊**（absolute right-1 top-1/2
+   *    −translate-y-1/2）。因為單位軌收窄到 6rem，掣如果同輸入框並排，
+   *    輸入框就只剩 ~12px 文字空間（2026-10-07 嗰個「淨係見到個箭咀」嘅病）。
    */
   const unitToggleCls =
-    "grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-slate-100 text-sm text-slate-600 ring-1 ring-slate-200 hover:bg-slate-200";
+    "absolute right-1 top-1/2 grid h-10 w-10 -translate-y-1/2 place-items-center rounded-xl bg-slate-100 text-sm text-slate-600 ring-1 ring-slate-200 hover:bg-slate-200";
+  /**
+   * 單位欄嘅**手動輸入**版 class（2026-10-31）。
+   *
+   * 🔴 `pr-12`（48px）係預留俾 absolute 疊喺右邊嘅 `▾` 切換掣用 ——
+   *    唔預留就會被掣蓋住，睇唔到自己打咗咩。
+   * ⚠️ 唔可以直接用 `unitFieldCls`：佢得 `px-3`，右邊冇位畀掣。
+   */
+  const unitManualFieldCls =
+    "w-full min-w-0 rounded-xl border border-slate-200 bg-white py-3.5 pl-3 pr-12 text-base text-slate-900 outline-none focus:border-slate-400";
+  /**
+   * 品名欄（textarea）嘅 class（2026-10-31）。
+   *
+   * 🔴 用 textarea 唔用 input：`<input>` 永遠得一行，長品名會被切走
+   *    （商家：「顯示不全會影響很大」）⇒ 必須可以折行顯示。
+   * ⚠️ `resize-none`：畀用戶手動拉大個框會令同一 row 嘅其他欄位錯位。
+   * ⚠️ `overflow-hidden` + `max-h-[4.75rem]`：最多顯示兩行（超出嘅部分唔會撐高 row）。
+   */
+  const nameFieldCls =
+    "w-full min-w-0 resize-none overflow-hidden rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-base leading-6 text-slate-900 outline-none focus:border-slate-400 max-h-[4.75rem]";
   /** 觸屏 chip：付款方式／品類都用呢個，唔用下拉（下拉喺觸屏要兩步、選項細）。 */
   const chipCls = (active: boolean) =>
     `rounded-xl px-4 py-3 text-base font-medium transition ${
@@ -1165,7 +1217,7 @@ function ReceiptFormModal({
       style={vvTop != null ? { top: `${vvTop}px` } : undefined}
     >
       <div
-        className="flex max-h-[calc(100dvh_-_24px)] w-full max-w-6xl touch-manipulation flex-col overflow-hidden rounded-3xl bg-white shadow-2xl"
+        className="flex max-h-[calc(100dvh_-_24px)] w-full max-w-7xl touch-manipulation flex-col overflow-hidden rounded-3xl bg-white shadow-2xl"
         style={vvH != null ? { height: `calc(${vvH}px - 24px)` } : undefined}
         onClick={(e) => e.stopPropagation()}
       >
@@ -1182,11 +1234,28 @@ function ReceiptFormModal({
 
         <div
           ref={bodyRef}
-          className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-5 py-4 md:overflow-hidden"
+          className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-5 py-4 md:flex md:flex-col md:overflow-hidden"
         >
           {/* 三欄（2026-10-31 商家確認稿）：左＝基本資料／中＝日期付款＋合計／右＝品項（自己捲） */}
-          <div className="grid gap-5 md:h-full md:min-h-0 md:grid-cols-[280px_260px_minmax(0,1fr)]">
-          <div className="space-y-4 md:min-h-0">
+          {/*
+            🔴🔴 2026-10-31（商家截圖回報「加咗好多品項都唔會捲動」）：
+            呢個 grid **一定要寫死 row 軌高**，否則會出現「加咗都唔會捲」嘅假象。
+
+            病根：grid 只有 `grid-cols-[…]`（欄），**row 軌係預設 `auto`** ⇒
+            唯一嗰條 row 會按**內容**撐高（10 行品項 = 幾百 px）⇒ row 高過彈窗 body ⇒
+            ① 右欄個 `overflow-y-auto` 容器因為「內容啱啱好塞得落」而**永遠唔會出捲軸**；
+            ② body 喺 `md:` 係 `overflow-hidden` ⇒ 溢出嘅部分直接**被切走**（商家見到啲行被 footer 斬半）。
+            ⇒ 修法：`md:grid-rows-[minmax(0,1fr)]` —— row 高度 = grid 高度（= body 高度），
+               `minmax(0,…)` 令佢可以細過內容，三欄各自 `min-h-0` 之下就會由內部容器捲。
+
+            ⚠️ 高度唔可以用 `md:h-full`（百分比）：body 嘅高度係 flex 分配出嚟嘅，
+               百分比喺 flex item 入面唔可靠 ⇒ 改用 **flex 鏈**（body `md:flex md:flex-col`
+               ＋ grid `md:flex-1 md:min-h-0`），高度由 flex 算法直接決定，唔靠百分比。
+            ⚠️ 三欄都一定要有 `md:min-h-0`（grid item 預設 `min-height:auto` 會被內容撐大，
+               令上面嘅 `minmax(0,1fr)` 失效）。
+          */}
+          <div className="grid gap-5 md:min-h-0 md:flex-1 md:grid-cols-[250px_240px_minmax(0,1fr)] md:grid-rows-[minmax(0,1fr)]">
+          <div className="space-y-4 md:min-h-0 md:overflow-y-auto md:pr-1">
           {/* ── 供應商：下拉（已有）＋ 即時新增 ── */}
           <div>
             <label className={labelCls}>供應商</label>
@@ -1467,7 +1536,10 @@ function ReceiptFormModal({
 
           </div>
 
-          <div className="flex flex-col gap-4 md:min-h-0">
+          {/* 🔴 中欄都要 `md:min-h-0 md:overflow-y-auto`：日期／付款方式／付款狀態／幣值＋合計
+              雖然緊湊，但矮螢幕（例如橫置手機）下仍可能溢出被 body 嘅 overflow-hidden 切走，
+              令「合計」睇唔到。同左欄一樣自給自足地捲。 */}
+          <div className="flex flex-col gap-4 md:min-h-0 md:overflow-y-auto md:pr-1">
             <div>
               <label className={labelCls}>收據日期</label>
               {/* 確認稿：chips（今天／昨天／選日期…）。原生日曆要兩步先揀到一日，
@@ -1637,27 +1709,49 @@ function ReceiptFormModal({
                     }}
                     className="relative"
                   >
-                    {/* 🔴 2026-09-25 修正：以前係 `flex` + `${fieldCls} w-28`，而 fieldCls
-                        內含 `w-full`；本專案 Tailwind v4 產生順序係 `.w-full` 喺 `.w-28`
-                        之後 ⇒ `w-full` 勝出 ⇒ 單價／數量 flex-basis = 100%，
-                        `flex-1`（basis 0）嘅品名欄分到 **0 寬** ⇒ 睇唔到亦撳唔到。
-                        改用 grid 固定軌寬（每格入面 w-full = 軌寬，唔會再互相搶位），
-                        窄螢幕則換行：品名一整行，單價＋數量 stepper 第二行，刪除第三行。
+                    {/* 🔴 2026-10-31（商家截圖回報）：品項 row 重新分配闊度。
+                        ① 品名＝最大（佔晒剩餘空間）而且**可以撐兩行**（長名唔會被切走）；
+                        ② 數量欄收窄到只夠 2 位數（但 −／＋ 掣維持 40px 觸控目標）；
+                        ③ 單位欄收窄到只夠 2 個中文字。
 
-                        2026-09-26：數量由純輸入框改成「− 數量 ＋」stepper（對齊確認稿），
-                        所以數量軌由 5rem 加闊到 10rem；仍然係 grid 固定軌，唔會搶位。
+                        ⚠️ 舊版係 `sm:grid-cols-[…]`（**viewport** 斷點）—— 右欄實際闊度
+                        遠細過 viewport，所以 5 條固定軌（6.5+9+8rem ≈ 376px）食晒右欄，
+                        品名 `1fr` 被壓到只剩 ~80px（0 寬事故嘅根源）。
+                        ⇒ 改用 **container query** `@lg:`（32rem = 512px，右欄實際闊度），
+                        而且 `col-span-*` 亦要跟住同一個 breakpoint，唔可以一個用 viewport
+                        一個用 container（會出現「grid 仲係 2 欄但 cell 已經 span-1」嘅錯位）。
 
-                        2026-10-07：單位軌由 5.5rem 加闊到 8rem。5.5rem 扣掉格內
-                        `✎` 掣（40px）＋ `fieldCls` 嘅 `px-4`（32px）＋ native 箭咀
-                        只剩約 12px ⇒ 揀完單位淨係見到個箭咀。詳見 `unitFieldCls` 註解。 */}
-                    <div className="grid grid-cols-2 items-center gap-2 @lg:grid-cols-[minmax(0,1fr)_6.5rem_9rem_8rem_auto]">
-                      <div className="col-span-2 min-w-0 sm:col-span-1">
-                        <input
-                          className={fieldCls + errRing(itemFieldErr(i, "name"))}
+                        2026-10-31 欄寬（固定軌合計 ≈ 356px + 4 個 gap 8px）：
+                          品名 minmax(0,1fr) → 單價 5.5rem → 數量 8rem → 單位 6rem → 刪除 auto
+                        數量欄 8rem 嘅組成：40px(−) + 48px(數字，只夠 2 位數) + 40px(＋)。
+                        單位欄 6rem 嘅組成：px-3(24) + 文字 + native 箭咀(~20) ⇒ 文字空間 52px
+                          （3 個中文字，商家要求 2 個字已足夠）。
+                          ⚠️ 手動輸入模式嘅「▾ 切換掣」改為**疊喺輸入框右邊**（absolute），
+                          唔可以再同輸入框並排 —— 並排會令輸入框只剩 ~12px 文字空間
+                          （2026-10-07 嗰個「淨係見到個箭咀」嘅病根）。 */}
+                    <div className="grid grid-cols-2 items-center gap-2 @lg:grid-cols-[minmax(0,1fr)_5.5rem_8rem_6rem_auto]">
+                      <div className="col-span-2 min-w-0 @lg:col-span-1">
+                        {/*
+                          品名＝**textarea**（唔係 input）：<input> 永遠得一行，長名會被切走，
+                          商家講「顯示不全會影響很大」⇒ 必須可以折行。
+                          rows={1} 起步，由 JS 自動增高（最多兩行，CSS max-h 封頂），
+                          短名依然得一行高，唔會浪費垂直空間。
+                        */}
+                        <textarea
+                          ref={(el) => {
+                            nameAreaRefs.current[i] = el;
+                          }}
+                          rows={1}
+                          className={nameFieldCls + errRing(itemFieldErr(i, "name"))}
                           value={it.name}
                           onChange={(e) => {
                             setItem(i, { name: e.target.value });
                             setPickerIndex(i);
+                          }}
+                          onKeyDown={(e) => {
+                            // 🔴 單行語意：Enter 唔可以插入換行（品名會出現 \n，寫入資料就爆）。
+                            // ⚠️ 中文 IME 組字中（isComposing）唔可以擋，否則打唔到中文字。
+                            if (e.key === "Enter" && !e.nativeEvent.isComposing) e.preventDefault();
                           }}
                           onFocus={() => setPickerIndex(i)}
                           onBlur={() => window.setTimeout(() => setPickerIndex((cur) => (cur === i ? -1 : cur)), 150)}
@@ -1675,10 +1769,12 @@ function ReceiptFormModal({
                       />
                       {/* 數量 stepper（確認稿：− 12 ＋）。仍然可以直接打字（連續落單時更快），
                           stepper 只係補返觸屏「加一次」嘅需要。下限 0，唔會出負數。
-                          ⚠️ `overflow-hidden` 令兩個按鈕嘅 hover 底色唔會突出圓角。 */}
+                          ⚠️ `overflow-hidden` 令兩個按鈕嘅 hover 底色唔會突出圓角。
+                          2026-10-31：中間數字區收窄到只夠 2 位數（商家要求），
+                          兩個掣維持 2.5rem(40px) 觸控目標（唔會撳唔中）。 */}
                       <div
                         className={
-                          "grid grid-cols-[2.75rem_minmax(0,1fr)_2.75rem] items-center gap-1 overflow-hidden rounded-xl border border-slate-200 bg-white" +
+                          "grid grid-cols-[2.5rem_minmax(0,1fr)_2.5rem] items-center gap-0 overflow-hidden rounded-xl border border-slate-200 bg-white" +
                           errRing(itemFieldErr(i, "quantity"))
                         }
                       >
@@ -1692,7 +1788,7 @@ function ReceiptFormModal({
                           −
                         </button>
                         <input
-                          className="h-12 w-full min-w-0 border-0 bg-transparent text-center text-base font-semibold text-slate-900 outline-none"
+                          className="h-12 w-full min-w-0 border-0 bg-transparent px-0 text-center text-base font-semibold tabular-nums text-slate-900 outline-none"
                           inputMode="decimal"
                           value={it.quantity}
                           onChange={(e) => setItem(i, { quantity: e.target.value })}
@@ -1718,11 +1814,16 @@ function ReceiptFormModal({
                              所以唔會出現「有值但個框顯示空白」嘅幽靈狀態。
 
                           ⚠️ 欄位仍然係**選填**（同原本行為一致）：留空 = 未填單位，
-                             報表只出數量。唔會因為單位清單空咗就鎖死呢一欄。 */}
+                             報表只出數量。唔會因為單位清單空咗就鎖死呢一欄。
+
+                          2026-10-31：單位欄收窄到 6rem（商家：2 個字就夠），
+                          所以手動輸入模式嘅「▾ 切換掣」改為疊喺輸入框右邊內部
+                          （absolute + input 預留 pr-12），唔可以並排 —— 並排會令
+                          輸入框淨返 ~12px 文字空間（2026-10-07 嗰個病）。 */}
                       {manualUnitRows[i] || units.length === 0 ? (
-                        <div className="col-span-2 grid grid-cols-[minmax(0,1fr)_auto] gap-1 sm:col-span-1">
+                        <div className="relative col-span-1">
                           <input
-                            className={unitFieldCls + errRing(itemFieldErr(i, "unit"))}
+                            className={unitManualFieldCls + errRing(itemFieldErr(i, "unit"))}
                             value={it.unit}
                             onChange={(e) => setItem(i, { unit: e.target.value })}
                             placeholder="單位"
@@ -1742,12 +1843,11 @@ function ReceiptFormModal({
                         </div>
                       ) : (
                         /* 🔴 手動輸入 → 清單嘅切換掣**唔可以**擺喺 select 右手邊：
-                           原版嗰個 `✎`（px-3 ≈ 40px）令 8rem 軌嘅 select 剩返
-                           ~84px，再扣 `fieldCls` 嘅 `px-4` 同 native 箭咀 ⇒
-                           **揀完只見到箭咀**。而 `<select>` 內嘅「其他…」
-                           （CUSTOM_UNIT）本身就係同一個入口，兩個掣純重複。
+                           原版嗰個 `✎`（px-3 ≈ 40px）令 6rem 軌嘅 select 剩返
+                           ~12px，再扣 native 箭咀 ⇒ **揀完只見到箭咀**。而 `<select>` 內嘅
+                           「其他…」（CUSTOM_UNIT）本身就係同一個入口，兩個掣純重複。
                            ⇒ 下拉模式淨係得 select，手動模式先有一個 40px 方形切換掣。 */
-                        <div className="col-span-2 sm:col-span-1">
+                        <div className="col-span-1">
                           <select
                             className={unitFieldCls + errRing(itemFieldErr(i, "unit"))}
                             value={manualUnitRows[i] ? CUSTOM_UNIT : it.unit}
@@ -1764,7 +1864,7 @@ function ReceiptFormModal({
                             {/* ⚠️ 呢句係細螢幕（grid 變 2 欄、每欄獨立一行）唯一嘅
                                 欄位識別標記 —— 嗰時冇 label，所以唔可以簡化成「單位」
                                 以外嘅空字串；亦**唔可以**加長（例如「單位（選填）」），
-                                8rem 軌扣 px-3＋箭咀之後放唔落 6 個中文字，會再出現截斷。 */}
+                                6rem 軌扣 px-3＋箭咀之後放唔落 6 個中文字，會再出現截斷。 */}
                             <option value="">單位</option>
                             {unitOptionsFor(it.unit).map((u) => (
                               <option key={u} value={u}>
@@ -1777,7 +1877,7 @@ function ReceiptFormModal({
                       )}
                       <button
                         type="button"
-                        className="col-span-2 shrink-0 rounded-xl bg-red-50 px-4 py-3.5 text-base font-medium text-red-600 hover:bg-red-100 sm:col-span-1"
+                        className="col-span-1 shrink-0 justify-self-end rounded-xl bg-red-50 px-4 py-3.5 text-base font-medium text-red-600 hover:bg-red-100"
                         onClick={() => setForm((f) => ({ ...f, items: f.items.filter((_, idx) => idx !== i) }))}
                         aria-label="刪除品項"
                       >
