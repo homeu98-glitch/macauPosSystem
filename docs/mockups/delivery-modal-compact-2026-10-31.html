@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<title>外送派單 · 橫向排版確認稿 — 2026-10-31</title>
+<style>
+  :root{
+    --or500:#f97316; --or600:#ea580c; --or50:#fff7ed; --or100:#ffedd5; --or700:#c2410c;
+    --s50:#f8fafc; --s100:#f1f5f9; --s200:#e2e8f0; --s300:#cbd5e1; --s400:#94a3b8;
+    --s500:#64748b; --s600:#475569; --s700:#334155; --s800:#1e293b; --s900:#0f172a;
+    --line:#e8edf3;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:#0f172a;color:#e2e8f0;
+    font-family:"Segoe UI","PingFang TC","Microsoft JhengHei",system-ui,sans-serif}
+
+  .wrap{padding:14px 16px 24px;max-width:1240px;margin:0 auto}
+  h1{font-size:15px;margin:0 0 6px;font-weight:700}
+  .sub{font-size:12px;color:#94a3b8;line-height:1.7;margin:0 0 12px}
+  .sub b{color:#fbbf24}
+  .ok{color:#34d399}
+
+  .tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
+  .tabs button{background:#1e293b;color:#cbd5e1;border:1px solid #334155;border-radius:999px;
+    padding:6px 12px;font-size:12px;font-weight:700;cursor:pointer}
+  .tabs button.on{background:var(--or500);border-color:var(--or500);color:#fff}
+
+  .legend{display:flex;flex-wrap:wrap;gap:6px 14px;margin:0 0 10px;font-size:11.5px;color:#94a3b8}
+  .legend i{display:inline-grid;place-items:center;width:16px;height:16px;border-radius:5px;
+    background:#fbbf24;color:#0f172a;font-style:normal;font-weight:800;font-size:10px;margin-right:5px}
+
+  .stage{position:relative;width:1180px;height:820px;transform-origin:top left}
+  .frame{position:relative;width:1180px;height:820px;border-radius:16px;overflow:hidden;
+    background:#eef2f7;box-shadow:0 24px 60px rgba(0,0,0,.45)}
+  .screen{display:none;position:absolute;inset:0}
+  .screen.on{display:block}
+
+  /* ── 背景（模糊嘅訂單頁）────────────────────────── */
+  .bg{position:absolute;inset:0;background:
+      radial-gradient(900px 500px at 20% 0%,#f8fafc 0%,#e9eef5 60%,#e2e8f0 100%)}
+  .bg .ghost{position:absolute;border-radius:14px;background:#fff;box-shadow:0 2px 10px rgba(15,23,42,.06)}
+  .bg .dim{position:absolute;inset:0;background:rgba(15,23,42,.38)}
+
+  /* ── 彈窗 ─────────────────────────────────────── */
+  .modal{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+    width:1020px;background:#fff;border-radius:22px;overflow:hidden;
+    box-shadow:0 30px 70px rgba(15,23,42,.35);color:var(--s900)}
+  .mh{padding:16px 20px 12px;border-bottom:1px solid var(--line)}
+  .mh .r1{display:flex;align-items:center;gap:8px}
+  .mh h2{font-size:15px;margin:0;font-weight:800}
+  .tag{background:var(--or50);color:var(--or700);border-radius:8px;padding:2px 8px;
+    font-size:11px;font-weight:800}
+  .mh .r2{margin-top:5px;font-size:11.5px;color:var(--s500)}
+  .x{position:absolute;right:16px;top:14px;width:28px;height:28px;border-radius:999px;
+    background:var(--s100);color:var(--s600);display:grid;place-items:center;font-size:13px;font-weight:700}
+
+  .body{padding:14px 20px 16px}
+  .grid{display:grid;gap:12px 16px}
+  .g3{grid-template-columns:1fr 1.1fr 1.35fr}
+  .g2{grid-template-columns:1fr 1fr}
+  .g3f{grid-template-columns:1fr 1fr 1.2fr}
+
+  label.lb{display:block;font-size:11px;font-weight:700;color:var(--s600);margin-bottom:5px}
+  label.lb .req{color:#e11d48}
+  label.lb .opt{font-weight:600;color:var(--s400)}
+
+  .in{display:flex;align-items:center;min-height:42px;border:1px solid var(--s200);
+    border-radius:12px;padding:0 12px;font-size:13px;color:var(--s900);background:#fff}
+  .in.ph{color:var(--s400)}
+  .in.focus{border-color:var(--or500);box-shadow:0 0 0 3px var(--or100)}
+  .in .chev{margin-left:auto;color:var(--s400);font-size:11px}
+
+  .withbtn{display:flex;gap:8px;align-items:center}
+  .withbtn .in{flex:1}
+  .minibtn{white-space:nowrap;border-radius:10px;background:var(--s100);color:var(--s700);
+    padding:9px 10px;font-size:11.5px;font-weight:800}
+  .minibtn.on{background:var(--or500);color:#fff}
+
+  .chips{display:flex;flex-wrap:wrap;gap:6px}
+  .chip{border-radius:11px;background:var(--s100);color:var(--s700);padding:8px 12px;
+    font-size:12px;font-weight:700}
+  .chip.on{background:var(--s900);color:#fff}
+  .chip.num{min-width:46px;text-align:center;font-variant-numeric:tabular-nums}
+
+  .rowline{display:flex;align-items:center;gap:8px}
+  .rowline .in.small{width:86px;min-height:40px;justify-content:center;font-weight:800;
+    font-variant-numeric:tabular-nums}
+
+  .seg{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+  .seg .sb{border-radius:12px;background:var(--s100);color:var(--s600);padding:11px 8px;
+    text-align:center;font-size:12.5px;font-weight:800}
+  .seg .sb.on{background:var(--s900);color:#fff}
+
+  .hint{background:var(--s50);border-radius:11px;padding:8px 10px;font-size:10.5px;
+    line-height:1.6;color:var(--s500);margin-top:8px}
+  .warn{background:#fffbeb;border-radius:11px;padding:8px 10px;font-size:10.5px;
+    font-weight:700;line-height:1.6;color:#92400e}
+
+  .mf{display:flex;align-items:center;gap:10px;padding:12px 20px;border-top:1px solid var(--line);
+    background:#fff}
+  .mf .sum{font-size:11.5px;color:var(--s500)}
+  .mf .sum b{color:var(--s800)}
+  .mf .sp{margin-left:auto}
+  .btn{border-radius:12px;padding:10px 18px;font-size:12.5px;font-weight:800}
+  .btn.ghost{background:var(--s100);color:var(--s700)}
+  .btn.primary{background:var(--or600);color:#fff}
+
+  /* ── 手機版 ───────────────────────────────────── */
+  .phone{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+    width:390px;height:740px;background:#fff;border-radius:26px;overflow:hidden;
+    box-shadow:0 30px 70px rgba(15,23,42,.4);color:var(--s900);display:flex;flex-direction:column;
+    /* 鍵盤高度：令 footer 停在鍵盤上方，而唔係被鍵盤蓋住 */
+    padding-bottom:250px}
+  .phone .mh{padding:14px 16px 10px}
+  .phone .body{padding:12px 16px;overflow:auto;flex:1}
+  .phone .g3,.phone .g2,.phone .g3f{grid-template-columns:1fr}
+  .phone .mf{padding:10px 16px}
+  .phone .in{min-height:44px}
+  .kbd{position:absolute;left:0;right:0;bottom:0;height:250px;background:#dbe3ec;
+    border-top:1px solid #c7d2dd;display:grid;grid-template-columns:repeat(10,1fr);
+    gap:5px;padding:8px}
+  .kbd span{background:#fff;border-radius:6px;display:grid;place-items:center;
+    font-size:13px;color:var(--s700);box-shadow:0 1px 0 #b9c4d1}
+
+  .note{position:absolute;left:16px;right:16px;bottom:10px;font-size:11px;color:#64748b}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>外送派單 · 橫向排版確認稿 — 2026-10-31</h1>
+  <p class="sub">
+    目標：<b>唔再左右各一格、右邊留大白</b>。改成「一行放兩三組」嘅橫向排法，
+    高度由 12 行壓到 5 行，平板／電腦唔使捲。<br>
+    「已寫在單上」撳落去填 <b>登入電話</b>（不是收據電話）。
+  </p>
+
+  <div class="tabs">
+    <button class="on" data-k="s1">1 · 桌面／平板（橫向）</button>
+    <button data-k="s2">2 · 手機窄版（單欄）</button>
+  </div>
+
+  <div class="legend">
+    <span><i>1</i>收件人 / 電話 / 車手費 同一行</span>
+    <span><i>2</i>地址：區份 + 詳細 同一行</span>
+    <span><i>3</i>付款 / 代收 同一行</span>
+    <span><i>4</i>備註 chips 一行過，textarea 全寬</span>
+  </div>
+
+  <div style="overflow:hidden;width:100%;border-radius:16px">
+  <div class="stage" id="stage">
+
+    <!-- ══════════ S1 桌面 ══════════ -->
+    <section class="screen on" id="s1">
+      <div class="frame">
+        <div class="bg">
+          <div class="ghost" style="left:24px;top:70px;width:300px;height:520px"></div>
+          <div class="ghost" style="left:340px;top:70px;width:400px;height:520px"></div>
+          <div class="ghost" style="left:756px;top:70px;width:390px;height:520px"></div>
+          <div class="dim"></div>
+        </div>
+
+        <div class="modal">
+          <div class="mh">
+            <div class="r1">
+              <h2>外送派單</h2>
+              <span class="tag">取餐 01</span>
+            </div>
+            <div class="r2">客付合計 MOP 48.00 · 單號維持不變</div>
+            <div class="x">✕</div>
+          </div>
+
+          <div class="body">
+            <!-- ① 一行三組 -->
+            <div class="grid g3">
+              <div>
+                <label class="lb">收件人 <span class="opt">（選填）</span></label>
+                <div class="in">陳小姐</div>
+              </div>
+              <div>
+                <label class="lb">聯絡電話 <span class="req">＊</span></label>
+                <div class="withbtn">
+                  <div class="in focus">60000002</div>
+                  <span class="minibtn on">已寫在單上</span>
+                </div>
+              </div>
+              <div>
+                <label class="lb">車手費（MOP）</label>
+                <div class="rowline">
+                  <div class="chips">
+                    <span class="chip num on">30</span>
+                    <span class="chip num">35</span>
+                    <span class="chip num">40</span>
+                    <span class="chip num">50</span>
+                    <span class="chip num">60</span>
+                  </div>
+                  <div class="in small">30</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- ② 地址一行 -->
+            <div class="grid g2" style="grid-template-columns:170px 1fr;margin-top:12px">
+              <div>
+                <label class="lb">地區 <span class="req">＊</span></label>
+                <div class="in">新橋 <span class="chev">▾</span></div>
+              </div>
+              <div>
+                <label class="lb">詳細地址 <span class="opt">（可後補）</span></label>
+                <div class="in ph">例如 88 號 5 樓 A</div>
+              </div>
+            </div>
+            <div class="hint">車手靠上面嘅地址送貨，請寫清楚樓層、單位、入口；到達時車手可以一鍵致電客人。</div>
+
+            <!-- ③ 付款 / 代收 一行 -->
+            <div class="grid g3f" style="margin-top:12px">
+              <div>
+                <label class="lb">邊個付車手費</label>
+                <div class="seg"><span class="sb on">商戶支付</span><span class="sb">客人支付</span></div>
+              </div>
+              <div>
+                <label class="lb">代收貨款</label>
+                <div class="seg"><span class="sb">需要代收</span><span class="sb on">唔需要</span></div>
+              </div>
+              <div>
+                <label class="lb">代收金額（MOP）</label>
+                <div class="in ph">需要代收時才填</div>
+              </div>
+            </div>
+
+            <!-- ④ 備註：chips 一行 + textarea 全寬 -->
+            <div style="margin-top:12px">
+              <label class="lb">送貨備註</label>
+              <div class="chips" style="margin-bottom:8px">
+                <span class="chip">到達前請致電</span>
+                <span class="chip">不要按門鈴</span>
+                <span class="chip">放喺管理處</span>
+                <span class="chip">放喺門口即可，唔使拍門</span>
+                <span class="chip">有小朋友／寵物，請輕聲</span>
+              </div>
+              <div class="in ph" style="min-height:56px;align-items:flex-start;padding-top:12px">
+                例如：管理處交收、到達請致電
+              </div>
+            </div>
+          </div>
+
+          <div class="mf">
+            <div class="sum">車手費 <b>MOP 30.00</b> · 商戶支付</div>
+            <div class="sp"></div>
+            <span class="btn ghost">取消</span>
+            <span class="btn primary">確認派單</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ══════════ S2 手機 ══════════ -->
+    <section class="screen" id="s2">
+      <div class="frame">
+        <div class="bg">
+          <div class="dim"></div>
+        </div>
+
+        <div class="phone">
+          <div class="mh">
+            <div class="r1"><h2>外送派單</h2><span class="tag">取餐 01</span></div>
+            <div class="r2">客付合計 MOP 48.00 · 單號維持不變</div>
+            <div class="x">✕</div>
+          </div>
+          <div class="body">
+            <div class="grid">
+              <div>
+                <label class="lb">聯絡電話 <span class="req">＊</span></label>
+                <div class="withbtn">
+                  <div class="in focus">60000002</div>
+                  <span class="minibtn on">已寫在單上</span>
+                </div>
+              </div>
+              <div>
+                <label class="lb">地區 <span class="req">＊</span></label>
+                <div class="in">新橋 <span class="chev">▾</span></div>
+              </div>
+              <div>
+                <label class="lb">詳細地址 <span class="opt">（可後補）</span></label>
+                <div class="in ph">例如 88 號 5 樓 A</div>
+              </div>
+              <div>
+                <label class="lb">車手費（MOP）</label>
+                <div class="chips" style="margin-bottom:6px">
+                  <span class="chip num on">30</span><span class="chip num">35</span>
+                  <span class="chip num">40</span><span class="chip num">50</span>
+                  <span class="chip num">60</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          <!-- 鍵盤彈出：彈窗只縮到鍵盤上面，唔會被推走 -->
+          <div class="mf" style="border-top:1px solid var(--line)">
+            <div class="sum">車手費 <b>MOP 30.00</b></div>
+            <div class="sp"></div>
+            <span class="btn primary">確認派單</span>
+          </div>
+          <div class="kbd">
+            <span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6</span><span>7</span><span>8</span><span>9</span><span>0</span>
+            <span>q</span><span>w</span><span>e</span><span>r</span><span>t</span><span>y</span><span>u</span><span>i</span><span>o</span><span>p</span>
+            <span>a</span><span>s</span><span>d</span><span>f</span><span>g</span><span>h</span><span>j</span><span>k</span><span>l</span><span>⌫</span>
+            <span>⇧</span><span>z</span><span>x</span><span>c</span><span>v</span><span>b</span><span>n</span><span>m</span><span>.</span><span>⏎</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </div>
+  </div>
+</div>
+
+<script>
+  const tabs = document.querySelectorAll('.tabs button');
+  const screens = document.querySelectorAll('.screen');
+  function show(key){
+    tabs.forEach(b => b.classList.toggle('on', b.dataset.k === key));
+    screens.forEach(s => s.classList.toggle('on', s.id === key));
+    location.hash = key;
+  }
+  tabs.forEach(b => b.addEventListener('click', () => show(b.dataset.k)));
+  const fit = () => {
+    const stage = document.getElementById('stage');
+    const avail = Math.min(document.documentElement.clientWidth - 32, 1200);
+    const scale = Math.min(1, avail / 1180);
+    stage.style.transform = 'scale(' + scale + ')';
+    stage.parentElement.style.height = (820 * scale) + 'px';
+  };
+  window.addEventListener('resize', fit);
+  fit();
+  if (location.hash) show(location.hash.slice(1));
+</script>
+</body>
+</html>

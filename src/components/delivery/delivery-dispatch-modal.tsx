@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { useT } from "@/components/lang-provider";
-import { loadBootstrapCache } from "@/lib/storage";
+import { loadAuthSession, loadBootstrapCache } from "@/lib/storage";
 import { ResponsiveModal } from "@/components/responsive-modal";
 import { isDeliveryLiveEnabled } from "@/lib/pos/delivery/flag";
 import {
@@ -216,8 +216,26 @@ export function DeliveryDispatchModal({
     };
   }, [phone, zone, addressDetail]);
   const ready = filled.phone && filled.address;
-  /** 舖頭電話（收據抬頭用嗰個）—— 「已寫在單上」一撳就填呢個。 */
-  const [storeTel] = useState(() => loadBootstrapCache()?.storeTel?.trim() ?? "");
+  /**
+   * 「已寫在單上」要填嘅號碼（2026-10-31 商家指定：**登入電話**，唔係收據電話）。
+   *
+   * 優先次序：
+   *   ① `AuthSession.account` —— 商家登入用嘅電話（畫面上方顯示嗰個，例如 60000002）
+   *   ② `AuthSession.topUpShopId` —— 註釋寫明「通常為店主電話」
+   *   ③ `PosBootstrap.storeTel` —— 收據抬頭電話（最後防線）
+   * 只有「睇落係電話」（6–15 位數字、冇 `*`）才採用，否則當冇 → 按鈕 disable。
+   */
+  const [contactPhoneFallback] = useState(() => {
+    const session = loadAuthSession();
+    const candidates = [session?.account, session?.topUpShopId, loadBootstrapCache()?.storeTel];
+    for (const candidate of candidates) {
+      const value = String(candidate ?? "").trim();
+      if (!value || value.includes("*")) continue;
+      const digits = value.replace(/\D/g, "");
+      if (digits.length >= 6 && digits.length <= 15) return value;
+    }
+    return "";
+  });
 
   if (!target) return null;
 
@@ -395,9 +413,13 @@ export function DeliveryDispatchModal({
                   冇設過舖頭電話就 disable，唔好撳完得個吉。 */}
               <button
                 className="rounded-lg bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-700 disabled:opacity-40"
-                disabled={!storeTel}
-                onClick={() => setPhone(storeTel)}
-                title={storeTel ? t("填入舖頭電話：{tel}", { tel: storeTel }) : t("未設定舖頭電話，請自行輸入")}
+                disabled={!contactPhoneFallback}
+                onClick={() => setPhone(contactPhoneFallback)}
+                title={
+                  contactPhoneFallback
+                    ? t("填入登入電話：{tel}", { tel: contactPhoneFallback })
+                    : t("未設定登入電話，請自行輸入")
+                }
                 type="button"
               >
                 {t("已寫在單上")}

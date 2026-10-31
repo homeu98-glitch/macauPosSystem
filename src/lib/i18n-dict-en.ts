@@ -1966,6 +1966,8 @@ export const EN_DICT: Record<string, string> = {
   已寫在單上: "Already on the ticket",
   "填入舖頭電話：{tel}": "Fill in the shop phone: {tel}",
   "未設定舖頭電話，請自行輸入": "No shop phone configured — please type one",
+  "填入登入電話：{tel}": "Fill in the login phone: {tel}",
+  "未設定登入電話，請自行輸入": "No login phone configured — please type one",
   請選擇地區: "Choose a district",
   "其他（下面自己打）": "Other (type below)",
   "請輸入地址（例如：橫琴口岸 3 號門）": "Enter the address (e.g. Hengqin Port Gate 3)",
