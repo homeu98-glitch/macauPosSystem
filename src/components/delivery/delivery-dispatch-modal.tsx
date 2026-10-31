@@ -289,10 +289,13 @@ export function DeliveryDispatchModal({
         error?: string;
       };
       if (!res.ok || !json.ok || !json.job) {
-        const key = ERROR_KEYS[String(json.error ?? "")] ?? "";
+        const err = String(json.error ?? "");
+        const key = ERROR_KEYS[err] ?? "";
+        // 2026-10-31：未映射嘅 error 直接顯示真實訊息，唔好再用「檢查網絡」掩蓋，
+        // 否則 table 未建立（PGRST204）等真實原因會被靜默掉，商家無從排查。
         setSubmit({
           status: "error",
-          message: key ? t(key) : t("儲存派單失敗，請檢查網絡後重試"),
+          message: key ? t(key) : t("儲存派單失敗：{err}", { err: err || t("未知錯誤，請檢查網絡") }),
         });
         return;
       }

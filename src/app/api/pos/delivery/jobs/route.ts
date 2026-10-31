@@ -64,14 +64,26 @@ const JOB_COLUMNS = [
   "delivered_at",
 ].join(",");
 
-/** PostgREST／Postgres 嘅「表未建立」訊號（兩種都要認，缺一會靜靜變 500）。 */
+/**
+ * PostgREST／Postgres 嘅「表／欄未建立」訊號。
+ *
+ * ⚠️ 2026-10-31 實戰：張表（0076）未喺 production 跑過時，PostgREST 對
+ * `.upsert()` 會回 **`PGRST204`**（"Could not find the 'X' column in
+ * 'public.pos_delivery_jobs'"）—— 唔係 `42P01`／`PGRST205`。舊版淨係認後兩者，
+ * 令 `isMissingTable()` 回 false ⇒ 當 500 跌去 generic「檢查網絡」錯誤，靜默失敗。
+ * 所以 code 同 message regex **兩者都要認**（同 inventory 開通嘅坑一樣）。
+ */
 function isMissingTable(error: { code?: string; message?: string } | null): boolean {
   if (!error) return false;
   const code = String(error.code ?? "");
-  if (code === "42P01" || code === "PGRST205") return true;
+  if (code === "42P01" || code === "PGRST204" || code === "PGRST205") return true;
   const message = String(error.message ?? "");
-  return /relation .*pos_delivery_jobs.* does not exist/i.test(message) ||
-    /Could not find the table 'public\.pos_delivery_jobs'/i.test(message);
+  return (
+    /relation .*pos_delivery_jobs.* does not exist/i.test(message) ||
+    /Could not find the table 'public\.pos_delivery_jobs'/i.test(message) ||
+    /Could not find the 'pos_delivery_jobs' relation/i.test(message) ||
+    /Could not find the '[^']*' column/i.test(message)
+  );
 }
 
 export async function GET(request: Request) {

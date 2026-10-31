@@ -2029,6 +2029,8 @@ export const EN_DICT: Record<string, string> = {
   "定位失敗，可以照樣派單（車手會用地址導航）":
     "Location failed — you can still dispatch; the rider will navigate by address.",
   "儲存派單失敗，請檢查網絡後重試": "Failed to save the dispatch. Check your connection and try again.",
+  "儲存派單失敗：{err}": "Failed to save the dispatch: {err}",
+  "未知錯誤，請檢查網絡": "Unknown error, please check your connection",
   訂單來源唔正確: "Invalid order source",
   訂單編號唔正確: "Invalid order reference",
   配送方式唔正確: "Invalid delivery mode",
