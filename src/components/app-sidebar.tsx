@@ -23,6 +23,7 @@ import { useTopupPendingCount } from "@/lib/topup/use-topup-pending-count";
 import { useSyncHealth } from "@/lib/pos/sync-acks";
 import { retryReconcileNow } from "@/lib/pos/sync-reconcile-daemon";
 import { SIDEBAR_MODULES } from "@/lib/pos/module-catalog";
+import { isDeliveryDispatchEnabled } from "@/lib/pos/delivery/flag";
 import {
   loadOperatorSession,
   operatorCanOpenSettings,
@@ -49,9 +50,28 @@ import { useStoreOpenToggle } from "@/lib/pos/use-store-open-toggle";
  * 否則升級之後未重新登入嘅舊 session 一 reload，側欄就會變全空。
  */
 function resolveNavItems(grantedSidebarModules: readonly string[] | undefined) {
-  if (!grantedSidebarModules) return [...SIDEBAR_MODULES];
-  const allowed = new Set(grantedSidebarModules);
-  return SIDEBAR_MODULES.filter((item) => allowed.has(item.id));
+  const granted = !grantedSidebarModules
+    ? [...SIDEBAR_MODULES]
+    : (() => {
+        const allowed = new Set(grantedSidebarModules);
+        return SIDEBAR_MODULES.filter((item) => allowed.has(item.id));
+      })();
+  return granted.filter(isModuleVisibleByFlag);
+}
+
+/**
+ * 功能旗標未開嘅模組**唔顯示**（2026-10-31）。
+ *
+ * 目前只有「外送」：派單功能預設關閉（等 Ledger v3.6）。
+ * 如果照樣出 tab，所有商戶一部署就會見到一個撳入去只得「未開啟」嘅新 tab
+ * —— 呢個係對現有商戶嘅**可見改動**，同「零影響」原則衝突。
+ *
+ * ⚠️ 只 filter 側欄；路由本身仍然存在（直接打 `/delivery` 會見到提示頁），
+ *    因為 `/delivery` 係 static page，加 middleware 反而多一層風險。
+ */
+function isModuleVisibleByFlag(item: { id: string }): boolean {
+  if (item.id === "delivery") return isDeliveryDispatchEnabled();
+  return true;
 }
 
 
