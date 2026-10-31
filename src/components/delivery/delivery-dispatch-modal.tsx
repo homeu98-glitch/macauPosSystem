@@ -386,142 +386,73 @@ export function DeliveryDispatchModal({
       }
     >
       {/* ⚠️ 唔可以再加 `px-4 py-4` —— `ResponsiveModal` 嘅 body 已經有
-          `px-4 py-4 sm:px-5`，加埋會變雙重內距（彈窗窄位時兩欄會提早換行）。 */}
-      <div className="grid gap-4 sm:grid-cols-2">
-        {/* 左欄：送貨資料 */}
-        <div className="space-y-3">
-          <div className="text-xs font-bold uppercase tracking-wide text-slate-400">{t("送貨資料")}</div>
+          `px-4 py-4 sm:px-5`，加埋會變雙重內距（彈窗窄位時會提早換行）。 */}
+      {/*
+        排版（2026-10-31 商家確認稿）：**橫向 4 行**，唔再左右各一格。
+        原本左欄長、右欄短，右邊大片留白；而家每行放兩三組短欄位，高度少約 40%。
+        斷點全部用 `md:` —— 手機維持單欄，唔會擠。
+      */}
 
-          <label className="block">
-            <span className="mb-1 block text-xs font-semibold text-slate-600">
-              {t("收件人")} <span className="font-normal text-slate-400">（{t("選填")}）</span>
+      {/* ── 第 1 行：收件人 ／ 聯絡電話 ／ 車手費 ── */}
+      <div className="grid gap-4 md:grid-cols-[1fr_1.15fr_1.4fr]">
+        <label className="block">
+          <span className="mb-1 block text-xs font-semibold text-slate-600">
+            {t("收件人")} <span className="font-normal text-slate-400">（{t("選填")}）</span>
+          </span>
+          <input
+            className={inputClass}
+            onChange={(event) => setName(event.target.value)}
+            placeholder={t("例如：陳小姐")}
+            value={name}
+          />
+        </label>
+
+        <div className="block">
+          <div className="mb-1 flex items-center justify-between gap-2">
+            <span className="text-xs font-semibold text-slate-600">
+              {t("聯絡電話")} <span className="text-rose-500">＊</span>
             </span>
-            <input
-              className={inputClass}
-              onChange={(event) => setName(event.target.value)}
-              placeholder={t("例如：陳小姐")}
-              value={name}
-            />
-          </label>
-
-          <div className="block">
-            <div className="mb-1 flex items-center justify-between gap-2">
-              <span className="text-xs font-semibold text-slate-600">
-                {t("聯絡電話")} <span className="text-rose-500">＊</span>
-              </span>
-              {/* 「已寫在單上」＝用**舖頭電話**（收據抬頭嗰個），車手打返舖頭就得。
-                  冇設過舖頭電話就 disable，唔好撳完得個吉。 */}
-              <button
-                className="rounded-lg bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-700 disabled:opacity-40"
-                disabled={!contactPhoneFallback}
-                onClick={() => setPhone(contactPhoneFallback)}
-                title={
-                  contactPhoneFallback
-                    ? t("填入登入電話：{tel}", { tel: contactPhoneFallback })
-                    : t("未設定登入電話，請自行輸入")
-                }
-                type="button"
-              >
-                {t("已寫在單上")}
-              </button>
-            </div>
-            <input
-              className={inputClass}
-              inputMode="tel"
-              onChange={(event) => setPhone(event.target.value)}
-              placeholder="6612 3456"
-              value={phone}
-            />
-            {/* 澳覓只提供遮罩電話（853-****9190）—— 講清楚，唔好令店員以為有得用 */}
-            {maskedPhone ? (
-              <span className="mt-1 block text-[11px] text-amber-700">
-                {t("平台只提供遮罩電話（{phone}），請自行輸入可聯絡號碼。", { phone: maskedPhone })}
-              </span>
-            ) : null}
-          </div>
-
-          <div className="block">
-            <span className="mb-1 block text-xs font-semibold text-slate-600">
-              {t("送貨地址")} <span className="text-rose-500">＊</span>
-            </span>
-            {/* 先揀區份（商家一定知），詳細地址可以後補 —— 打完整地址喺平板好痛苦 */}
-            <select
-              className={`${inputClass} mb-2 ${zone ? "" : "text-slate-400"}`}
-              onChange={(event) => setZone(event.target.value)}
-              value={zone}
-            >
-              <option value="">{t("請選擇地區")}</option>
-              {MACAU_DELIVERY_ZONES.map((item) => (
-                <option key={item} value={item}>
-                  {item}
-                </option>
-              ))}
-              <option value={OTHER_ZONE}>{t("其他（下面自己打）")}</option>
-            </select>
-            <input
-              className={inputClass}
-              onChange={(event) => setAddressDetail(event.target.value)}
-              placeholder={
-                zone === OTHER_ZONE
-                  ? t("請輸入地址（例如：橫琴口岸 3 號門）")
-                  : t("詳細地址（可後補）例如 88 號 5 樓 A")
+            {/* 「已寫在單上」＝用**登入電話**（畫面頂顯示嗰個），車手打返舖頭就得。 */}
+            <button
+              className="rounded-lg bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-700 disabled:opacity-40"
+              disabled={!contactPhoneFallback}
+              onClick={() => setPhone(contactPhoneFallback)}
+              title={
+                contactPhoneFallback
+                  ? t("填入登入電話：{tel}", { tel: contactPhoneFallback })
+                  : t("未設定登入電話，請自行輸入")
               }
-              value={addressDetail}
-            />
-            {/* 揀「其他」但未打地址 → 明確講唔夠，唔好等撳咗確認才彈錯 */}
-            {zone === OTHER_ZONE && !addressDetail.trim() ? (
-              <span className="mt-1 block text-[11px] font-semibold text-rose-600">
-                {t("揀「其他」要自己填地址。")}
-              </span>
-            ) : null}
+              type="button"
+            >
+              {t("已寫在單上")}
+            </button>
           </div>
-
-          {/* 🔴 刻意冇「座標」輸入（2026-10-31 商家拍板）：
-              商家最多只知地址，冇可能提供經緯度。車手 App 嘅導航掣失效時，
-              車手仍然有地址文字 + 一鍵致電客人，實務上可行。
-              ⚠️ 所以**地址一定要寫得夠清楚**（樓層／單位／入口），呢句提示唔可以省。 */}
-          <div className="rounded-xl bg-slate-50 px-3 py-2 text-[11px] leading-relaxed text-slate-500">
-            {t("車手靠上面嘅地址送貨，請寫清楚樓層、單位、入口；到達時車手可以一鍵致電客人。")}
-          </div>
-
-          <div className="block">
-            <span className="mb-1 block text-xs font-semibold text-slate-600">{t("送貨備註")}</span>
-            {/* 一撳即填（可以連撳幾個），填完仲可以自己改 */}
-            <div className="mb-2 flex flex-wrap gap-1.5">
-              {NOTE_PRESETS.map((preset) => (
-                <button
-                  key={preset}
-                  className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-700"
-                  onClick={() => appendNote(preset)}
-                  type="button"
-                >
-                  {t(preset)}
-                </button>
-              ))}
-            </div>
-            <textarea
-              className={`${inputClass} min-h-[64px] resize-none`}
-              onChange={(event) => setNote(event.target.value)}
-              placeholder={t("例如：管理處交收、到達請致電")}
-              value={note}
-            />
-          </div>
+          <input
+            className={inputClass}
+            inputMode="tel"
+            onChange={(event) => setPhone(event.target.value)}
+            placeholder="6612 3456"
+            value={phone}
+          />
+          {/* 澳覓只提供遮罩電話（853-****9190）—— 講清楚，唔好令店員以為有得用 */}
+          {maskedPhone ? (
+            <span className="mt-1 block text-[11px] text-amber-700">
+              {t("平台只提供遮罩電話（{phone}），請自行輸入可聯絡號碼。", { phone: maskedPhone })}
+            </span>
+          ) : null}
         </div>
 
-        {/* 右欄：費用 */}
-        <div className="space-y-3">
-          <div className="text-xs font-bold uppercase tracking-wide text-slate-400">{t("費用同收款")}</div>
-
-          <div className="block">
-            <span className="mb-1 block text-xs font-semibold text-slate-600">{t("車手費（MOP）")}</span>
-            {/* 常用金額一撳即填；想特別金額就直接改下面個輸入框 */}
-            <div className="mb-2 flex flex-wrap gap-1.5">
+        <div className="block">
+          <span className="mb-1 block text-xs font-semibold text-slate-600">{t("車手費（MOP）")}</span>
+          <div className="flex items-center gap-2">
+            {/* 常用金額一撳即填；想特別金額就直接改右邊個輸入框 */}
+            <div className="flex flex-wrap gap-1.5">
               {FEE_PRESETS_MOP.map((amount) => {
                 const active = toNumber(fee) === amount;
                 return (
                   <button
                     key={amount}
-                    className={`min-w-[52px] rounded-xl px-2.5 py-1.5 text-xs font-bold tabular-nums ${
+                    className={`min-w-[44px] rounded-xl px-2 py-2 text-xs font-bold tabular-nums ${
                       active ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-700"
                     }`}
                     onClick={() => setFee(String(amount))}
@@ -533,80 +464,159 @@ export function DeliveryDispatchModal({
               })}
             </div>
             <input
-              className={inputClass}
+              className={`${inputClass} w-20 shrink-0 text-center font-bold tabular-nums`}
               inputMode="decimal"
               onChange={(event) => setFee(event.target.value)}
               value={fee}
             />
           </div>
+        </div>
+      </div>
 
-          <div>
-            <span className="mb-1 block text-xs font-semibold text-slate-600">{t("邊個付車手費")}</span>
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                className={`rounded-xl px-3 py-2.5 text-sm font-semibold ${
-                  feePaidBy === "shop" ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600"
-                }`}
-                onClick={() => setFeePaidBy("shop")}
-                type="button"
-              >
-                {t("商戶支付")}
-              </button>
-              <button
-                className={`rounded-xl px-3 py-2.5 text-sm font-semibold ${
-                  feePaidBy === "customer" ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600"
-                }`}
-                onClick={() => setFeePaidBy("customer")}
-                type="button"
-              >
-                {t("客人支付")}
-              </button>
-            </div>
-          </div>
-
-          <div>
-            <span className="mb-1 block text-xs font-semibold text-slate-600">{t("代收貨款")}</span>
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                className={`rounded-xl px-3 py-2.5 text-sm font-semibold ${
-                  codEnabled ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600"
-                }`}
-                onClick={() => setCodEnabled(true)}
-                type="button"
-              >
-                {t("需要代收")}
-              </button>
-              <button
-                className={`rounded-xl px-3 py-2.5 text-sm font-semibold ${
-                  !codEnabled ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600"
-                }`}
-                onClick={() => setCodEnabled(false)}
-                type="button"
-              >
-                {t("唔需要")}
-              </button>
-            </div>
-            {codEnabled ? (
-              <input
-                className={`${inputClass} mt-2`}
-                inputMode="decimal"
-                onChange={(event) => setCod(event.target.value)}
-                placeholder={t("代收金額（MOP）")}
-                value={cod}
-              />
-            ) : null}
-          </div>
-
-          <div className="rounded-xl bg-slate-50 px-3 py-2.5 text-[11px] leading-relaxed text-slate-500">
-            {t("車手只會見到送貨所需資料（電話、地址、備註），唔會見到訂單金額。")}
-          </div>
-
-          {!live ? (
-            <div className="rounded-xl bg-amber-50 px-3 py-2.5 text-[11px] font-semibold leading-relaxed text-amber-800">
-              {t("車手平台未接通：現時只會儲存派單資料，唔會真的叫車。")}
-            </div>
+      {/* ── 第 2 行：地區（固定 170px）＋ 詳細地址 ── */}
+      <div className="mt-3 grid gap-4 md:grid-cols-[170px_1fr]">
+        <div>
+          <label className="mb-1 block text-xs font-semibold text-slate-600">
+            {t("地區")} <span className="text-rose-500">＊</span>
+          </label>
+          {/* 先揀區份（商家一定知），詳細地址可以後補 —— 打完整地址喺平板好痛苦 */}
+          <select
+            aria-label={t("地區")}
+            className={`${inputClass} ${zone ? "" : "text-slate-400"}`}
+            onChange={(event) => setZone(event.target.value)}
+            value={zone}
+          >
+            <option value="">{t("請選擇地區")}</option>
+            {MACAU_DELIVERY_ZONES.map((item) => (
+              <option key={item} value={item}>
+                {item}
+              </option>
+            ))}
+            <option value={OTHER_ZONE}>{t("其他（下面自己打）")}</option>
+          </select>
+        </div>
+        <div>
+          <label className="mb-1 block text-xs font-semibold text-slate-600">
+            {t("詳細地址")} <span className="font-normal text-slate-400">（{t("選填")}）</span>
+          </label>
+          <input
+            className={inputClass}
+            onChange={(event) => setAddressDetail(event.target.value)}
+            placeholder={
+              zone === OTHER_ZONE
+                ? t("請輸入地址（例如：橫琴口岸 3 號門）")
+                : t("例如 88 號 5 樓 A（可後補）")
+            }
+            value={addressDetail}
+          />
+          {/* 揀「其他」但未打地址 → 明確講唔夠，唔好等撳咗確認才彈錯 */}
+          {zone === OTHER_ZONE && !addressDetail.trim() ? (
+            <span className="mt-1 block text-[11px] font-semibold text-rose-600">
+              {t("揀「其他」要自己填地址。")}
+            </span>
           ) : null}
         </div>
+      </div>
+      <div className="mt-2 rounded-xl bg-slate-50 px-3 py-2 text-[11px] leading-relaxed text-slate-500">
+        {t("車手靠上面嘅地址送貨，請寫清楚樓層、單位、入口；到達時車手可以一鍵致電客人。")}
+      </div>
+
+      {/* ── 第 3 行：邊個付 ／ 代收 ／ 代收金額 ── */}
+      <div className="mt-3 grid gap-4 md:grid-cols-3">
+        <div>
+          <span className="mb-1 block text-xs font-semibold text-slate-600">{t("邊個付車手費")}</span>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              className={`rounded-xl px-3 py-2.5 text-sm font-semibold ${
+                feePaidBy === "shop" ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600"
+              }`}
+              onClick={() => setFeePaidBy("shop")}
+              type="button"
+            >
+              {t("商戶支付")}
+            </button>
+            <button
+              className={`rounded-xl px-3 py-2.5 text-sm font-semibold ${
+                feePaidBy === "customer" ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600"
+              }`}
+              onClick={() => setFeePaidBy("customer")}
+              type="button"
+            >
+              {t("客人支付")}
+            </button>
+          </div>
+        </div>
+
+        <div>
+          <span className="mb-1 block text-xs font-semibold text-slate-600">{t("代收貨款")}</span>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              className={`rounded-xl px-3 py-2.5 text-sm font-semibold ${
+                codEnabled ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600"
+              }`}
+              onClick={() => setCodEnabled(true)}
+              type="button"
+            >
+              {t("需要代收")}
+            </button>
+            <button
+              className={`rounded-xl px-3 py-2.5 text-sm font-semibold ${
+                !codEnabled ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600"
+              }`}
+              onClick={() => setCodEnabled(false)}
+              type="button"
+            >
+              {t("唔需要")}
+            </button>
+          </div>
+        </div>
+
+        <div>
+          <span className="mb-1 block text-xs font-semibold text-slate-600">{t("代收金額（MOP）")}</span>
+          <input
+            className={`${inputClass} disabled:bg-slate-50 disabled:text-slate-400`}
+            disabled={!codEnabled}
+            inputMode="decimal"
+            onChange={(event) => setCod(event.target.value)}
+            placeholder={codEnabled ? t("例如 128") : t("需要代收時才填")}
+            value={cod}
+          />
+        </div>
+      </div>
+
+      {/* ── 第 4 行：備註 chips 一行過 ＋ 全寬 textarea ── */}
+      <div className="mt-3">
+        <span className="mb-1 block text-xs font-semibold text-slate-600">{t("送貨備註")}</span>
+        <div className="mb-2 flex flex-wrap gap-1.5">
+          {NOTE_PRESETS.map((preset) => (
+            <button
+              key={preset}
+              className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-700"
+              onClick={() => appendNote(preset)}
+              type="button"
+            >
+              {t(preset)}
+            </button>
+          ))}
+        </div>
+        <textarea
+          className={`${inputClass} min-h-[56px] resize-none`}
+          onChange={(event) => setNote(event.target.value)}
+          placeholder={t("例如：管理處交收、到達請致電")}
+          value={note}
+        />
+      </div>
+
+      {/* 底部提醒：個資範圍 ＋（未接通時）明寫唔會真的叫車 */}
+      <div className="mt-3 space-y-2">
+        <div className="rounded-xl bg-slate-50 px-3 py-2 text-[11px] leading-relaxed text-slate-500">
+          {t("車手只會見到送貨所需資料（電話、地址、備註），唔會見到訂單金額。")}
+        </div>
+        {!live ? (
+          <div className="rounded-xl bg-amber-50 px-3 py-2.5 text-[11px] font-semibold leading-relaxed text-amber-800">
+            {t("車手平台未接通：現時只會儲存派單資料，唔會真的叫車。")}
+          </div>
+        ) : null}
       </div>
     </ResponsiveModal>
   );
