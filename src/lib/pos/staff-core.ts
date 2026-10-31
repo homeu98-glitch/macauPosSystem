@@ -50,6 +50,7 @@ export const POS_STAFF_ROLE_HINTS: Record<PosStaffRole, string> = {
 export const POS_STAFF_PAGE_IDS = [
   "order",
   "orders",
+  "delivery",
   "members",
   "prints",
   "reports",
@@ -63,6 +64,7 @@ export type PosStaffPageId = (typeof POS_STAFF_PAGE_IDS)[number];
 export const POS_STAFF_PAGE_LABELS: Record<PosStaffPageId, string> = {
   order: "點餐",
   orders: "訂單",
+  delivery: "外送",
   members: "會員",
   prints: "打印",
   reports: "報表",
@@ -80,6 +82,9 @@ export const POS_STAFF_ACTION_IDS = [
   "reprintReceipt",
   "closeShift",
   "deviceSettings",
+  // 2026-10-31：外送派單（叫車手）。會產生車手費（真金白銀），
+  // 所以要有獨立權限，唔可以靠「有訂單頁權限」就自動有。
+  "dispatchDelivery",
 ] as const;
 
 export type PosStaffActionId = (typeof POS_STAFF_ACTION_IDS)[number];
@@ -95,6 +100,10 @@ export const POS_STAFF_ACTION_LABELS: Record<
   reprintReceipt: { label: "補打收據", hint: "重印帳單／收據" },
   closeShift: { label: "交班結帳", hint: "結束自己嘅班次並埋數" },
   deviceSettings: { label: "設備／菜單設定", hint: "打印機、菜單、桌台、支付方式等設定頁" },
+  dispatchDelivery: {
+    label: "外送派單（叫車手）",
+    hint: "喺訂單撳「派送」把單交畀車手平台；會產生車手費",
+  },
 };
 
 /** 單店最多店員數（防止一次過拉爆清單；亦足以覆蓋小店排班）。 */
@@ -143,6 +152,8 @@ export function defaultPosStaffPermissions(role: PosStaffRole): PosStaffPermissi
     pages: {
       order: true,
       orders: true,
+      // 外送：收銀日常操作（打電話叫車手係今日已做的事），兩個角色預設都開
+      delivery: true,
       members: true,
       prints: true,
       // 報表／沽清／庫存屬管理層資訊；交班係每個收銀都要做
@@ -160,6 +171,8 @@ export function defaultPosStaffPermissions(role: PosStaffRole): PosStaffPermissi
       reprintReceipt: true,
       closeShift: true,
       deviceSettings: manager,
+      // 唔收緊：今日任何員工都可以打電話叫車手，收緊 = 靜靜改變營運
+      dispatchDelivery: true,
     },
   };
 }

@@ -1,18 +1,22 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
-import { PosOrder } from "@/lib/types";
-import { formatMoney, formatMacauTime } from "@/lib/format";
+import { PosOrder } from "@/lib/types";import { formatMoney, formatMacauTime } from "@/lib/format";
 import { compareOrderByLocalNo, getPaymentBadge, isQuickCounterOrder, isQuickOrderReady } from "@/lib/pos-order-filters";
 import { isSelfOrder } from "@/lib/pos/order-source";
-import { canVoidPlatformOrder, isPlatformOrder } from "@/lib/pos/platform-order";
+import { canVoidPlatformOrder, isPlatformOrder, isPlatformOrderSource } from "@/lib/pos/platform-order";
 import { actualPayout } from "@/lib/pos/platform-settlement";
 import { useT } from "@/components/lang-provider";
 import { OrderSourceBadge } from "@/components/order-source-badge";
 import { OrderDiscountRow } from "@/components/order-discount-display";
 import { SelfOrderActionButtons } from "@/components/self-order-action-buttons";
 import { orderItemDiscountTotal } from "@/lib/pos/discount";
+import { DeliveryDispatchModal } from "@/components/delivery/delivery-dispatch-modal";
+import { useDeliveryDispatch } from "@/lib/pos/delivery/use-delivery-dispatch";
+import { useCanDispatchDelivery } from "@/lib/pos/delivery/use-can-dispatch-delivery";
+import { usePlatformDeliveryModes } from "@/lib/pos/delivery/use-platform-delivery-modes";
+import { loadAuthSession } from "@/lib/storage";
 
 type QuickLocalOrdersStripProps = {
   currency: string;
@@ -73,6 +77,8 @@ function OrderCard({
   onConfirmSelfOrder,
   onRejectSelfOrder,
   onVoidPlatformOrder,
+  onDispatch,
+  canDispatch,
 }: {
   order: PosOrder;
   currency: string;
@@ -97,6 +103,10 @@ function OrderCard({
   onRejectSelfOrder?: (order: PosOrder) => { ok: boolean; error?: string };
   /** 外賣平台單「作廢（覆寫）」—— 見 `QuickLocalOrdersStripProps` 嘅說明。 */
   onVoidPlatformOrder?: (order: PosOrder) => void;
+  /** 外送派送（2026-10-31）：父層傳落嚟嘅開啟彈窗回呼。 */
+  onDispatch?: (order: PosOrder) => void;
+  /** 呢張單而家派唔派得（純函式判斷，父層已有 job 資料）。 */
+  canDispatch?: (order: PosOrder) => boolean;
 }) {
   const t = useT();
   const completeText = completeLabel(order);
@@ -275,6 +285,18 @@ function OrderCard({
         >
           {t("查看")}
         </button>
+        {/* 外送派送（2026-10-31）：快餐 counter 單、平台自送／自取單都可以派。
+            卡片只有 240px 闊 —— 呢粒掣一定要「有資格先 render」，
+            唔可以灰住長駐，否則會擠走「可取餐／完成」。 */}
+        {!isReopenedCard && onDispatch && canDispatch?.(order) ? (
+          <button
+            className="shrink-0 whitespace-nowrap rounded-xl bg-orange-600 px-2.5 py-1.5 text-[11px] font-semibold text-white"
+            onClick={() => onDispatch(order)}
+            type="button"
+          >
+            {t("派送")}
+          </button>
+        ) : null}
         {/* 返結卡（2026-10-17 J 要求）：「編輯」＝ 將張單載入點餐工作台，改價／加餐後重結。
             琥珀色同「已返結」靛藍藥丸區分，但又同去結帳深色掣唔同，避免撳錯。 */}
         {isReopenedCard ? (
@@ -403,6 +425,60 @@ export function QuickLocalOrdersStrip({
 }: QuickLocalOrdersStripProps) {
   const t = useT();
 
+  /**
+   * 外送派單（2026-10-31）。
+   *
+   * ⚠️ 一定要喺 `if (!hasOrders) return` **之前**呼叫（React hooks 規則）——
+   * 呢個面板經常用「冇單」狀態 render，放喺 early-return 之後會即刻爆
+   * "Rendered fewer hooks than expected"。
+   *
+   * 零 polling：同訂單頁兩個 panel 共用 module cache（60 秒）＋ inflight 去重，
+   * 所以快餐機同時開住訂單頁都唔會多打幾次 API。
+   */
+  const [storeId] = useState(() => loadAuthSession()?.merchantId ?? null);
+  const [operatorName] = useState(() => {
+    const session = loadAuthSession();
+    return session?.name ?? session?.account ?? null;
+  });
+  const canDispatchDelivery = useCanDispatchDelivery(storeId);
+  const dispatch = useDeliveryDispatch(storeId, { canDispatch: canDispatchDelivery });
+  const platformModes = usePlatformDeliveryModes(storeId, [
+    ...preparingOrders,
+    ...waitingOrders,
+    ...reopenedOrders,
+  ]);
+
+  function canDispatch(order: PosOrder) {
+    if (isPlatformOrderSource(order.source)) {
+      return dispatch.visible({
+        orderSource: "pos",
+        orderRef: order.id,
+        kind: "platform",
+        source: String(order.source),
+        mode: platformModes[order.id],
+        status: order.status,
+      }).visible;
+    }
+    return dispatch.visible({
+      orderSource: "pos",
+      orderRef: order.id,
+      kind: "local",
+      status: order.status,
+    }).visible;
+  }
+
+  function openDispatch(order: PosOrder) {
+    const isPlatform = isPlatformOrderSource(order.source);
+    dispatch.open({
+      orderSource: "pos",
+      orderRef: order.id,
+      orderNoSnapshot: order.localOrderNo,
+      platform: isPlatform ? (String(order.source) as "aomi" | "mfood") : null,
+      deliveryMode: isPlatform ? (platformModes[order.id] ?? "unknown") : "merchant",
+      totalMop: order.total,
+    });
+  }
+
   // 單一列、全部按單號由小到大：**唔分「製作中 / 待取餐」兩段**。
   // 分段的話，張單一撳「可取餐」就由左面彈去右面一段（即係「按狀態排」——
   // 狀態一改、位置就變，正是用家 2026-09-01 反映嘅問題）。
@@ -426,26 +502,38 @@ export function QuickLocalOrdersStrip({
   }
 
   return (
-    <div className="flex gap-2 overflow-x-auto pb-1 [-ms-overflow-style:none] [scrollbar-width:thin]">
-      {cards.map(({ order, mode }) => (
-        <OrderCard
-          key={order.id}
-          completeLabel={completeLabel}
-          completionLabel={completionLabel}
-          currency={currency}
-          focusKey={noticeFocus && noticeFocus.orderId === order.id ? noticeFocus.seq : null}
-          mode={mode}
-          onCheckout={onCheckout}
-          onConfirmSelfOrder={onConfirmSelfOrder}
-          onEditOrder={onEditOrder}
-          onMarkCompleted={onMarkCompleted}
-          onMarkReady={onMarkReady}
-          onRejectSelfOrder={onRejectSelfOrder}
-          onViewOrder={onViewOrder}
-          onVoidPlatformOrder={onVoidPlatformOrder}
-          order={order}
-        />
-      ))}
-    </div>
+    <>
+      <div className="flex gap-2 overflow-x-auto pb-1 [-ms-overflow-style:none] [scrollbar-width:thin]">
+        {cards.map(({ order, mode }) => (
+          <OrderCard
+            key={order.id}
+            canDispatch={canDispatch}
+            completeLabel={completeLabel}
+            completionLabel={completionLabel}
+            currency={currency}
+            focusKey={noticeFocus && noticeFocus.orderId === order.id ? noticeFocus.seq : null}
+            mode={mode}
+            onCheckout={onCheckout}
+            onConfirmSelfOrder={onConfirmSelfOrder}
+            onDispatch={openDispatch}
+            onEditOrder={onEditOrder}
+            onMarkCompleted={onMarkCompleted}
+            onMarkReady={onMarkReady}
+            onRejectSelfOrder={onRejectSelfOrder}
+            onViewOrder={onViewOrder}
+            onVoidPlatformOrder={onVoidPlatformOrder}
+            order={order}
+          />
+        ))}
+      </div>
+      {/* 派送彈窗掛喺 strip 外面 —— `fixed` 定位，唔會影響橫向滾動佈局 */}
+      <DeliveryDispatchModal
+        createdBy={operatorName}
+        onClose={dispatch.close}
+        onSaved={dispatch.onSaved}
+        storeId={storeId}
+        target={dispatch.target}
+      />
+    </>
   );
 }

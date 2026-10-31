@@ -1,0 +1,1704 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<title>外送（車手派單）— 實機確認稿 2026-10-31</title>
+<style>
+:root{
+  --s900:#0f172a;--s800:#1e293b;--s700:#334155;--s600:#475569;--s500:#64748b;--s400:#94a3b8;
+  --s300:#cbd5e1;--s200:#e2e8f0;--s100:#f1f5f9;--s50:#f8fafc;
+  --or50:#fff7ed;--or100:#ffedd5;--or200:#fed7aa;--or500:#f97316;--or600:#ea580c;--or700:#c2410c;
+  --am50:#fffbeb;--am100:#fef3c7;--am200:#fde68a;--am500:#f59e0b;--am600:#d97706;--am700:#b45309;--am800:#92400e;
+  --em50:#ecfdf5;--em100:#d1fae5;--em200:#a7f3d0;--em500:#10b981;--em600:#059669;--em700:#047857;
+  --ro50:#fff1f2;--ro200:#fecdd3;--ro600:#e11d48;--ro700:#be123c;
+  --sk50:#f0f9ff;--sk200:#bae6fd;--sk700:#0369a1;
+  --vi50:#f5f3ff;--vi200:#ddd6fe;--vi700:#6d28d9;
+  --ink:#0f172a;--muted:#64748b;--line:#e2e8f0;
+}
+*{box-sizing:border-box}
+body{margin:0;background:#eef2f6;color:var(--ink);
+  font-family:system-ui,-apple-system,"Segoe UI","Noto Sans TC","PingFang HK","Microsoft JhengHei",sans-serif;
+  -webkit-font-smoothing:antialiased}
+
+/* ── 評審列（唔屬產品介面） ─────────────────────────── */
+.review{background:#0f172a;color:#e2e8f0;padding:14px 20px 12px}
+.review h1{margin:0;font-size:15px;font-weight:600}
+.review p{margin:4px 0 0;font-size:12px;color:#94a3b8;line-height:1.7}
+.review .warn{color:#fbbf24}
+.review .ok{color:#34d399}
+.tabs{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.tabs button{border:1px solid #334155;background:#1e293b;color:#cbd5e1;border-radius:999px;
+  padding:6px 13px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit}
+.tabs button.on{background:#f97316;border-color:#f97316;color:#fff}
+.legend{display:flex;flex-wrap:wrap;gap:6px;margin-top:9px}
+.lg{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:600;
+  background:#fff7ed;color:#9a3412;border:1px solid #fed7aa;border-radius:999px;padding:3px 10px;line-height:1.5}
+.lg .n{width:16px;height:16px;border-radius:999px;background:#dc2626;color:#fff;
+  display:grid;place-items:center;font-size:10px;font-weight:700;flex:none}
+.lg.keep{background:#f0f9ff;border-color:#bae6fd;color:#075985}
+.lg.keep .n{background:#0ea5e9}
+
+/* ── 固定畫布 ─────────────────────────────────────── */
+.stage{width:1180px;max-width:100%;margin:16px auto 28px;position:relative;overflow:hidden;
+  border-radius:20px;background:#fff;box-shadow:0 1px 3px rgba(15,23,42,.12);height:820px}
+.canvas{width:1180px;height:820px;position:absolute;top:0;left:0;transform-origin:top left}
+.screen{display:none;height:820px;position:relative;background:#f1f5f9}
+.screen.on{display:block}
+
+/* ── 側欄 ─────────────────────────────────────────── */
+.shell{display:flex;height:820px;background:#f1f5f9}
+.side{width:72px;flex:none;background:#fff;border-right:1px solid var(--line);
+  display:flex;flex-direction:column;align-items:center;padding:11px 0 10px}
+.logo{width:38px;height:38px;border-radius:12px;background:var(--s900);color:#fff;
+  display:grid;place-items:center;font-size:11px;font-weight:800;letter-spacing:.5px;margin-bottom:9px}
+.nav{display:grid;gap:5px;justify-items:center;width:100%}
+.nav a{width:52px;padding:3px 0 4px;border-radius:11px;display:grid;justify-items:center;gap:2px;
+  color:var(--s600);text-decoration:none}
+.nav .ico{width:28px;height:28px;border-radius:9px;background:var(--s100);display:grid;place-items:center;
+  font-size:12px;font-weight:700;position:relative;color:var(--s600)}
+.nav .ico svg{width:15px;height:15px;display:block}
+.nav .lb{font-size:9px;font-weight:600;line-height:1.2;white-space:nowrap;text-align:center;min-width:100%}
+.nav a.on{background:var(--or50);color:var(--or600)}
+.nav a.on .ico{background:var(--or500);color:#fff}
+.dot{position:absolute;top:-4px;right:-5px;min-width:14px;height:14px;border-radius:999px;background:#dc2626;
+  color:#fff;font-size:8px;font-weight:800;display:grid;place-items:center;padding:0 3px;border:1.5px solid #fff}
+.sidefoot{margin-top:auto;display:grid;gap:5px;justify-items:center;width:100%}
+.sidefoot .mini{width:52px;padding:4px 0;border-radius:10px;display:grid;justify-items:center;gap:2px;
+  font-size:9px;font-weight:600;color:var(--s500);white-space:nowrap;line-height:1.2}
+.sidefoot .mini .ico{width:26px;height:26px;border-radius:8px;background:var(--s100);display:grid;place-items:center;
+  font-size:11px;font-weight:700}
+.sidefoot .mini.live{color:var(--em700)}
+.sidefoot .mini.live .ico{background:var(--em50);color:var(--em700)}
+
+/* ── 主區 ─────────────────────────────────────────── */
+.main{flex:1;min-width:0;display:flex;flex-direction:column;overflow:hidden}
+.hd{background:#fff;border-bottom:1px solid var(--line);padding:9px 14px;display:flex;align-items:center;
+  gap:10px;flex:none;min-height:62px}
+.hd .tl{min-width:0}
+.hd h2{margin:0;font-size:16px;font-weight:700;letter-spacing:.2px;display:flex;align-items:center;gap:7px}
+.hd .sub{font-size:11px;color:var(--muted);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hd .rt{margin-left:auto;display:flex;align-items:center;gap:6px;flex:none}
+.chips{display:flex;align-items:center;gap:5px;flex-wrap:wrap}
+.chip{font-size:11px;font-weight:600;padding:5px 9px;border-radius:999px;background:var(--s100);
+  color:var(--s700);white-space:nowrap;line-height:1.2}
+.chip.on{background:var(--or500);color:#fff}
+.chip .cnt{opacity:.75;margin-left:3px;font-variant-numeric:tabular-nums}
+
+/* ── 按鈕 ─────────────────────────────────────────── */
+.b{font-size:11px;font-weight:700;border-radius:10px;padding:7px 10px;border:0;white-space:nowrap;
+  line-height:1.2;font-family:inherit;display:inline-flex;align-items:center;gap:4px;justify-content:center}
+.b-dark{background:var(--s900);color:#fff}
+.b-or{background:var(--or500);color:#fff}
+.b-am{background:var(--am600);color:#fff}
+.b-em{background:var(--em600);color:#fff}
+.b-vi{background:#7c3aed;color:#fff}
+.b-ghost{background:#fff;color:var(--ink);box-shadow:inset 0 0 0 1px var(--s200)}
+.b-warn{background:var(--am50);color:var(--am700);box-shadow:inset 0 0 0 1px var(--am200)}
+.b:disabled,.b.off{opacity:.45}
+.b.lg{font-size:12px;padding:9px 14px;border-radius:12px}
+
+/* ── 訂單頁 ───────────────────────────────────────── */
+.cols{flex:1;display:flex;min-height:0}
+.col{flex:1;min-width:0;display:flex;flex-direction:column;min-height:0;overflow:hidden}
+.col+.col{border-left:1px solid var(--line);background:#fff}
+.colhd{flex:none;padding:10px 12px 0}
+.titlerow{display:flex;align-items:flex-start;gap:8px}
+.titlerow .nm{font-size:13px;font-weight:700}
+.titlerow .sm{font-size:10px;color:var(--muted);margin-top:2px}
+.pills{margin-left:auto;display:flex;gap:4px;flex:none}
+.pill{font-size:10px;font-weight:700;padding:4px 8px;border-radius:999px;display:inline-flex;
+  align-items:center;gap:4px;white-space:nowrap;line-height:1.2}
+.p-em{background:var(--em50);color:var(--em700)}
+.p-am{background:var(--am50);color:var(--am700)}
+.p-bl{background:var(--sk50);color:var(--sk700)}
+.p-ro{background:var(--ro50);color:var(--ro700)}
+.p-sl{background:var(--s100);color:var(--s600)}
+.p-vi{background:var(--vi50);color:var(--vi700)}
+.pd{width:5px;height:5px;border-radius:999px;background:currentColor;flex:none}
+.list{flex:1;min-height:0;padding:9px 12px;display:grid;gap:8px;align-content:start;overflow:hidden}
+.oc{border:1px solid var(--line);border-radius:14px;background:#fff;padding:9px 11px;
+  box-shadow:0 1px 2px rgba(15,23,42,.04);position:relative}
+.oc.hi{border-color:var(--or200);box-shadow:0 0 0 3px var(--or50)}
+.pin{position:absolute;top:-7px;left:-7px;width:18px;height:18px;border-radius:999px;background:#dc2626;color:#fff;
+  font-size:10px;font-weight:800;display:grid;place-items:center;box-shadow:0 0 0 2px #fff;z-index:3}
+.oc .r1{display:flex;align-items:center;gap:5px}
+.oc .code{font-size:15px;font-weight:700;letter-spacing:.2px}
+.tag{font-size:10px;font-weight:700;padding:2px 5px;border-radius:5px;background:var(--s100);color:var(--s600);white-space:nowrap}
+.tag.src{background:var(--sk50);color:var(--sk700)}
+.oc .who{font-size:11px;color:var(--s500);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.oc .time{font-size:10px;color:var(--s400);font-variant-numeric:tabular-nums;white-space:nowrap}
+.oc .r2{font-size:11px;color:var(--s500);margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.oc .r2b{font-size:11px;color:var(--am700);margin-top:3px;font-weight:600;display:flex;align-items:center;gap:4px}
+.oc .r3{display:flex;align-items:center;gap:5px;margin-top:7px}
+.amt{font-size:16px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1}
+.act{margin-left:auto;display:flex;gap:4px;align-items:center;flex-wrap:nowrap}
+
+/* ── 統計卡 ───────────────────────────────────────── */
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:0 14px 8px}
+.stat{background:#fff;border:1px solid var(--line);border-radius:12px;padding:7px 10px}
+.stat .k{font-size:10px;color:var(--muted);font-weight:600}
+.stat .v{font-size:17px;font-weight:800;margin-top:2px;font-variant-numeric:tabular-nums;line-height:1.1}
+.stat .v small{font-size:10px;font-weight:600;color:var(--muted);margin-left:2px}
+
+/* ── 外送列表 ─────────────────────────────────────── */
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:0 14px 12px;align-content:start}
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;padding:0 14px 10px;align-content:start}
+.dc{background:#fff;border:1px solid var(--line);border-radius:14px;padding:9px 11px;box-shadow:0 1px 2px rgba(15,23,42,.04)}
+.dc.alert{border-color:var(--ro200);background:var(--ro50)}
+.dc .r1{display:flex;align-items:center;gap:5px}
+.dc .r2{display:flex;align-items:center;gap:5px;margin-top:4px;font-size:11px;color:var(--s500)}
+.dc .r2 b{color:var(--s700);font-weight:700}
+.dc .r3{display:flex;align-items:center;gap:5px;margin-top:3px;font-size:11px;color:var(--s500)}
+.dc .r4{display:flex;align-items:center;gap:5px;margin-top:7px;padding-top:7px;border-top:1px dashed var(--s200)}
+.dc .driver{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--s600);min-width:0}
+.dc .driver .av{width:20px;height:20px;border-radius:999px;background:var(--em50);color:var(--em700);
+  display:grid;place-items:center;font-size:10px;font-weight:800;flex:none}
+.dc .eta{font-size:10px;font-weight:700;color:var(--em700);background:var(--em50);border-radius:999px;padding:2px 6px}
+.dc .eta.warn{color:var(--am700);background:var(--am50)}
+.unread{background:var(--ro600);color:#fff;border-radius:999px;font-size:9px;font-weight:800;
+  padding:1px 5px;line-height:1.4}
+
+/* ── 彈窗 ─────────────────────────────────────────── */
+.dim{position:absolute;inset:0;background:rgba(15,23,42,.42)}
+.modal{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:768px;max-height:748px;
+  background:#fff;border-radius:18px;overflow:hidden;display:flex;flex-direction:column;
+  box-shadow:0 24px 60px rgba(2,6,23,.35)}
+.mh{padding:13px 18px 11px;border-bottom:1px solid var(--line);display:flex;align-items:flex-start;gap:8px;flex:none}
+.mh h3{margin:0;font-size:17px;font-weight:700;display:flex;align-items:center;gap:7px}
+.mh .sm{font-size:11px;color:var(--muted);margin-top:3px}
+.mh .x{margin-left:auto;width:30px;height:30px;border-radius:9px;background:var(--s100);color:var(--s600);
+  display:grid;place-items:center;font-size:14px;font-weight:700;flex:none}
+.checkbar{display:flex;align-items:center;gap:6px;padding:8px 18px;background:var(--em50);
+  border-bottom:1px solid var(--em200);flex:none}
+.checkbar .t{font-size:11px;font-weight:800;color:var(--em700);white-space:nowrap}
+.ck{font-size:10px;font-weight:700;background:#fff;border:1px solid var(--em200);color:var(--em700);
+  border-radius:999px;padding:2px 7px;display:inline-flex;align-items:center;gap:3px;white-space:nowrap}
+.ck .tick{font-size:9px}
+.checkbar .hint{margin-left:auto;font-size:10px;color:var(--em700);opacity:.85;white-space:nowrap}
+.mb{padding:12px 18px 10px;display:grid;grid-template-columns:minmax(0,1fr) 286px;gap:14px;overflow:hidden}
+.mf{padding:10px 18px;border-top:1px solid var(--line);background:var(--s50);display:flex;
+  align-items:center;justify-content:space-between;gap:10px;flex:none}
+.mf .sum{font-size:11px;color:var(--s600)}
+.mf .sum b{font-size:14px;color:var(--ink)}
+.sect{font-size:11px;font-weight:800;color:var(--s700);letter-spacing:.4px;margin:0 0 7px;
+  display:flex;align-items:center;gap:5px}
+.sect .no{width:15px;height:15px;border-radius:999px;background:var(--s900);color:#fff;font-size:9px;
+  display:grid;place-items:center;flex:none}
+.bx{border:1px solid var(--line);border-radius:12px;padding:9px 10px;background:#fff}
+.bx.tint{background:var(--s50)}
+.bx.amber{background:var(--am50);border-color:var(--am200)}
+.f{margin-bottom:8px}
+.f:last-child{margin-bottom:0}
+.f label{font-size:10.5px;font-weight:700;color:var(--s500);display:block;margin-bottom:3px}
+.req{color:var(--ro600);margin-left:1px}
+.in{min-height:38px;border:1px solid var(--s200);border-radius:9px;display:flex;align-items:center;
+  padding:0 9px;font-size:12.5px;background:#fff;color:var(--ink);gap:6px}
+.in .ph{color:var(--s400)}
+.in.sel:after{content:"▾";margin-left:auto;color:var(--s400);font-size:10px}
+.in.area{min-height:42px;align-items:flex-start;padding:7px 9px;line-height:1.45}
+.in.ok{border-color:var(--em200);background:var(--em50)}
+.in.am{border-color:var(--am500);background:var(--am50)}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.seg{display:flex;gap:4px;background:var(--s100);border-radius:9px;padding:3px}
+.seg span{flex:1;text-align:center;font-size:10.5px;font-weight:700;padding:5px 4px;border-radius:7px;color:var(--s500);white-space:nowrap}
+.seg span.on{background:#fff;color:var(--ink);box-shadow:0 1px 2px rgba(15,23,42,.12)}
+.coord{display:inline-flex;align-items:center;gap:4px;font-size:10px;font-weight:700;color:var(--em700);
+  background:var(--em50);border-radius:999px;padding:2px 7px;white-space:nowrap}
+.coord.am{color:var(--am700);background:var(--am50)}
+.mini2{font-size:10px;color:var(--s400);margin-top:3px;line-height:1.45}
+.shopline{font-size:12px;font-weight:700}
+.shopmeta{font-size:10.5px;color:var(--s500);margin-top:3px;line-height:1.5}
+.items{display:grid;gap:4px;font-size:11px;color:var(--s600)}
+.items .li{display:flex;justify-content:space-between;gap:6px}
+.items .li b{font-weight:700;color:var(--ink);font-variant-numeric:tabular-nums}
+.tot{display:flex;justify-content:space-between;align-items:baseline;margin-top:6px;padding-top:6px;
+  border-top:1px dashed var(--s200)}
+.tot .l{font-size:10.5px;color:var(--s500)}
+.tot .v{font-size:15px;font-weight:800;font-variant-numeric:tabular-nums}
+
+/* ── 詳情頁 ───────────────────────────────────────── */
+.back{width:30px;height:30px;border-radius:9px;background:var(--s100);color:var(--s700);display:grid;
+  place-items:center;font-size:14px;font-weight:700;flex:none}
+.body2{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) 316px;gap:10px;padding:10px 14px 12px;overflow:hidden}
+.card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:10px 12px}
+.card+.card{margin-top:8px}
+.chd{display:flex;align-items:center;gap:6px;margin-bottom:8px}
+.chd .t{font-size:12px;font-weight:800}
+.chd .r{margin-left:auto;font-size:10px;color:var(--muted)}
+.tl{display:grid}
+.st{display:grid;grid-template-columns:18px 1fr;gap:8px;position:relative;padding-bottom:11px}
+.st:last-child{padding-bottom:0}
+.st:before{content:"";position:absolute;left:8px;top:18px;bottom:-2px;width:2px;background:var(--s200)}
+.st:last-child:before{display:none}
+.st .nd-dot{width:18px;height:18px;border-radius:999px;background:var(--s200);color:#fff;display:grid;
+  place-items:center;font-size:9px;font-weight:800;z-index:1}
+.st.done .nd-dot{background:var(--em600)}
+.st.now .nd-dot{background:var(--or500);box-shadow:0 0 0 4px var(--or100)}
+.st .tt{font-size:12px;font-weight:700;display:flex;align-items:center;gap:6px}
+.st.pending .tt{color:var(--s400)}
+.st .mm{font-size:10px;color:var(--muted);margin-top:1px}
+.st .hh{font-size:10px;color:var(--s400);font-variant-numeric:tabular-nums;margin-left:2px;font-weight:600}
+.kv{display:grid;grid-template-columns:64px 1fr;gap:5px 8px;font-size:11.5px}
+.kv .k{color:var(--s400);font-weight:600}
+.kv .v{color:var(--s700);font-weight:600}
+.driver{display:flex;align-items:center;gap:9px}
+.driver .av{width:38px;height:38px;border-radius:999px;background:var(--em50);color:var(--em700);
+  display:grid;place-items:center;font-size:15px;font-weight:800;flex:none}
+.driver .nm{font-size:13px;font-weight:800}
+.driver .mt{font-size:10.5px;color:var(--muted);margin-top:2px}
+.stars{color:var(--am600);font-size:10px;font-weight:700}
+.fee{display:flex;align-items:baseline;justify-content:space-between;font-size:11.5px;padding:3px 0}
+.fee .l{color:var(--s500)}
+.fee .v{font-weight:700;font-variant-numeric:tabular-nums}
+.fee.big .v{font-size:15px}
+.note{font-size:10px;color:var(--s400);line-height:1.5;margin-top:5px}
+.ops{display:flex;flex-wrap:wrap;gap:5px}
+.tabs2{display:flex;gap:4px;background:var(--s100);border-radius:10px;padding:3px;margin-left:6px}
+.tabs2 span{font-size:11px;font-weight:700;padding:5px 11px;border-radius:7px;color:var(--s500)}
+.tabs2 span.on{background:#fff;color:var(--ink);box-shadow:0 1px 2px rgba(15,23,42,.12)}
+.tabs2 .ub{background:var(--ro600);color:#fff;border-radius:999px;font-size:9px;padding:0 4px;margin-left:3px}
+
+/* ── 聊天 ─────────────────────────────────────────── */
+.chatwrap{display:flex;flex-direction:column;height:100%;min-height:0}
+.thread{flex:1;min-height:0;overflow:hidden;padding:4px 2px 0;display:flex;flex-direction:column;gap:9px;justify-content:flex-end}
+.day{align-self:center;font-size:9.5px;color:var(--s400);background:var(--s100);border-radius:999px;padding:2px 8px}
+.sys{align-self:center;font-size:10px;color:var(--s500);background:var(--s50);border:1px solid var(--s200);
+  border-radius:999px;padding:3px 9px}
+.msg{display:flex;gap:6px;max-width:86%}
+.msg .av{width:26px;height:26px;border-radius:999px;display:grid;place-items:center;font-size:10px;
+  font-weight:800;flex:none}
+.msg .who2{font-size:9.5px;color:var(--s400);margin-bottom:2px;display:flex;gap:4px;align-items:center}
+.bub{background:#fff;border:1px solid var(--s200);border-radius:11px;padding:6px 9px;font-size:11.5px;line-height:1.5}
+.msg.me{margin-left:auto;flex-direction:row-reverse}
+.msg.me .bub{background:var(--or500);border-color:var(--or500);color:#fff}
+.msg.me .who2{justify-content:flex-end}
+.av-c{background:#e0f2fe;color:#0369a1}
+.av-r{background:var(--am50);color:var(--am700)}
+.av-m{background:var(--or100);color:var(--or700)}
+.role{font-size:8.5px;font-weight:800;border-radius:4px;padding:0 3px}
+.role.r-c{background:#e0f2fe;color:#0369a1}
+.role.r-r{background:var(--am100);color:var(--am800)}
+.composer{flex:none;border-top:1px solid var(--line);padding-top:8px;margin-top:6px}
+.quick{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:6px}
+.quick span{font-size:10px;font-weight:700;color:var(--s600);background:var(--s100);border-radius:999px;padding:3px 8px}
+.composer .line{display:flex;gap:6px;align-items:center}
+.composer .inp{flex:1;min-height:38px;border:1px solid var(--s200);border-radius:10px;padding:0 10px;
+  display:flex;align-items:center;font-size:11.5px;color:var(--s400)}
+.att{width:38px;height:38px;border-radius:10px;background:var(--s100);display:grid;place-items:center;
+  font-size:14px;color:var(--s600);flex:none}
+
+/* ── 快餐點餐頁（底部訂單列） ─────────────────────── */
+.qmain{flex:1;min-height:0;display:grid;grid-template-columns:206px minmax(0,1fr) 252px;overflow:hidden}
+.qpane{min-width:0;min-height:0;overflow:hidden;display:flex;flex-direction:column}
+.qpane.cats{border-right:1px solid var(--line);background:#fff}
+.qpane.menu{background:var(--s50);padding:9px 10px}
+.qpane.cart{border-left:1px solid var(--line);background:#fff}
+.cat{display:flex;align-items:center;justify-content:space-between;gap:6px;padding:9px 12px;font-size:12px;font-weight:700;color:var(--s700);border-bottom:1px solid var(--s100)}
+.cat.on{background:var(--or50);color:var(--or700);box-shadow:inset 3px 0 0 var(--or500)}
+.cat .n{font-size:10px;font-weight:700;color:var(--s400)}
+.cat.on .n{color:var(--or600)}
+.mgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;align-content:start}
+.mi{background:#fff;border:1px solid var(--line);border-radius:12px;padding:8px 9px;min-height:74px;display:flex;flex-direction:column;justify-content:space-between}
+.mi .nm2{font-size:12px;font-weight:700;line-height:1.35}
+.mi .pr{font-size:12px;font-weight:800;color:var(--or700);font-variant-numeric:tabular-nums}
+.mi .out{font-size:9px;font-weight:800;color:var(--s400);background:var(--s100);border-radius:999px;padding:1px 5px;align-self:flex-start}
+.cart .ch{padding:9px 12px;border-bottom:1px solid var(--line)}
+.cart .ch .t{font-size:13px;font-weight:800}
+.cart .ch .s{font-size:10px;color:var(--muted);margin-top:2px}
+.cart .cl{flex:1;min-height:0;padding:8px 12px;display:flex;flex-direction:column;gap:7px;overflow:hidden}
+.cart .li2{display:flex;align-items:center;gap:6px;font-size:11.5px}
+.cart .li2 .q{font-size:11px;font-weight:800;color:var(--or700);background:var(--or50);border-radius:6px;padding:1px 5px}
+.cart .li2 .p{margin-left:auto;font-weight:700;font-variant-numeric:tabular-nums}
+.cart .cf{border-top:1px solid var(--line);padding:9px 12px}
+.qbar{flex:none;border-top:1px solid var(--line);background:#fff;box-shadow:0 -4px 20px rgba(15,23,42,.06);
+  padding:7px 12px 9px;display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.qsec{min-width:0}
+.qsechd{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}
+.qsechd .t{font-size:10px;font-weight:800;letter-spacing:.5px;color:var(--s500)}
+.qstrip{display:flex;gap:8px;overflow:hidden}
+.qc{position:relative;width:244px;height:176px;flex:none;border:1px solid var(--line);border-radius:14px;background:#fff;
+  padding:8px 10px;display:flex;flex-direction:column;box-shadow:0 1px 2px rgba(15,23,42,.04)}
+.qc .top{display:flex;justify-content:space-between;gap:6px;align-items:flex-start}
+.qc .no{font-size:13px;font-weight:800;line-height:1.2}
+.qc .meta{display:flex;gap:4px;margin-top:3px;align-items:center;flex-wrap:wrap}
+.qc .mid{flex:1;min-height:0;border-top:1px solid var(--s100);margin-top:6px;padding-top:5px;display:flex;flex-direction:column;gap:3px}
+.qc .items{font-size:10px;color:var(--s500);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.qc .money{font-size:14px;font-weight:800;text-align:right;font-variant-numeric:tabular-nums;margin-top:1px}
+.qc .drv{font-size:9.5px;font-weight:700;color:var(--em700);display:flex;align-items:center;gap:3px;white-space:nowrap;overflow:hidden}
+.qc .btns{display:flex;gap:4px;border-top:1px solid var(--s100);padding-top:6px;margin-top:auto}
+.qc .btns .b{font-size:10.5px;padding:6px 8px;border-radius:9px}
+
+/* ── 流程圖 ───────────────────────────────────────── */
+.lane{background:#fff;border:1px solid var(--line);border-radius:14px;padding:9px 11px}
+.lane+.lane{margin-top:8px}
+.lanehd{display:flex;align-items:center;gap:6px;margin-bottom:7px}
+.lanehd .t{font-size:12px;font-weight:800}
+.lanehd .bdg{font-size:9.5px;font-weight:800;border-radius:999px;padding:2px 7px}
+.lanehd .bdg.ok{background:var(--em50);color:var(--em700)}
+.lanehd .bdg.need{background:var(--am50);color:var(--am700)}
+.flow{display:flex;align-items:stretch;gap:0}
+.nd{flex:1;min-width:0;border:1px solid var(--s200);border-radius:10px;padding:6px 7px;background:var(--s50)}
+.nd .a{font-size:9px;font-weight:700;color:var(--or600)}
+.nd .b{font-size:11px;font-weight:700;margin-top:2px;line-height:1.35}
+.nd .c{font-size:9px;color:var(--s400);margin-top:2px;line-height:1.35}
+.nd.hot{background:var(--or50);border-color:var(--or200)}
+.nd.led{background:var(--sk50);border-color:var(--sk200)}
+.nd.done{background:var(--em50);border-color:var(--em200)}
+.ar{align-self:center;width:12px;text-align:center;color:var(--s400);font-size:11px;font-weight:800;flex:none}
+.tbl{width:100%;border-collapse:collapse;font-size:10.5px}
+.tbl th{text-align:left;font-size:9.5px;color:var(--s400);font-weight:700;padding:5px 6px;border-bottom:1px solid var(--s200)}
+.tbl td{padding:5px 6px;border-bottom:1px solid var(--s100);color:var(--s700)}
+.tbl td b{color:var(--ink)}
+.tbl tr:last-child td{border-bottom:0}
+.foot{font-size:10px;color:var(--s400);line-height:1.55;margin-top:6px}
+.warnbox{background:var(--am50);border:1px solid var(--am200);border-radius:10px;padding:7px 9px;
+  font-size:10.5px;color:var(--am800);line-height:1.55}
+</style>
+</head>
+<body>
+
+<!-- ══════════ 評審列 ══════════ -->
+<div class="review">
+  <h1>外送（車手派單）· 實機確認稿 v4 — 2026-10-31</h1>
+  <p>
+    <b style="color:#e2e8f0">「派送」以店內單為主</b>：堂食「外賣自送」枱、快餐 counter、自取單全部可以派；線上單<b style="color:#fbbf24">只有外送單</b>有派送；平台單<b style="color:#fbbf24">只限「商家自送／自取」</b>（平台專送冇掣，所以唔需要確認彈窗）。
+    單號一律照舊（取餐碼 018／外賣 003／澳覓 463403）。<span class="ok">線上外送單走 Ledger 原生派送</span>；<span class="warn">店內／平台單走外部派單，另加 pos_delivery_jobs 做關聯，連同 POS 聊天都要 Ledger 開 v3.6。</span>
+    快餐模式點餐頁底部嘅「線下訂單」列一樣有「派送」掣，開同一個彈窗（第 7 屏）。
+  </p>
+  <div class="tabs">
+    <button class="on" data-k="s1">1 · 訂單頁（入口）</button>
+    <button data-k="s2">2 · 派送彈窗</button>
+    <button data-k="s2b">3 · 平台單派送資格</button>
+    <button data-k="s3">4 · 外送 Tab 總覽</button>
+    <button data-k="s4">5 · 詳情 · 進度</button>
+    <button data-k="s5">6 · 詳情 · 訊息</button>
+    <button data-k="s7">7 · 快餐點餐頁（底部訂單列）</button>
+    <button data-k="s6">8 · 流程／狀態／資料表</button>
+  </div>
+  <div class="legend">
+    <span class="lg"><span class="n">1</span>側欄新增「外送」，帶待處理數字</span>
+    <span class="lg"><span class="n">2</span>店內單（含「外賣自送」枱）派送</span>
+    <span class="lg"><span class="n">3</span>平台單：專送冇派送，自送／自取先有</span>
+    <span class="lg"><span class="n">4</span>線上單：只有外送單有「派送」</span>
+    <span class="lg"><span class="n">5</span>已派單卡片直接見車手／ETA／未讀訊息</span>
+    <span class="lg keep"><span class="n">i</span>所有截圖係 1180×820 固定畫布，實際會自動縮放</span>
+  </div>
+</div>
+
+<div class="stage" id="stage">
+<div class="canvas" id="canvas">
+
+<!-- ══════════ S1 訂單頁 ══════════ -->
+<section class="screen on" data-k="s1">
+  <div class="shell">
+    <aside class="side">
+      <div class="logo">澳門</div>
+      <nav class="nav">
+        <a href="#"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3v8a3 3 0 0 0 6 0V3M10 11v10"/><path d="M17 3c-1.5 2-2 4-2 6s.5 3 2 3 2-1 2-3-.5-4-2-6zM17 12v9"/></svg></span><span class="lb">點餐</span></a>
+        <a href="#"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h9l3 3v15H6z"/><path d="M9 9h6M9 13h6M9 17h4"/></svg></span><span class="lb">訂單</span></a>
+        <a href="#" class="on"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h10v9H3z"/><path d="M13 10h4l3 3v3h-7z"/><circle cx="7" cy="18" r="1.7"/><circle cx="17" cy="18" r="1.7"/></svg><span class="dot">3</span></span><span class="lb">外送</span></a>
+        <a href="#"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.2"/><path d="M5 20c1.2-3.6 3.8-5.4 7-5.4s5.8 1.8 7 5.4"/></svg></span><span class="lb">會員</span></a>
+        <a href="#"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 8V3h10v5"/><rect x="4" y="8" width="16" height="7" rx="1.5"/><path d="M7 15h10v6H7z"/></svg></span><span class="lb">打印</span></a>
+        <a href="#"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V4"/><path d="M4 20h16"/><rect x="7" y="12" width="3" height="5"/><rect x="12" y="8" width="3" height="9"/><rect x="17" y="5" width="3" height="12"/></svg></span><span class="lb">報表</span></a>
+        <a href="#"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><path d="M8.6 8.6l6.8 6.8"/></svg></span><span class="lb">沽清</span></a>
+        <a href="#"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h13l-3-3M20 16H7l3 3"/></svg></span><span class="lb">交班</span></a>
+        <a href="#"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8l9-4 9 4-9 4-9-4z"/><path d="M3 8v8l9 4 9-4V8"/><path d="M12 12v8"/></svg></span><span class="lb">庫存</span></a>
+      </nav>
+      <div class="sidefoot">
+        <div class="mini live"><span class="ico">●</span><span>在線</span></div>
+        <div class="mini"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h4v16h-4"/><path d="M10 8l-4 4 4 4M6 12h8"/></svg></span><span>登出</span></div>
+        <div class="mini"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/></svg></span><span>設置</span></div>
+      </div>
+    </aside>
+
+    <div class="main">
+      <div class="hd">
+        <div class="tl">
+          <h2>訂單</h2>
+          <div class="sub">左：會員通線上訂單 · 右：店內線下訂單</div>
+        </div>
+        <div class="rt">
+          <div class="chips">
+            <span class="chip on">今天</span><span class="chip">昨天</span><span class="chip">7 天內</span>
+            <span class="chip">30 天</span><span class="chip">全部</span><span class="chip">自訂</span>
+          </div>
+          <span class="b b-dark">匯出線上單（87）</span>
+          <span class="b b-ghost">匯出線下單（13）</span>
+        </div>
+      </div>
+
+      <div class="cols">
+        <!-- 線上 -->
+        <div class="col">
+          <div class="colhd">
+            <div class="titlerow">
+              <div>
+                <div class="nm">線上訂單</div>
+                <div class="sm">今天 · 全部 · 共 87 張 · 新單 0 張</div>
+              </div>
+              <div class="pills">
+                <span class="pill p-em"><span class="pd"></span>接單中</span>
+                <span class="pill p-em"><span class="pd"></span>自動接單</span>
+              </div>
+            </div>
+            <div class="chips" style="margin-top:7px">
+              <span class="chip on">全部</span><span class="chip">堂食</span><span class="chip">外賣自取</span>
+              <span class="chip">外送</span>
+              <span class="b b-dark" style="margin-left:auto">手動刷新</span>
+            </div>
+          </div>
+          <div class="list">
+            <div class="oc">
+              <div class="r1">
+                <span class="code">取餐碼 018</span>
+                <span class="tag">外送</span>
+                <span class="who">陳小姐</span>
+                <span class="time" style="margin-left:auto">12:31</span>
+                <span class="pill p-vi"><span class="pd"></span>配送中</span>
+              </div>
+              <div class="r2">大麥克牛肉麵 ×1 等 3 項</div>
+              <div class="r2b"><span>🛵</span>車手 李師傅 · 已取貨 12:41 · ETA 8 分鐘</div>
+              <div class="r3">
+                <span class="amt">MOP 158.00</span>
+                <span class="pill p-em">已支付（到店付款）</span>
+                <div class="act">
+                  <span class="b b-dark">查看</span>
+                  <span class="b b-warn">催單</span>
+                  <span class="b b-ghost">聊天 <b class="unread">2</b></span>
+                </div>
+              </div>
+            </div>
+
+            <div class="oc hi">
+              <div class="r1">
+                <span class="code">取餐碼 021</span>
+                <span class="tag">外送</span>
+                <span class="who">黃先生</span>
+                <span class="time" style="margin-left:auto">12:27</span>
+                <span class="pill p-am"><span class="pd"></span>待派單</span>
+              </div>
+              <div class="r2">人氣半筋半肉麵 ×2</div>
+              <div class="r2b"><span>⚠</span>未派車手 — 已等 15 分鐘</div>
+              <div class="r3">
+                <span class="amt">MOP 126.00</span>
+                <span class="pill p-am">未支付（到店付款）</span>
+                <div class="act">
+                  <span class="b b-dark">查看</span>
+                  <span class="b b-or">派送</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="oc">
+              <span class="pin">4</span>
+              <div class="r1">
+                <span class="code">取餐碼 002</span>
+                <span class="tag">外賣自取</span>
+                <span class="who">梁先生</span>
+                <span class="time" style="margin-left:auto">12:20</span>
+                <span class="pill p-em"><span class="pd"></span>待取餐</span>
+              </div>
+              <div class="r2">大麥克牛肉麵 ×1</div>
+              <div class="r3">
+                <span class="amt">MOP 104.00</span>
+                <span class="pill p-em">已支付（到店付款）</span>
+                <div class="act">
+                  <span class="b b-dark">查看</span>
+                  <span class="b b-am">返結</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="oc">
+              <div class="r1">
+                <span class="code">取餐碼 011</span>
+                <span class="tag">外送</span>
+                <span class="who">何小姐</span>
+                <span class="time" style="margin-left:auto">12:06</span>
+                <span class="pill p-em"><span class="pd"></span>已完成</span>
+              </div>
+              <div class="r2">人氣半筋半肉麵 ×1</div>
+              <div class="r3">
+                <span class="amt">MOP 74.70</span>
+                <span class="pill p-em">已支付（到店付款）</span>
+                <div class="act">
+                  <span class="b b-dark">查看</span>
+                  <span class="b b-am">返結</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 線下 -->
+        <div class="col">
+          <div class="colhd">
+            <div class="titlerow">
+              <div>
+                <div class="nm">店內線下訂單</div>
+                <div class="sm">今天 · 全部 · 共 13 張</div>
+              </div>
+              <div class="pills">
+                <span class="pill p-em"><span class="pd"></span>營業中</span>
+                <span class="pill p-em"><span class="pd"></span>自動接單</span>
+              </div>
+            </div>
+            <div class="chips" style="margin-top:7px">
+              <span class="chip on">全部</span><span class="chip">製作中</span><span class="chip">待取餐</span>
+              <span class="chip">已完成</span><span class="chip">已返結</span><span class="chip">已取消</span>
+            </div>
+          </div>
+          <div class="list">
+            <div class="oc">
+              <div class="r1">
+                <span class="code">外賣 003</span>
+                <span class="tag">外賣</span>
+                <span class="who">3 項</span>
+                <span class="time" style="margin-left:auto">12:36</span>
+                <span class="pill p-am"><span class="pd"></span>製作中</span>
+              </div>
+              <div class="r2">大麥克牛肉麵 ×1 等 3 項</div>
+              <div class="r2b"><span>⚠</span>未派車手 — 未有送貨地址</div>
+              <div class="r3">
+                <span class="amt">MOP 128.00</span>
+                <span class="pill p-sl">未結帳</span>
+                <div class="act">
+                  <span class="b b-dark">查看</span>
+                  <span class="b b-or">派送</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="oc">
+              <span class="pin">5</span>
+              <div class="r1">
+                <span class="code">外賣 004</span>
+                <span class="tag">外賣</span>
+                <span class="who">張先生</span>
+                <span class="time" style="margin-left:auto">12:18</span>
+                <span class="pill p-em"><span class="pd"></span>已收款</span>
+              </div>
+              <div class="r2">人氣半筋半肉麵 ×2 等 4 項</div>
+              <div class="r2b" style="color:var(--em700)"><span>🛵</span>已派送 · 車手 周師傅前往取貨中</div>
+              <div class="r3">
+                <span class="amt">MOP 156.00</span>
+                <span class="pill p-em">已收款</span>
+                <div class="act">
+                  <span class="b b-dark">查看</span>
+                  <span class="b b-ghost">聊天</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="oc hi">
+              <span class="pin">2</span>
+              <div class="r1">
+                <span class="code">A02</span>
+                <span class="tag" style="background:var(--am50);color:var(--am700)">堂食 · 外賣自送</span>
+                <span class="who">陳小姐</span>
+                <span class="time" style="margin-left:auto">12:22</span>
+                <span class="pill p-am"><span class="pd"></span>製作中</span>
+              </div>
+              <div class="r2">大麥克牛肉麵 ×1 等 3 項</div>
+              <div class="r2b"><span>⚠</span>未派車手 — 客人要送上門</div>
+              <div class="r3">
+                <span class="amt">MOP 128.00</span>
+                <span class="pill p-sl">未結帳</span>
+                <div class="act">
+                  <span class="b b-dark">查看</span>
+                  <span class="b b-or">派送</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="oc">
+              <span class="pin">3</span>
+              <div class="r1">
+                <span class="code">澳覓 463403</span>
+                <span class="tag" style="background:var(--am50);color:var(--am700)">平台 · 專送</span>
+                <span class="who">陳先生</span>
+                <span class="time" style="margin-left:auto">12:33</span>
+                <span class="pill p-am"><span class="pd"></span>製作中</span>
+              </div>
+              <div class="r2">大麥克牛肉麵 ×2 等 2 項</div>
+              <div class="r2b" style="color:var(--s500)"><span>🛵</span>平台專送 — 平台自己派車手，冇派送掣</div>
+              <div class="r3">
+                <span class="amt">MOP 172.00</span>
+                <span class="pill p-sl">未結帳</span>
+                <div class="act">
+                  <span class="b b-dark">查看</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════ S2 派單彈窗 ══════════ -->
+<section class="screen" data-k="s2">
+  <div class="shell">
+    <aside class="side">
+      <div class="logo">澳門</div>
+      <nav class="nav">
+        <a href="#"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3v8a3 3 0 0 0 6 0V3M10 11v10"/><path d="M17 3c-1.5 2-2 4-2 6s.5 3 2 3 2-1 2-3-.5-4-2-6zM17 12v9"/></svg></span><span class="lb">點餐</span></a>
+        <a href="#" class="on"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h9l3 3v15H6z"/><path d="M9 9h6M9 13h6M9 17h4"/></svg></span><span class="lb">訂單</span></a>
+        <a href="#"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h10v9H3z"/><path d="M13 10h4l3 3v3h-7z"/><circle cx="7" cy="18" r="1.7"/><circle cx="17" cy="18" r="1.7"/></svg><span class="dot">3</span></span><span class="lb">外送</span></a>
+        <a href="#"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.2"/><path d="M5 20c1.2-3.6 3.8-5.4 7-5.4s5.8 1.8 7 5.4"/></svg></span><span class="lb">會員</span></a>
+        <a href="#"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 8V3h10v5"/><rect x="4" y="8" width="16" height="7" rx="1.5"/><path d="M7 15h10v6H7z"/></svg></span><span class="lb">打印</span></a>
+        <a href="#"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V4"/><path d="M4 20h16"/><rect x="7" y="12" width="3" height="5"/><rect x="12" y="8" width="3" height="9"/><rect x="17" y="5" width="3" height="12"/></svg></span><span class="lb">報表</span></a>
+        <a href="#"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><path d="M8.6 8.6l6.8 6.8"/></svg></span><span class="lb">沽清</span></a>
+        <a href="#"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h13l-3-3M20 16H7l3 3"/></svg></span><span class="lb">交班</span></a>
+        <a href="#"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8l9-4 9 4-9 4-9-4z"/><path d="M3 8v8l9 4 9-4V8"/><path d="M12 12v8"/></svg></span><span class="lb">庫存</span></a>
+      </nav>
+      <div class="sidefoot">
+        <div class="mini live"><span class="ico">●</span><span>在線</span></div>
+        <div class="mini"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h4v16h-4"/><path d="M10 8l-4 4 4 4M6 12h8"/></svg></span><span>登出</span></div>
+        <div class="mini"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/></svg></span><span>設置</span></div>
+      </div>
+    </aside>
+
+    <div class="main">
+      <div class="hd">
+        <div class="tl"><h2>訂單</h2><div class="sub">左：會員通線上訂單 · 右：店內線下訂單</div></div>
+      </div>
+      <div style="flex:1;padding:12px 14px;display:grid;gap:8px;align-content:start">
+        <div class="oc" style="opacity:.55"><div class="r1"><span class="code">A02</span><span class="tag">堂食 · 外賣自送</span><span class="time" style="margin-left:auto">12:22</span></div><div class="r2">大麥克牛肉麵 ×1 等 2 項</div></div>
+        <div class="oc" style="opacity:.4"><div class="r1"><span class="code">外賣 004</span><span class="tag">外賣</span><span class="time" style="margin-left:auto">12:18</span></div><div class="r2">人氣半筋半肉麵 ×2 等 4 項</div></div>
+        <div class="oc" style="opacity:.25"><div class="r1"><span class="code">澳覓 463403</span><span class="tag">平台</span><span class="time" style="margin-left:auto">12:33</span></div><div class="r2">大麥克牛肉麵 ×2 等 2 項</div></div>
+      </div>
+      <div class="dim"></div>
+
+      <div class="modal">
+        <div class="mh">
+          <div>
+            <h3>外送派單 <span class="tag" style="background:var(--am50);color:var(--am700)">堂食 · 外賣自送</span></h3>
+            <div class="sm">A02 · 大麥克牛肉麵 ×1 等 3 項 · MOP 128.00　<span style="color:var(--s400)">單號照舊（A02），唔會改成「外送 xxx」</span></div>
+          </div>
+          <span class="x">✕</span>
+        </div>
+
+        <div class="checkbar">
+          <span class="t">必填 5 項 · 已填 5</span>
+          <span class="ck"><span class="tick">✓</span>電話</span>
+          <span class="ck"><span class="tick">✓</span>地址</span>
+          <span class="ck"><span class="tick">✓</span>座標</span>
+          <span class="ck"><span class="tick">✓</span>時間</span>
+          <span class="ck"><span class="tick">✓</span>車手費</span>
+          <span class="hint">缺任何一項會轉琥珀色並列出</span>
+        </div>
+
+        <div class="mb">
+          <!-- 左欄 -->
+          <div>
+            <div class="sect"><span class="no">1</span>取貨 · 本店（自動帶入）</div>
+            <div class="bx tint" style="margin-bottom:10px">
+              <div style="display:flex;align-items:flex-start;gap:6px">
+                <div style="min-width:0">
+                  <div class="shopline">好味茶餐廳</div>
+                  <div class="shopmeta">澳門新馬路 123 號地下 · 2833 1234</div>
+                </div>
+                <span class="coord" style="margin-left:auto">座標 ✓</span>
+              </div>
+              <div class="mini2">車手會用店鋪座標導航；如未設定，派單會被擋並提示去「設置 › 店鋪資料」補齊。</div>
+            </div>
+
+            <div class="sect"><span class="no">2</span>送貨 · 客人</div>
+            <div class="row2">
+              <div class="f">
+                <label>收件人</label>
+                <div class="in">陳小姐</div>
+              </div>
+              <div class="f">
+                <label>電話<span class="req">＊</span></label>
+                <div class="in ok">6612 3456</div>
+              </div>
+            </div>
+            <div class="f">
+              <label>送貨地址<span class="req">＊</span></label>
+              <div class="in ok">黑沙環中街 88 號 金海山花園 5 樓 A</div>
+            </div>
+            <div class="f">
+              <div style="display:flex;align-items:center;gap:6px">
+                <span class="b b-ghost">📍 地圖定位</span>
+                <span class="coord">22.2001, 113.5483 ✓</span>
+                <span class="mini2" style="margin:0">車手導航必需</span>
+              </div>
+            </div>
+            <div class="f">
+              <label>地址標籤</label>
+              <div class="chips">
+                <span class="chip on">住宅</span><span class="chip">公司</span><span class="chip">酒店</span><span class="chip">其他</span>
+              </div>
+            </div>
+            <div class="f">
+              <label>送貨備註</label>
+              <div class="in area">管理處交收，到達請致電 6612 3456</div>
+            </div>
+
+            <div class="bx tint" style="margin-top:2px">
+              <div style="display:flex;align-items:center;gap:5px">
+                <span style="font-size:10.5px;font-weight:800;color:var(--s700)">車手會見到</span>
+                <span class="mini2" style="margin:0 0 0 auto">只顯示送貨所需資料</span>
+              </div>
+              <div class="mini2" style="margin-top:4px;color:var(--s500);line-height:1.6">
+                陳小姐 · 6612 3456<br>
+                黑沙環中街 88 號 金海山花園 5 樓 A<br>
+                管理處交收，到達請致電
+              </div>
+            </div>
+          </div>
+
+          <!-- 右欄 -->
+          <div>
+            <div class="sect"><span class="no">3</span>時間</div>
+            <div class="bx" style="margin-bottom:10px">
+              <div class="seg"><span class="on">即時送出</span><span>預約</span></div>
+              <div class="mini2">即時單：車手接單後約 25–35 分鐘送達。預約單須填送達時間。</div>
+            </div>
+
+            <div class="sect"><span class="no">4</span>車手費</div>
+            <div class="bx" style="margin-bottom:10px">
+              <div class="f">
+                <label>派送費</label>
+                <div class="in sel">MOP 30</div>
+              </div>
+              <div class="f">
+                <label>邊個付</label>
+                <div class="seg"><span class="on">商戶支付</span><span>客人支付</span></div>
+              </div>
+              <div class="mini2">車手費不計入營業額；「客人支付」即車手送達時向客人收取。</div>
+            </div>
+
+            <div class="sect"><span class="no">5</span>代收貨款</div>
+            <div class="bx" style="margin-bottom:10px">
+              <div style="display:flex;align-items:center;gap:8px">
+                <span class="seg" style="flex:none;padding:3px"><span class="on" style="padding:4px 9px">需要</span><span style="padding:4px 9px">不需要</span></span>
+                <span class="amt" style="margin-left:auto;font-size:14px">MOP 128.00</span>
+              </div>
+              <div class="mini2">店內單預設「需要」＝貨到付款；平台單會預設「不需要」（客人已喺平台付款）。</div>
+            </div>
+
+            <div class="sect">訂單摘要</div>
+            <div class="bx tint">
+              <div class="items">
+                <div class="li"><span>大麥克牛肉麵</span><b>×1</b></div>
+                <div class="li"><span>人氣半筋半肉麵</span><b>×1</b></div>
+                <div class="li"><span>凍檸茶</span><b>×1</b></div>
+              </div>
+              <div class="tot"><span class="l">客付合計（貨到付款）</span><span class="v">MOP 128.00</span></div>
+              <div class="mini2">單號 A02 會一齊送去，車手對單用。</div>
+            </div>
+          </div>
+        </div>
+
+        <div style="padding:0 18px 9px">
+          <div class="warnbox" style="background:var(--sk50);border-color:var(--sk200);color:var(--sk700)">
+            <b>A02 係「外賣自送」枱。</b>派送成功後張枱仍然開住 —— 記得返 POS 結帳／完成 A02，唔係張枱會一直佔用。
+          </div>
+        </div>
+
+        <div class="mf">
+          <div class="sum">車手費 <b>MOP 30</b> · 商戶支付　<span style="color:var(--s400)">|</span>　代收貨款 MOP 128　<span style="color:var(--s400)">|</span>　送達證明自動回傳</div>
+          <div style="display:flex;gap:6px">
+            <span class="b b-ghost lg">取消</span>
+            <span class="b b-or lg">確認派單</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════ S2b 平台單確認 ══════════ -->
+<section class="screen" data-k="s2b">
+  <div class="shell">
+    <aside class="side">
+      <div class="logo">澳門</div>
+      <nav class="nav">
+        <a href="#"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3v8a3 3 0 0 0 6 0V3M10 11v10"/><path d="M17 3c-1.5 2-2 4-2 6s.5 3 2 3 2-1 2-3-.5-4-2-6zM17 12v9"/></svg></span><span class="lb">點餐</span></a>
+        <a href="#" class="on"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h9l3 3v15H6z"/><path d="M9 9h6M9 13h6M9 17h4"/></svg></span><span class="lb">訂單</span></a>
+        <a href="#"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h10v9H3z"/><path d="M13 10h4l3 3v3h-7z"/><circle cx="7" cy="18" r="1.7"/><circle cx="17" cy="18" r="1.7"/></svg><span class="dot">3</span></span><span class="lb">外送</span></a>
+        <a href="#"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.2"/><path d="M5 20c1.2-3.6 3.8-5.4 7-5.4s5.8 1.8 7 5.4"/></svg></span><span class="lb">會員</span></a>
+        <a href="#"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 8V3h10v5"/><rect x="4" y="8" width="16" height="7" rx="1.5"/><path d="M7 15h10v6H7z"/></svg></span><span class="lb">打印</span></a>
+        <a href="#"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V4"/><path d="M4 20h16"/><rect x="7" y="12" width="3" height="5"/><rect x="12" y="8" width="3" height="9"/><rect x="17" y="5" width="3" height="12"/></svg></span><span class="lb">報表</span></a>
+        <a href="#"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><path d="M8.6 8.6l6.8 6.8"/></svg></span><span class="lb">沽清</span></a>
+        <a href="#"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h13l-3-3M20 16H7l3 3"/></svg></span><span class="lb">交班</span></a>
+        <a href="#"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8l9-4 9 4-9 4-9-4z"/><path d="M3 8v8l9 4 9-4V8"/><path d="M12 12v8"/></svg></span><span class="lb">庫存</span></a>
+      </nav>
+      <div class="sidefoot">
+        <div class="mini live"><span class="ico">●</span><span>在線</span></div>
+        <div class="mini"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h4v16h-4"/><path d="M10 8l-4 4 4 4M6 12h8"/></svg></span><span>登出</span></div>
+        <div class="mini"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/></svg></span><span>設置</span></div>
+      </div>
+    </aside>
+
+    <div class="main">
+      <div class="hd">
+        <div class="tl">
+          <h2>平台單 · 幾時有「派送」</h2>
+          <div class="sub">只有「商家自送」同「自取」才有派送；平台專送（平台自己派車手）唔會有掣，所以唔需要確認彈窗</div>
+        </div>
+        <div class="rt">
+          <span class="pill p-sl"><span class="pd"></span>判斷自插件原始 payload</span>
+        </div>
+      </div>
+
+      <div style="padding-top:9px">
+        <div class="grid3">
+          <div class="dc" style="padding:11px 12px">
+            <div class="r1"><span class="code">澳覓 463403</span>
+              <span class="pill p-sl" style="margin-left:auto"><span class="pd"></span>專送</span></div>
+            <div class="r2"><b>陳先生</b> · 6688 1234 · 黑沙環</div>
+            <div class="r3">大麥克牛肉麵 ×2 等 2 項 · MOP 172.00</div>
+            <div class="r3" style="color:var(--s400)">sendType = 專送 · sendFee 12.00</div>
+            <div class="r4">
+              <div class="driver" style="color:var(--s500)">平台自己派車手</div>
+            </div>
+            <div style="margin-top:8px;display:flex;gap:5px;align-items:center">
+              <span class="b b-ghost" style="flex:1">查看</span>
+              <span style="font-size:10px;color:var(--s400);white-space:nowrap">冇派送掣</span>
+            </div>
+          </div>
+
+          <div class="dc" style="padding:11px 12px;border-color:var(--em200);background:var(--em50)">
+            <div class="r1"><span class="code">mfood #1857</span>
+              <span class="pill p-em" style="margin-left:auto"><span class="pd"></span>商家自送</span></div>
+            <div class="r2"><b>李小姐</b> · 6612 7788 · 氹仔</div>
+            <div class="r3">人氣半筋半肉麵 ×1 等 2 項 · MOP 96.00</div>
+            <div class="r3" style="color:var(--em700)">deliveryType = 2 · 平台唔會派</div>
+            <div class="r4">
+              <div class="driver" style="color:var(--em700)">要自己安排車手</div>
+            </div>
+            <div style="margin-top:8px;display:flex;gap:5px">
+              <span class="b b-ghost" style="flex:1">查看</span>
+              <span class="b b-or" style="flex:1">派送</span>
+            </div>
+          </div>
+
+          <div class="dc" style="padding:11px 12px">
+            <div class="r1"><span class="code">mfood #1109</span>
+              <span class="pill p-bl" style="margin-left:auto"><span class="pd"></span>自取</span></div>
+            <div class="r2"><b>黃先生</b> · 6633 2211 · 新口岸</div>
+            <div class="r3">大麥克牛肉麵 ×1 · MOP 58.00</div>
+            <div class="r3" style="color:var(--sk700)">deliveryType = 3 · 客人自己嚟拎</div>
+            <div class="r4">
+              <div class="driver">客人臨時改送貨 → 用得着</div>
+            </div>
+            <div style="margin-top:8px;display:flex;gap:5px">
+              <span class="b b-ghost" style="flex:1">查看</span>
+              <span class="b b-or" style="flex:1">派送</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="lane" style="margin:0 14px 8px">
+          <div class="lanehd">
+            <span class="t">判斷流程</span>
+            <span class="bdg ok">fail-closed：唔肯定就唔畀派</span>
+          </div>
+          <div class="flow">
+            <div class="nd"><div class="a">① 收到平台單</div><div class="b">讀 raw payload</div><div class="c">澳覓 sendType／MFOOD deliveryType</div></div>
+            <div class="ar">›</div>
+            <div class="nd"><div class="a">② 平台配送</div><div class="b">專送 ／ 1</div><div class="c">平台自己派 → 冇派送掣</div></div>
+            <div class="ar">›</div>
+            <div class="nd hot"><div class="a">③ 商家自送</div><div class="b">自送 ／ 2</div><div class="c">有派送掣</div></div>
+            <div class="ar">›</div>
+            <div class="nd"><div class="a">④ 自取</div><div class="b">自取 ／ 3</div><div class="c">有派送掣（客人臨時要送）</div></div>
+            <div class="ar">›</div>
+            <div class="nd"><div class="a">⑤ 未知／舊單</div><div class="b">冇呢個欄位</div><div class="c">一律當冇派送</div></div>
+          </div>
+        </div>
+
+        <div class="lane" style="margin:0 14px 8px">
+          <div class="lanehd"><span class="t">對照表</span><span class="mini2" style="margin:0 0 0 auto">欄位缺失／未見過嘅值 → 當「未知」</span></div>
+          <table class="tbl">
+            <thead>
+              <tr><th style="width:12%">平台</th><th style="width:20%">raw 欄位</th><th style="width:18%">值</th><th style="width:22%">POS 顯示</th><th>派送</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>澳覓</td><td>sendType</td><td>專送</td><td>專送</td><td style="color:var(--s400)">✗ 平台配送</td></tr>
+              <tr><td>澳覓</td><td>sendType</td><td>自送</td><td>商家自送</td><td style="color:var(--em700)">✓</td></tr>
+              <tr><td>澳覓</td><td>sendType</td><td>自取</td><td>自取</td><td style="color:var(--em700)">✓</td></tr>
+              <tr><td>MFOOD</td><td>deliveryType</td><td>1</td><td>平台配送</td><td style="color:var(--s400)">✗ 平台配送</td></tr>
+              <tr><td>MFOOD</td><td>deliveryType</td><td>2</td><td>商家自送</td><td style="color:var(--em700)">✓</td></tr>
+              <tr><td>MFOOD</td><td>deliveryType</td><td>3</td><td>自取</td><td style="color:var(--em700)">✓</td></tr>
+              <tr><td>任何</td><td>欄位缺失／其他值</td><td>—</td><td>未知</td><td style="color:var(--s400)">✗ fail-closed</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="lane" style="margin:0 14px">
+          <div class="lanehd"><span class="t">實測同要注意</span></div>
+          <div class="foot" style="margin:0">
+            最近 5 張平台單：澳覓 <b>sendType</b> 只見過「專送」；MFOOD <b>deliveryType</b> 見過 <b>1</b>（deliveryFee 12.5–12.6）同 <b>3</b>（deliveryFee 0）。
+            <b>2 未見過</b>；2／3 邊個係自送、邊個係自取未 100% 確認 —— 但兩者都係「平台唔派」，所以都照樣有派送掣，只影響標籤文字。上線前要同平台／插件作者確認枚舉。
+            專送單如果真係要自己送，應該先喺平台改配送方式，POS 唔提供繞過 —— 否則兩邊都會派車手。
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════ S3 外送總覽 ══════════ -->
+<section class="screen" data-k="s3">
+  <div class="shell">
+    <aside class="side">
+      <div class="logo">澳門</div>
+      <nav class="nav">
+        <a href="#"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3v8a3 3 0 0 0 6 0V3M10 11v10"/><path d="M17 3c-1.5 2-2 4-2 6s.5 3 2 3 2-1 2-3-.5-4-2-6zM17 12v9"/></svg></span><span class="lb">點餐</span></a>
+        <a href="#"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h9l3 3v15H6z"/><path d="M9 9h6M9 13h6M9 17h4"/></svg></span><span class="lb">訂單</span></a>
+        <a href="#" class="on"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h10v9H3z"/><path d="M13 10h4l3 3v3h-7z"/><circle cx="7" cy="18" r="1.7"/><circle cx="17" cy="18" r="1.7"/></svg><span class="dot">3</span></span><span class="lb">外送</span></a>
+        <a href="#"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.2"/><path d="M5 20c1.2-3.6 3.8-5.4 7-5.4s5.8 1.8 7 5.4"/></svg></span><span class="lb">會員</span></a>
+        <a href="#"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 8V3h10v5"/><rect x="4" y="8" width="16" height="7" rx="1.5"/><path d="M7 15h10v6H7z"/></svg></span><span class="lb">打印</span></a>
+        <a href="#"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V4"/><path d="M4 20h16"/><rect x="7" y="12" width="3" height="5"/><rect x="12" y="8" width="3" height="9"/><rect x="17" y="5" width="3" height="12"/></svg></span><span class="lb">報表</span></a>
+        <a href="#"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><path d="M8.6 8.6l6.8 6.8"/></svg></span><span class="lb">沽清</span></a>
+        <a href="#"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h13l-3-3M20 16H7l3 3"/></svg></span><span class="lb">交班</span></a>
+        <a href="#"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8l9-4 9 4-9 4-9-4z"/><path d="M3 8v8l9 4 9-4V8"/><path d="M12 12v8"/></svg></span><span class="lb">庫存</span></a>
+      </nav>
+      <div class="sidefoot">
+        <div class="mini live"><span class="ico">●</span><span>在線</span></div>
+        <div class="mini"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h4v16h-4"/><path d="M10 8l-4 4 4 4M6 12h8"/></svg></span><span>登出</span></div>
+        <div class="mini"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/></svg></span><span>設置</span></div>
+      </div>
+    </aside>
+
+    <div class="main">
+      <div class="hd">
+        <div class="tl">
+          <h2>外送</h2>
+          <div class="sub">今日 · 共 12 張 · 待接單 2 · 配送中 3 · 已送達 7</div>
+        </div>
+        <div class="rt">
+          <span class="pill p-em"><span class="pd"></span>在線車手 6</span>
+          <span class="b b-ghost">重新整理</span>
+          <span class="b b-or">＋ 派單</span>
+        </div>
+      </div>
+
+      <div style="padding-top:9px">
+        <div class="stats">
+          <div class="stat"><div class="k">等待車手接單</div><div class="v" style="color:var(--am700)">2 <small>張</small></div></div>
+          <div class="stat"><div class="k">配送中</div><div class="v" style="color:var(--vi700)">3 <small>張</small></div></div>
+          <div class="stat"><div class="k">今日平均送達</div><div class="v">28 <small>分鐘</small></div></div>
+          <div class="stat"><div class="k">車手費支出</div><div class="v">210 <small>MOP</small></div></div>
+        </div>
+
+        <div class="chips" style="padding:0 14px 8px">
+          <span class="chip on">全部<span class="cnt">12</span></span>
+          <span class="chip">待派單<span class="cnt">2</span></span>
+          <span class="chip">待接單<span class="cnt">1</span></span>
+          <span class="chip">前往取貨<span class="cnt">1</span></span>
+          <span class="chip">配送中<span class="cnt">3</span></span>
+          <span class="chip">已送達<span class="cnt">4</span></span>
+          <span class="chip" style="background:var(--ro50);color:var(--ro700)">有問題<span class="cnt">1</span></span>
+        </div>
+
+        <div class="grid2">
+          <div class="dc">
+            <div class="r1"><span class="code">取餐碼 018</span><span class="tag">外送</span><span class="tag src">線上</span>
+              <span class="pill p-vi" style="margin-left:auto"><span class="pd"></span>配送中</span></div>
+            <div class="r2"><b>陳小姐</b> · 6612 3456 · 黑沙環</div>
+            <div class="r3">大麥克牛肉麵 ×1 等 3 項 · MOP 158.00</div>
+            <div class="r4">
+              <div class="driver"><span class="av">李</span>李師傅 · 電單車 · 12:41 已取貨</div>
+              <span class="eta">ETA 8 分鐘</span>
+              <span class="unread" style="margin-left:auto">2</span>
+              <span class="b b-ghost">查看</span>
+            </div>
+          </div>
+
+          <div class="dc">
+            <div class="r1"><span class="code">取餐碼 021</span><span class="tag">外送</span><span class="tag src">線上</span>
+              <span class="pill p-am" style="margin-left:auto"><span class="pd"></span>待接單</span></div>
+            <div class="r2"><b>黃先生</b> · 6688 1020 · 氹仔</div>
+            <div class="r3">人氣半筋半肉麵 ×2 · MOP 126.00</div>
+            <div class="r4">
+              <div class="driver">等待車手接單 · 已 15 分鐘</div>
+              <span class="eta warn">已催 1 次</span>
+              <span class="b b-warn" style="margin-left:auto">催單</span>
+              <span class="b b-ghost">查看</span>
+            </div>
+          </div>
+
+          <div class="dc">
+            <div class="r1"><span class="code">外賣 004</span><span class="tag">外賣</span><span class="tag">店內</span>
+              <span class="pill p-bl" style="margin-left:auto"><span class="pd"></span>前往取貨</span></div>
+            <div class="r2"><b>張先生</b> · 6612 8899 · 高士德</div>
+            <div class="r3">人氣半筋半肉麵 ×2 等 4 項 · MOP 156.00</div>
+            <div class="r4">
+              <div class="driver"><span class="av">周</span>周師傅 · 電單車 · 預計 12:58 到店</div>
+              <span class="b b-ghost" style="margin-left:auto">查看</span>
+            </div>
+          </div>
+
+          <div class="dc">
+            <div class="r1"><span class="code">取餐碼 023</span><span class="tag">外送</span><span class="tag src">線上</span>
+              <span class="pill p-am" style="margin-left:auto"><span class="pd"></span>待派單</span></div>
+            <div class="r2"><b>李小姐</b> · 6222 3311 · 新口岸</div>
+            <div class="r3">大麥克牛肉麵 ×1 · MOP 88.00</div>
+            <div class="r4">
+              <div class="driver" style="color:var(--am700)">⚠ 未派車手 — 已等 5 分鐘</div>
+              <span class="b b-or" style="margin-left:auto">派送</span>
+              <span class="b b-ghost">查看</span>
+            </div>
+          </div>
+
+          <div class="dc">
+            <div class="r1"><span class="code">取餐碼 017</span><span class="tag">外送</span><span class="tag src">線上</span>
+              <span class="pill p-em" style="margin-left:auto"><span class="pd"></span>已送達</span></div>
+            <div class="r2"><b>何先生</b> · 6333 7788 · 黑沙環</div>
+            <div class="r3">大麥克牛肉麵 ×2 · MOP 88.00</div>
+            <div class="r4">
+              <div class="driver"><span class="av">陳</span>陳師傅 · 12:18 已送達 · 有送達相</div>
+              <span class="b b-ghost" style="margin-left:auto">查看</span>
+            </div>
+          </div>
+
+          <div class="dc alert">
+            <div class="r1"><span class="code">取餐碼 019</span><span class="tag">外送</span><span class="tag src">線上</span>
+              <span class="pill p-ro" style="margin-left:auto"><span class="pd"></span>有問題</span></div>
+            <div class="r2"><b>梁小姐</b> · 6655 0099 · 沙梨頭</div>
+            <div class="r3">大麥克牛肉麵 ×3 · MOP 162.00</div>
+            <div class="r4">
+              <div class="driver" style="color:var(--ro700)">車手回報：客人電話無人接聽 · 12:52</div>
+              <span class="b b-dark" style="margin-left:auto">處理</span>
+            </div>
+          </div>
+
+          <div class="dc">
+            <div class="r1"><span class="code">澳覓 463403</span><span class="tag" style="background:var(--am50);color:var(--am700)">平台</span><span class="tag">澳覓</span>
+              <span class="pill p-am" style="margin-left:auto"><span class="pd"></span>待派單</span></div>
+            <div class="r2"><b>陳先生</b> · 6688 1234 · 地址待補</div>
+            <div class="r3">大麥克牛肉麵 ×2 等 2 項 · MOP 172.00</div>
+            <div class="r4">
+              <div class="driver" style="color:var(--am700)">⚠ 平台冇地址 — 要手動填先派得</div>
+              <span class="b b-or" style="margin-left:auto">派送</span>
+            </div>
+          </div>
+
+          <div class="dc">
+            <div class="r1"><span class="code">B05</span><span class="tag">堂食 · 外賣自送</span><span class="tag">店內</span>
+              <span class="pill p-em" style="margin-left:auto"><span class="pd"></span>已送達</span></div>
+            <div class="r2"><b>陳小姐</b> · 6612 3456 · 黑沙環</div>
+            <div class="r3">大麥克牛肉麵 ×1 等 2 項 · MOP 128.00</div>
+            <div class="r4">
+              <div class="driver"><span class="av">黃</span>黃師傅 · 11:58 已送達 · 代收 MOP 128</div>
+              <span class="b b-ghost" style="margin-left:auto">查看</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════ S4 詳情 · 進度 ══════════ -->
+<section class="screen" data-k="s4">
+  <div class="shell">
+    <aside class="side">
+      <div class="logo">澳門</div>
+      <nav class="nav">
+        <a href="#"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3v8a3 3 0 0 0 6 0V3M10 11v10"/><path d="M17 3c-1.5 2-2 4-2 6s.5 3 2 3 2-1 2-3-.5-4-2-6zM17 12v9"/></svg></span><span class="lb">點餐</span></a>
+        <a href="#"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h9l3 3v15H6z"/><path d="M9 9h6M9 13h6M9 17h4"/></svg></span><span class="lb">訂單</span></a>
+        <a href="#" class="on"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h10v9H3z"/><path d="M13 10h4l3 3v3h-7z"/><circle cx="7" cy="18" r="1.7"/><circle cx="17" cy="18" r="1.7"/></svg><span class="dot">3</span></span><span class="lb">外送</span></a>
+        <a href="#"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.2"/><path d="M5 20c1.2-3.6 3.8-5.4 7-5.4s5.8 1.8 7 5.4"/></svg></span><span class="lb">會員</span></a>
+        <a href="#"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 8V3h10v5"/><rect x="4" y="8" width="16" height="7" rx="1.5"/><path d="M7 15h10v6H7z"/></svg></span><span class="lb">打印</span></a>
+        <a href="#"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V4"/><path d="M4 20h16"/><rect x="7" y="12" width="3" height="5"/><rect x="12" y="8" width="3" height="9"/><rect x="17" y="5" width="3" height="12"/></svg></span><span class="lb">報表</span></a>
+        <a href="#"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><path d="M8.6 8.6l6.8 6.8"/></svg></span><span class="lb">沽清</span></a>
+        <a href="#"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h13l-3-3M20 16H7l3 3"/></svg></span><span class="lb">交班</span></a>
+        <a href="#"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8l9-4 9 4-9 4-9-4z"/><path d="M3 8v8l9 4 9-4V8"/><path d="M12 12v8"/></svg></span><span class="lb">庫存</span></a>
+      </nav>
+      <div class="sidefoot">
+        <div class="mini live"><span class="ico">●</span><span>在線</span></div>
+        <div class="mini"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h4v16h-4"/><path d="M10 8l-4 4 4 4M6 12h8"/></svg></span><span>登出</span></div>
+        <div class="mini"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/></svg></span><span>設置</span></div>
+      </div>
+    </aside>
+
+    <div class="main">
+      <div class="hd">
+        <span class="back">←</span>
+        <div class="tl">
+          <h2>A02 <span class="tag" style="background:var(--am50);color:var(--am700)">堂食 · 外賣自送</span><span class="pill p-vi"><span class="pd"></span>配送中</span></h2>
+          <div class="sub">店內單 · 陳小姐 · 12:22 落單 · 車手李師傅已取貨</div>
+        </div>
+        <div class="rt">
+          <div class="tabs2"><span class="on">進度</span><span>訊息<span class="ub">2</span></span></div>
+          <span class="b b-ghost">同步狀態</span>
+        </div>
+      </div>
+
+      <div class="body2">
+        <div>
+          <div class="card">
+            <div class="chd"><span class="t">配送進度</span><span class="r">最後更新 12:41</span></div>
+            <div class="tl">
+              <div class="st done"><span class="nd-dot">✓</span><div><div class="tt">已派單 <span class="hh">12:33</span></div><div class="mm">商家喺 POS 派送 · 車手費 MOP 30</div></div></div>
+              <div class="st done"><span class="nd-dot">✓</span><div><div class="tt">車手已接單 <span class="hh">12:35</span></div><div class="mm">李師傅 · 電單車 MB-12-34</div></div></div>
+              <div class="st done"><span class="nd-dot">✓</span><div><div class="tt">車手到店 <span class="hh">12:39</span></div><div class="mm">車手喺櫃檯等取餐</div></div></div>
+              <div class="st done"><span class="nd-dot">✓</span><div><div class="tt">已取貨 <span class="hh">12:41</span></div><div class="mm">已核對 3 件 · 送往黑沙環</div></div></div>
+              <div class="st now"><span class="nd-dot">→</span><div><div class="tt">配送中 <span class="hh">ETA 12:56</span></div><div class="mm">距客人 1.8 公里</div></div></div>
+              <div class="st pending"><span class="nd-dot">6</span><div><div class="tt">已送達</div><div class="mm">車手上傳送達相 ＋ 代收確認；張枱／結帳仍然要 POS 自己做</div></div></div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="chd"><span class="t">送貨資料</span><span class="r">由派送彈窗填寫</span></div>
+            <div class="kv">
+              <span class="k">地址</span><span class="v">黑沙環中街 88 號 金海山花園 5 樓 A（住宅）</span>
+              <span class="k">電話</span><span class="v">6612 3456</span>
+              <span class="k">備註</span><span class="v">管理處交收，到達請致電</span>
+              <span class="k">座標</span><span class="v">22.2001, 113.5483 <span class="coord" style="margin-left:4px">已定位</span></span>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="chd"><span class="t">訂單明細</span><span class="r">共 3 件</span></div>
+            <div class="items">
+              <div class="li"><span>大麥克牛肉麵 ×1</span><b>58.00</b></div>
+              <div class="li"><span>人氣半筋半肉麵 ×1</span><b>48.00</b></div>
+              <div class="li"><span>凍檸茶 ×1</span><b>22.00</b></div>
+            </div>
+            <div class="tot"><span class="l">客付（貨到付款，由車手代收）</span><span class="v">MOP 128.00</span></div>
+          </div>
+
+          <div class="card">
+            <div class="chd"><span class="t">送達證明</span><span class="r">車手上傳 · 保留 24 小時</span></div>
+            <div style="border:1px dashed var(--s300);border-radius:10px;padding:10px;text-align:center;color:var(--s400);font-size:10.5px">
+              送達後顯示車手上傳嘅相片同簽收時間
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <div class="card">
+            <div class="chd"><span class="t">車手</span><span class="r">★ 4.9 · 1,284 單</span></div>
+            <div class="driver">
+              <span class="av">李</span>
+              <div>
+                <div class="nm">李師傅</div>
+                <div class="mt">電單車 · MB-12-34 · 6612 8899</div>
+              </div>
+            </div>
+            <div class="ops" style="margin-top:8px">
+              <span class="b b-ghost" style="flex:1">致電</span>
+              <span class="b b-dark" style="flex:1">訊息</span>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="chd"><span class="t">費用</span></div>
+            <div class="fee"><span class="l">車手費（商戶付）</span><span class="v">MOP 30.00</span></div>
+            <div class="fee"><span class="l">車手代收（貨到付款）</span><span class="v">MOP 128.00</span></div>
+            <div class="fee big" style="border-top:1px dashed var(--s200);margin-top:4px;padding-top:6px">
+              <span class="l">車手交回店鋪</span><span class="v">MOP 128.00</span>
+            </div>
+            <div class="note">代收款由車手交回；車手費 30 由店鋪支出，唔計入營業額。</div>
+          </div>
+
+          <div class="card">
+            <div class="chd"><span class="t">操作</span></div>
+            <div class="ops">
+              <span class="b b-warn">催單</span>
+              <span class="b b-ghost">加價 ▾ 35</span>
+              <span class="b b-ghost" style="color:var(--ro700);box-shadow:inset 0 0 0 1px var(--ro200)">取消派送</span>
+            </div>
+            <div class="ops" style="margin-top:6px">
+              <span class="b b-or" style="flex:1">去結帳／完成 A02</span>
+            </div>
+            <div class="note">派送唔會自動完成張枱 —— 送達後要返 POS 結帳，A02 先會釋放；快餐單就撳「完成」。</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════ S5 詳情 · 訊息 ══════════ -->
+<section class="screen" data-k="s5">
+  <div class="shell">
+    <aside class="side">
+      <div class="logo">澳門</div>
+      <nav class="nav">
+        <a href="#"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3v8a3 3 0 0 0 6 0V3M10 11v10"/><path d="M17 3c-1.5 2-2 4-2 6s.5 3 2 3 2-1 2-3-.5-4-2-6zM17 12v9"/></svg></span><span class="lb">點餐</span></a>
+        <a href="#"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h9l3 3v15H6z"/><path d="M9 9h6M9 13h6M9 17h4"/></svg></span><span class="lb">訂單</span></a>
+        <a href="#" class="on"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h10v9H3z"/><path d="M13 10h4l3 3v3h-7z"/><circle cx="7" cy="18" r="1.7"/><circle cx="17" cy="18" r="1.7"/></svg><span class="dot">3</span></span><span class="lb">外送</span></a>
+        <a href="#"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.2"/><path d="M5 20c1.2-3.6 3.8-5.4 7-5.4s5.8 1.8 7 5.4"/></svg></span><span class="lb">會員</span></a>
+        <a href="#"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 8V3h10v5"/><rect x="4" y="8" width="16" height="7" rx="1.5"/><path d="M7 15h10v6H7z"/></svg></span><span class="lb">打印</span></a>
+        <a href="#"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V4"/><path d="M4 20h16"/><rect x="7" y="12" width="3" height="5"/><rect x="12" y="8" width="3" height="9"/><rect x="17" y="5" width="3" height="12"/></svg></span><span class="lb">報表</span></a>
+        <a href="#"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><path d="M8.6 8.6l6.8 6.8"/></svg></span><span class="lb">沽清</span></a>
+        <a href="#"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h13l-3-3M20 16H7l3 3"/></svg></span><span class="lb">交班</span></a>
+        <a href="#"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8l9-4 9 4-9 4-9-4z"/><path d="M3 8v8l9 4 9-4V8"/><path d="M12 12v8"/></svg></span><span class="lb">庫存</span></a>
+      </nav>
+      <div class="sidefoot">
+        <div class="mini live"><span class="ico">●</span><span>在線</span></div>
+        <div class="mini"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h4v16h-4"/><path d="M10 8l-4 4 4 4M6 12h8"/></svg></span><span>登出</span></div>
+        <div class="mini"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/></svg></span><span>設置</span></div>
+      </div>
+    </aside>
+
+    <div class="main">
+      <div class="hd">
+        <span class="back">←</span>
+        <div class="tl">
+          <h2>取餐碼 018 <span class="tag">外送</span><span class="pill p-vi"><span class="pd"></span>配送中</span></h2>
+          <div class="sub">訊息房間：客人 · 商家 · 車手（同一個 thread）</div>
+        </div>
+        <div class="rt">
+          <div class="tabs2"><span>進度</span><span class="on">訊息<span class="ub">2</span></span></div>
+        </div>
+      </div>
+
+      <div class="body2">
+        <div class="card" style="display:flex;flex-direction:column;min-height:0">
+          <div class="chatwrap">
+            <div class="chd" style="margin-bottom:6px">
+              <span class="t">對話</span>
+              <span class="chip" style="padding:2px 7px;font-size:10px">全部</span>
+              <span class="chip" style="padding:2px 7px;font-size:10px">客人 3</span>
+              <span class="chip" style="padding:2px 7px;font-size:10px">車手 2</span>
+              <span class="r" style="margin-left:auto">15 秒增量，唔輪詢</span>
+            </div>
+
+            <div class="thread">
+              <span class="day">今天 12:35</span>
+              <span class="sys">車手 李師傅 已接單</span>
+
+              <div class="msg">
+                <span class="av av-c">客</span>
+                <div>
+                  <div class="who2"><span class="role r-c">客人</span>陳小姐 · 12:36</div>
+                  <div class="bub">唔好意思，可唔可以幫我放喺管理處？</div>
+                </div>
+              </div>
+
+              <div class="msg me">
+                <span class="av av-m">商</span>
+                <div>
+                  <div class="who2"><span class="role" style="background:var(--or100);color:var(--or700)">商家</span>12:36</div>
+                  <div class="bub">好的，已通知車手放管理處。</div>
+                </div>
+              </div>
+
+              <div class="msg">
+                <span class="av av-r">車</span>
+                <div>
+                  <div class="who2"><span class="role r-r">車手</span>李師傅 · 12:39</div>
+                  <div class="bub">收到，我而家喺樓下，5 分鐘到櫃檯。</div>
+                </div>
+              </div>
+
+              <div class="msg me">
+                <span class="av av-m">商</span>
+                <div>
+                  <div class="who2"><span class="role" style="background:var(--or100);color:var(--or700)">商家</span>12:40</div>
+                  <div class="bub">已出餐，車手可到櫃檯取。</div>
+                </div>
+              </div>
+
+              <div class="msg">
+                <span class="av av-r">車</span>
+                <div>
+                  <div class="who2"><span class="role r-r">車手</span>李師傅 · 12:41</div>
+                  <div class="bub">已取貨，出發 🛵</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="composer">
+              <div class="quick">
+                <span>已出餐，可到櫃檯取</span><span>請稍等 5 分鐘</span><span>已放管理處</span><span>麻煩致電客人</span>
+              </div>
+              <div class="line">
+                <span class="att">＋</span>
+                <div class="inp">輸入訊息…（客人同車手都會見到）</div>
+                <span class="b b-or lg">發送</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <div class="card">
+            <div class="chd"><span class="t">車手</span><span class="r">★ 4.9</span></div>
+            <div class="driver">
+              <span class="av">李</span>
+              <div>
+                <div class="nm">李師傅</div>
+                <div class="mt">電單車 · MB-12-34</div>
+              </div>
+            </div>
+            <div class="ops" style="margin-top:8px">
+              <span class="b b-ghost" style="flex:1">致電 6612 8899</span>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="chd"><span class="t">訂單摘要</span></div>
+            <div class="items">
+              <div class="li"><span>大麥克牛肉麵 ×1</span><b>58.00</b></div>
+              <div class="li"><span>人氣半筋半肉麵 ×1</span><b>48.00</b></div>
+              <div class="li"><span>凍檸茶 ×1</span><b>22.00</b></div>
+            </div>
+            <div class="tot"><span class="l">客付（含外送費）</span><span class="v">MOP 158.00</span></div>
+          </div>
+
+          <div class="warnbox">
+            店內單（B 線）冇客人聊天室 —— 客人唔係會員通用戶，只可以同車手對話。想同客人對話，要先有會員通訂單。
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════ S6 流程／狀態 ══════════ -->
+<section class="screen" data-k="s6">
+  <div class="shell">
+    <aside class="side">
+      <div class="logo">澳門</div>
+      <nav class="nav">
+        <a href="#"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3v8a3 3 0 0 0 6 0V3M10 11v10"/><path d="M17 3c-1.5 2-2 4-2 6s.5 3 2 3 2-1 2-3-.5-4-2-6zM17 12v9"/></svg></span><span class="lb">點餐</span></a>
+        <a href="#"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h9l3 3v15H6z"/><path d="M9 9h6M9 13h6M9 17h4"/></svg></span><span class="lb">訂單</span></a>
+        <a href="#" class="on"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h10v9H3z"/><path d="M13 10h4l3 3v3h-7z"/><circle cx="7" cy="18" r="1.7"/><circle cx="17" cy="18" r="1.7"/></svg><span class="dot">3</span></span><span class="lb">外送</span></a>
+        <a href="#"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.2"/><path d="M5 20c1.2-3.6 3.8-5.4 7-5.4s5.8 1.8 7 5.4"/></svg></span><span class="lb">會員</span></a>
+        <a href="#"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 8V3h10v5"/><rect x="4" y="8" width="16" height="7" rx="1.5"/><path d="M7 15h10v6H7z"/></svg></span><span class="lb">打印</span></a>
+        <a href="#"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V4"/><path d="M4 20h16"/><rect x="7" y="12" width="3" height="5"/><rect x="12" y="8" width="3" height="9"/><rect x="17" y="5" width="3" height="12"/></svg></span><span class="lb">報表</span></a>
+        <a href="#"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><path d="M8.6 8.6l6.8 6.8"/></svg></span><span class="lb">沽清</span></a>
+        <a href="#"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h13l-3-3M20 16H7l3 3"/></svg></span><span class="lb">交班</span></a>
+        <a href="#"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8l9-4 9 4-9 4-9-4z"/><path d="M3 8v8l9 4 9-4V8"/><path d="M12 12v8"/></svg></span><span class="lb">庫存</span></a>
+      </nav>
+      <div class="sidefoot">
+        <div class="mini live"><span class="ico">●</span><span>在線</span></div>
+        <div class="mini"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h4v16h-4"/><path d="M10 8l-4 4 4 4M6 12h8"/></svg></span><span>登出</span></div>
+        <div class="mini"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/></svg></span><span>設置</span></div>
+      </div>
+    </aside>
+
+    <div class="main">
+      <div class="hd">
+        <div class="tl">
+          <h2>外送 · 流程同狀態對照</h2>
+          <div class="sub">A 線＝線上外送單（Ledger 原生）；B 線＝店內／平台單（外部派單，多一張 pos_delivery_jobs 做關聯）</div>
+        </div>
+      </div>
+
+      <div style="flex:1;min-height:0;padding:10px 14px;display:grid;gap:8px;align-content:start">
+        <div class="lane">
+          <div class="lanehd">
+            <span class="t">A 線 · 線上外送單</span>
+            <span class="bdg ok">Ledger 已有</span>
+            <span class="mini2" style="margin:0 0 0 auto">房間＝orders.id（客人＋車手）</span>
+          </div>
+          <div class="flow">
+            <div class="nd"><div class="a">來源</div><div class="b">會員通外送單</div><div class="c">fulfillment_type = merchant_delivery；其他類型冇派送</div></div>
+            <div class="ar">›</div>
+            <div class="nd hot"><div class="a">POS</div><div class="b">派送（同一個彈窗）</div><div class="c">揀車手費 + 邊個付</div></div>
+            <div class="ar">›</div>
+            <div class="nd led"><div class="a">Ledger</div><div class="b">order_delivery_dispatch</div><div class="c">記錄 status / fee / fee_paid_by</div></div>
+            <div class="ar">›</div>
+            <div class="nd"><div class="a">SiteB</div><div class="b">車手 App 接單</div><div class="c">接單／取貨／送達證明</div></div>
+            <div class="ar">›</div>
+            <div class="nd done"><div class="a">Callback</div><div class="b">回寫 orders.status</div><div class="c">picked_up → delivering<br>delivered → completed</div></div>
+            <div class="ar">›</div>
+            <div class="nd"><div class="a">POS</div><div class="b">Realtime 更新</div><div class="c">進度／聊天／完成</div></div>
+          </div>
+        </div>
+
+        <div class="lane">
+          <div class="lanehd">
+            <span class="t">B 線 · 店內單（堂食「外賣自送」枱／快餐／自取）＋平台單</span>
+            <span class="bdg need">要 Ledger v3.6 外部派單</span>
+            <span class="mini2" style="margin:0 0 0 auto">房間＝ext-{dispatchId}（只有車手）</span>
+          </div>
+          <div class="flow">
+            <div class="nd"><div class="a">來源</div><div class="b">外賣 003／A02 外賣自送／mfood 自送</div><div class="c">平台單只限自送／自取；專送冇掣</div></div>
+            <div class="ar">›</div>
+            <div class="nd hot"><div class="a">POS</div><div class="b">派送彈窗</div><div class="c">地址／電話／座標／車手費／代收</div></div>
+            <div class="ar">›</div>
+            <div class="nd led"><div class="a">Ledger</div><div class="b">merchant_external_dispatches</div><div class="c">外部派單（現時畀澳覓／MFood 用）</div></div>
+            <div class="ar">›</div>
+            <div class="nd"><div class="a">SiteB</div><div class="b">車手 App 接單</div><div class="c">同 A 線同一套</div></div>
+            <div class="ar">›</div>
+            <div class="nd done"><div class="a">Callback</div><div class="b">回寫 dispatch 狀態</div><div class="c">唔涉及 orders.status</div></div>
+            <div class="ar">›</div>
+            <div class="nd"><div class="a">POS</div><div class="b">外送 Tab 更新</div><div class="c">只可同車手聊天</div></div>
+          </div>
+        </div>
+
+        <div class="lane">
+          <div class="lanehd">
+            <span class="t">POS 新增一張表 · pos_delivery_jobs（外送）</span>
+            <span class="bdg ok">唔改 pos_orders</span>
+            <span class="mini2" style="margin:0 0 0 auto">一單一筆</span>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:3px 16px;font-size:10.5px;color:var(--s600);line-height:1.65">
+            <div><b>關聯</b>　order_source（ledger／pos）＋ order_ref（orders.id ／ pos_orders.id）＋ order_no_snapshot</div>
+            <div><b>派單</b>　provider · provider_order_id · ledger_dispatch_id · status · last_event / last_payload</div>
+            <div><b>送貨快照</b>　customer_name / phone / address / lat / lng / note · cod_amount_avos（暫不清除）</div>
+            <div><b>錢同審計</b>　fee_amount_avos · fee_paid_by · created_by · created_at / delivered_at</div>
+          </div>
+        </div>
+
+        <div class="card" style="padding:8px 10px">
+          <table class="tbl">
+            <thead>
+              <tr><th style="width:22%">POS 顯示</th><th style="width:20%">SiteB 狀態</th><th style="width:26%">Ledger orders.status</th><th>邊個觸發</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><b>待派單</b></td><td>—（未建單）</td><td>accepted / preparing / ready</td><td>商家未撳「派送」</td></tr>
+              <tr><td><b>待車手接單</b></td><td>new</td><td>不變</td><td>商家派送</td></tr>
+              <tr><td><b>車手已接單</b></td><td>accepted</td><td>不變</td><td>車手 App</td></tr>
+              <tr><td><b>前往取貨</b></td><td>accepted（未取貨）</td><td>不變</td><td>車手 App</td></tr>
+              <tr><td><b>已取貨／配送中</b></td><td>picked_up / arrived_customer</td><td><b>delivering</b></td><td>車手 App → callback</td></tr>
+              <tr><td><b>已送達</b></td><td>delivered（須送達證明）</td><td><b>completed</b></td><td>車手 App → callback</td></tr>
+              <tr><td><b>已取消</b></td><td>canceled</td><td>delivering → ready（未取件則不變）</td><td>商家／車手／後台</td></tr>
+              <tr><td><b>配送失敗</b></td><td>failed</td><td>delivering → ready</td><td>車手回報</td></tr>
+            </tbody>
+          </table>
+          <div class="foot">
+            ⚠️ 兩個要留意嘅斷點：<b>arrived_customer 只有 callback 事件、SiteB DB 唔會寫</b>（POS 唔應該等呢個狀態）；
+            <b>「已到店」冇獨立狀態</b>，只能由事件時間軸推斷。兩者都唔影響主流程，但 UI 唔可以當成必有狀態。
+            另外 <b>B 線唔會改 orders.status</b> —— 店內／平台單幾時完成、幾時結帳，照舊由 POS 自己控制，派送狀態只係額外一層。
+            <b>堂食「外賣自送」枱派送完，張枱仍然開住</b>：要返 POS 結帳先會釋放，所以確認派送時會提一次。
+          </div>
+        </div>
+
+        <div class="warnbox">
+          <b>要 Ledger 開嘅嘢（v3.6）：</b>① 4 支 POS 派送 endpoint（派送／取消／催單／加價，內部照抄現有 Server Action）
+          ② 2 支聊天 RPC 加白名單（list / post）
+          ③ 外部派單建立 endpoint（店內／平台單用）。
+          <b>唔使改狀態機</b> —— A 線只做 merchant_delivery，Ledger 現有守衛原封不動。
+          今日契約 §1.2／§5.5.3／驗收 §9-10 明文寫住「SiteB 派送、訂單聊天」係契約外。
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════ S7 快餐點餐頁（底部訂單列） ══════════ -->
+<section class="screen" data-k="s7">
+  <div class="shell">
+    <aside class="side">
+      <div class="logo">澳門</div>
+      <nav class="nav">
+        <a href="#" class="on"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3v8a3 3 0 0 0 6 0V3M10 11v10"/><path d="M17 3c-1.5 2-2 4-2 6s.5 3 2 3 2-1 2-3-.5-4-2-6zM17 12v9"/></svg></span><span class="lb">點餐</span></a>
+        <a href="#"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h9l3 3v15H6z"/><path d="M9 9h6M9 13h6M9 17h4"/></svg></span><span class="lb">訂單</span></a>
+        <a href="#"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h10v9H3z"/><path d="M13 10h4l3 3v3h-7z"/><circle cx="7" cy="18" r="1.7"/><circle cx="17" cy="18" r="1.7"/></svg><span class="dot">3</span></span><span class="lb">外送</span></a>
+        <a href="#"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.2"/><path d="M5 20c1.2-3.6 3.8-5.4 7-5.4s5.8 1.8 7 5.4"/></svg></span><span class="lb">會員</span></a>
+        <a href="#"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 8V3h10v5"/><rect x="4" y="8" width="16" height="7" rx="1.5"/><path d="M7 15h10v6H7z"/></svg></span><span class="lb">打印</span></a>
+        <a href="#"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V4"/><path d="M4 20h16"/><rect x="7" y="12" width="3" height="5"/><rect x="12" y="8" width="3" height="9"/><rect x="17" y="5" width="3" height="12"/></svg></span><span class="lb">報表</span></a>
+        <a href="#"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><path d="M8.6 8.6l6.8 6.8"/></svg></span><span class="lb">沽清</span></a>
+        <a href="#"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h13l-3-3M20 16H7l3 3"/></svg></span><span class="lb">交班</span></a>
+        <a href="#"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8l9-4 9 4-9 4-9-4z"/><path d="M3 8v8l9 4 9-4V8"/><path d="M12 12v8"/></svg></span><span class="lb">庫存</span></a>
+      </nav>
+      <div class="sidefoot">
+        <div class="mini live"><span class="ico">●</span><span>在線</span></div>
+        <div class="mini"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h4v16h-4"/><path d="M10 8l-4 4 4 4M6 12h8"/></svg></span><span>登出</span></div>
+        <div class="mini"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/></svg></span><span>設置</span></div>
+      </div>
+    </aside>
+
+    <div class="main">
+      <div class="hd">
+        <div class="tl">
+          <h2>點餐 <span class="tag">快餐</span></h2>
+          <div class="sub">好味茶餐廳 · 12:36 · 店員 陳大文 · 今日 87 張</div>
+        </div>
+        <div class="rt">
+          <span class="pill p-em"><span class="pd"></span>營業中</span>
+          <span class="pill p-em"><span class="pd"></span>接單中</span>
+          <span class="b b-ghost">交班</span>
+        </div>
+      </div>
+
+      <div class="qmain">
+        <div class="qpane cats">
+          <div class="cat on"><span>全部</span><span class="n">24</span></div>
+          <div class="cat"><span>招牌</span><span class="n">6</span></div>
+          <div class="cat"><span>麵食</span><span class="n">8</span></div>
+          <div class="cat"><span>小食</span><span class="n">5</span></div>
+          <div class="cat"><span>飲品</span><span class="n">9</span></div>
+          <div class="cat"><span>加配</span><span class="n">4</span></div>
+        </div>
+
+        <div class="qpane menu">
+          <div class="mgrid">
+            <div class="mi"><div class="nm2">大麥克牛肉麵</div><div class="pr">MOP 58</div></div>
+            <div class="mi"><div class="nm2">人氣半筋半肉麵</div><div class="pr">MOP 48</div></div>
+            <div class="mi"><div class="nm2">豬扒包</div><div class="pr">MOP 32</div></div>
+            <div class="mi"><div class="nm2">炸雞翼（4 件）</div><div class="pr">MOP 38</div></div>
+            <div class="mi"><div class="nm2">凍檸茶</div><div class="pr">MOP 22</div></div>
+            <div class="mi"><div class="nm2">絲襪奶茶</div><div class="pr">MOP 24</div></div>
+            <div class="mi"><div class="out">沽清</div><div class="nm2">乾炒牛河</div><div class="pr" style="color:var(--s400)">MOP 62</div></div>
+            <div class="mi"><div class="nm2">例湯</div><div class="pr">MOP 18</div></div>
+            <div class="mi"><div class="nm2">可樂</div><div class="pr">MOP 15</div></div>
+            <div class="mi"><div class="nm2">檸檬水</div><div class="pr">MOP 20</div></div>
+            <div class="mi"><div class="nm2">雞蛋仔</div><div class="pr">MOP 28</div></div>
+            <div class="mi"><div class="nm2">車仔麵</div><div class="pr">MOP 52</div></div>
+          </div>
+        </div>
+
+        <div class="qpane cart">
+          <div class="ch">
+            <div class="t">快餐 · 外賣</div>
+            <div class="s">未結帳 · 3 件</div>
+            <div class="chips" style="margin-top:6px">
+              <span class="chip" style="padding:3px 8px;font-size:10px">堂食</span>
+              <span class="chip on" style="padding:3px 8px;font-size:10px">外賣</span>
+              <span class="chip" style="padding:3px 8px;font-size:10px">自取</span>
+            </div>
+          </div>
+          <div class="cl">
+            <div class="li2"><span class="q">×1</span><span>大麥克牛肉麵</span><span class="p">58</span></div>
+            <div class="li2"><span class="q">×1</span><span>人氣半筋半肉麵</span><span class="p">48</span></div>
+            <div class="li2"><span class="q">×1</span><span>凍檸茶</span><span class="p">22</span></div>
+          </div>
+          <div class="cf">
+            <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--s500)"><span>小計</span><span>MOP 128.00</span></div>
+            <div style="display:flex;justify-content:space-between;align-items:baseline;margin-top:4px">
+              <span style="font-size:11px;font-weight:700">合計</span>
+              <span style="font-size:18px;font-weight:800;font-variant-numeric:tabular-nums">MOP 128</span>
+            </div>
+            <div class="b b-or" style="margin-top:8px;width:100%;padding:10px;border-radius:12px;font-size:13px">結帳</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 底部訂單列（快餐模式） -->
+      <div class="qbar">
+        <div class="qsec">
+          <div class="qsechd">
+            <span class="t">線上訂單</span>
+            <span class="pill p-em" style="font-size:9px;padding:2px 6px"><span class="pd"></span>接單中</span>
+          </div>
+          <div class="qstrip">
+            <div class="qc">
+              <div class="top">
+                <div>
+                  <div class="no">取餐碼 018</div>
+                  <div class="meta"><span class="tag">外送</span><span class="pill p-em" style="font-size:9px;padding:2px 6px">已支付</span></div>
+                </div>
+                <span class="pill p-vi" style="font-size:9px;padding:2px 6px">配送中</span>
+              </div>
+              <div class="mid">
+                <div class="items">大麥克牛肉麵×1 · 人氣半筋半肉麵×1 · …</div>
+                <div class="money">MOP 158.00</div>
+                <div class="drv">🛵 李師傅 · 已取貨 · ETA 8 分</div>
+              </div>
+              <div class="btns">
+                <span class="b b-dark">查看</span>
+                <span class="b b-warn">催單</span>
+                <span class="b b-ghost">聊天 2</span>
+              </div>
+            </div>
+
+            <div class="qc">
+              <div class="top">
+                <div>
+                  <div class="no">取餐碼 021</div>
+                  <div class="meta"><span class="tag">外送</span><span class="pill p-am" style="font-size:9px;padding:2px 6px">未支付</span></div>
+                </div>
+                <span class="pill p-am" style="font-size:9px;padding:2px 6px">待派單</span>
+              </div>
+              <div class="mid">
+                <div class="items">人氣半筋半肉麵×2 · …</div>
+                <div class="money">MOP 126.00</div>
+                <div class="drv" style="color:var(--am700)">⚠ 未派車手 · 已等 15 分鐘</div>
+              </div>
+              <div class="btns">
+                <span class="b b-dark">查看</span>
+                <span class="b b-or">派送</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="qsec">
+          <div class="qsechd">
+            <span class="t">線下訂單</span>
+            <span class="pill p-em" style="font-size:9px;padding:2px 6px"><span class="pd"></span>營業中</span>
+          </div>
+          <div class="qstrip">
+            <div class="qc">
+              <span class="pin">2</span>
+              <div class="top">
+                <div>
+                  <div class="no">外賣 003</div>
+                  <div class="meta"><span class="tag">外賣</span><span class="pill p-sl" style="font-size:9px;padding:2px 6px">未結帳</span></div>
+                </div>
+                <span class="pill p-am" style="font-size:9px;padding:2px 6px">製作中</span>
+              </div>
+              <div class="mid">
+                <div class="items">大麥克牛肉麵×1 · 人氣半筋半肉麵×1 · …</div>
+                <div class="money">MOP 128.00</div>
+              </div>
+              <div class="btns">
+                <span class="b b-dark">查看</span>
+                <span class="b b-or">派送</span>
+                <span class="b b-am">可取餐</span>
+              </div>
+            </div>
+
+            <div class="qc">
+              <div class="top">
+                <div>
+                  <div class="no">mfood #1857</div>
+                  <div class="meta"><span class="tag" style="background:var(--am50);color:var(--am700)">商家自送</span><span class="pill p-em" style="font-size:9px;padding:2px 6px">已結帳</span></div>
+                </div>
+                <span class="pill p-am" style="font-size:9px;padding:2px 6px">製作中</span>
+              </div>
+              <div class="mid">
+                <div class="items">人氣半筋半肉麵×1 · 凍檸茶×1 · …</div>
+                <div class="money">MOP 96.00</div>
+              </div>
+              <div class="btns">
+                <span class="b b-dark">查看</span>
+                <span class="b b-or">派送</span>
+                <span class="b b-am">可取餐</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+</div>
+</div>
+
+<script>
+(function(){
+  var stage=document.getElementById('stage');
+  var canvas=document.getElementById('canvas');
+  function fit(){
+    var w=stage.clientWidth||1180;
+    var s=Math.min(1,w/1180);
+    canvas.style.transform='scale('+s+')';
+    stage.style.height=(820*s)+'px';
+  }
+  function show(k){
+    document.querySelectorAll('.screen').forEach(function(el){
+      el.classList.toggle('on',el.getAttribute('data-k')===k);
+    });
+    document.querySelectorAll('.tabs button').forEach(function(b){
+      b.classList.toggle('on',b.getAttribute('data-k')===k);
+    });
+    window.scrollTo({top:0,behavior:'smooth'});
+  }
+  document.querySelectorAll('.tabs button').forEach(function(b){
+    b.addEventListener('click',function(){show(b.getAttribute('data-k'));});
+  });
+  window.addEventListener('resize',fit);
+  fit();
+  var initial=(location.hash||'').replace('#','');
+  if(initial&&document.querySelector('.screen[data-k="'+initial+'"]')){show(initial);}
+})();
+</script>
+</body>
+</html>

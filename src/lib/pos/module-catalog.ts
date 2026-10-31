@@ -42,6 +42,7 @@ export type WorkbenchId =
 export type SidebarModuleId =
   | "order"
   | "orders"
+  | "delivery"
   | "members"
   | "prints"
   | "reports"
@@ -172,6 +173,9 @@ export const SIDEBAR_MODULES: readonly SidebarModuleDef[] = [
   // ⚠️ 2026-09-17：「點餐」即收銀台首頁，由 `/` 搬到 `/pos`（`/` 已成統一入口）。
   { id: "order", label: "點餐", short: "點", href: "/pos" },
   { id: "orders", label: "訂單", short: "單", href: "/orders" },
+  // 2026-10-31：外送（車手派單）。任何單都可以派，單號照舊；
+  // 資料表 `pos_delivery_jobs`（service_role only，零 Realtime／零 polling）。
+  { id: "delivery", label: "外送", short: "送", href: "/delivery" },
   { id: "members", label: "會員", short: "會", href: "/members" },
   { id: "prints", label: "打印", short: "印", href: "/prints" },
   { id: "reports", label: "報表", short: "報", href: "/reports" },

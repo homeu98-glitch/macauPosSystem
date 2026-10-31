@@ -62,7 +62,31 @@ export interface GrabberOrder {
   transactionStatus?: string | null;
   amount?: Record<string, unknown> | null;
   items?: GrabberItem[] | null;
-  customer?: { remark?: string | null; phone?: string | null } | null;
+  /**
+   * 客人資料（插件 `normalizeDetail()` 出嚟嘅）。
+   *
+   * ⚠️ 2026-10-31 補：一直只宣告 `remark` / `phone`，令人（同投影）以為平台單冇地址。
+   *    實際插件**有送**：
+   *      · 澳覓 `aomi-bridge.js` → `customer.address` ← `d.userAddress`；
+   *        電話係**遮罩**（`customer.phoneMasked`，例如 `853-****9190`）。
+   *      · MFOOD `mfood-bridge.js` → `customer.address` ← `d.address`；
+   *        電話係完整（`customer.phone` ← `receiverMobile`）。
+   *    呢啲欄位**冇**投影落 `pos_orders`（該表冇客人欄位）；派單時由
+   *    `src/lib/pos/delivery/platform-customer.ts` 經 server route 抽返出嚟。
+   */
+  customer?: {
+    remark?: string | null;
+    phone?: string | null;
+    /** 澳覓專用：遮罩電話（打唔通，唔可以當可用號碼）。 */
+    phoneMasked?: string | null;
+    name?: string | null;
+    nickname?: string | null;
+    address?: string | null;
+    tableware?: string | null;
+    gender?: number | null;
+  } | null;
+  /** MFOOD 專用：平台已指派嘅車手（澳覓冇）。有車手 = 平台自己送。 */
+  rider?: { name?: string | null; phone?: string | null } | null;
   /** 平台類型（外送 / 外賣自取） */
   fulfillmentType?: string | null;
   occurredAt?: string | null;

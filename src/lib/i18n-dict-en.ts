@@ -1947,7 +1947,123 @@ export const EN_DICT: Record<string, string> = {
   "（可留空）": "(optional)",
   "參考價": "Reference",
   "未設定（落單時輸入）": "Not set (entered at order time)",
+  建議填寫: "recommended",
+  "貼上地圖連結，或「緯度, 經度」": "Paste a map link, or “lat, lng”",
+  "未有座標：車手 App 嘅「導航」會去唔到，只能睇地址同打電話。":
+    "No coordinates: the rider app's Navigate button will not work — they can only read the address and call.",
+  "短連結解析唔到，請貼完整地圖連結，或直接打「緯度, 經度」。":
+    "Short links cannot be parsed. Paste the full map link, or type “lat, lng”.",
+  "睇唔出座標，請貼完整地圖連結，或直接打「緯度, 經度」。":
+    "Could not read coordinates. Paste the full map link, or type “lat, lng”.",
+  "座標超出範圍，請檢查。": "Coordinates are out of range — please check.",
+  "車手靠上面嘅地址送貨，請寫清楚樓層、單位、入口；到達時車手可以一鍵致電客人。":
+    "The rider delivers by the address above — include floor, unit and entrance. They can call the customer in one tap on arrival.",
+  "平台資料帶入中…": "Loading platform details…",
+  "已由平台單帶入，可以修改": "Filled from the platform order — you can edit",
+  "平台只提供遮罩電話（{phone}），請自行輸入可聯絡號碼。":
+    "The platform only provides a masked phone ({phone}); please enter a reachable number.",
   "時價菜落單時由店員輸入當次價錢；呢度填嘅只係參考價，會顯示喺菜品列表。": "Staff enter the actual price when ordering; the value here is only a reference price shown in the item list.",
+
+  // ─── Delivery dispatch (2026-10-31, components/delivery/*, pos/delivery/*) ───
+  // ⚠️ Keys are the Traditional Chinese source strings; keep them byte-identical to
+  //    the `t("…")` call sites, otherwise the guard test reports a missing key.
+  派送: "Dispatch",
+  已派送: "Dispatched",
+  已送達: "Delivered",
+  外送派單: "Dispatch rider",
+  確認派單: "Confirm dispatch",
+  "儲存中…": "Saving…",
+  未命名訂單: "Untitled order",
+  "客付合計 MOP {total} · 單號維持不變": "Customer pays MOP {total} · order no. unchanged",
+  單號維持不變: "Order no. stays the same",
+  "已建立派單：{no}": "Dispatch created: {no}",
+  送貨資料: "Delivery details",
+  收件人: "Recipient",
+  聯絡電話: "Contact phone",
+  送貨地址: "Delivery address",
+  "例如：黑沙環中街 88 號 5 樓 A": "e.g. 88 Rua Central da Areia Preta, 5A",
+  座標: "Coordinates",
+  用目前位置: "Use current location",
+  "定位中…": "Locating…",
+  未定位: "Not set",
+  送貨備註: "Delivery note",
+  "例如：管理處交收、到達請致電": "e.g. Hand over at management office; call on arrival",
+  費用同收款: "Fee & collection",
+  車手費: "Rider fee",
+  "車手費（MOP）": "Rider fee (MOP)",
+  邊個付車手費: "Who pays the rider",
+  商戶支付: "Merchant pays",
+  客人支付: "Customer pays",
+  代收貨款: "Cash on delivery",
+  需要代收: "Collect cash",
+  唔需要: "Not needed",
+  "代收金額（MOP）": "Amount to collect (MOP)",
+  "車手費 MOP {fee} · {payer}": "Rider fee MOP {fee} · {payer}",
+  "車手只會見到送貨所需資料（電話、地址、備註），唔會見到訂單金額。":
+    "The rider only sees what is needed for delivery (phone, address, note) — never the order amount.",
+  "車手平台未接通：現時只會儲存派單資料，唔會真的叫車。":
+    "Rider platform not connected yet: this only saves the dispatch record; no rider is actually called.",
+  "請先填寫聯絡電話同送貨地址": "Please fill in the contact phone and delivery address first",
+  呢部機唔支援定位: "This device does not support location",
+  "定位失敗，可以照樣派單（車手會用地址導航）":
+    "Location failed — you can still dispatch; the rider will navigate by address.",
+  "儲存派單失敗，請檢查網絡後重試": "Failed to save the dispatch. Check your connection and try again.",
+  訂單來源唔正確: "Invalid order source",
+  訂單編號唔正確: "Invalid order reference",
+  配送方式唔正確: "Invalid delivery mode",
+  "平台專送單唔可以由 POS 派送": "Platform-delivered orders cannot be dispatched from POS",
+  請填寫聯絡電話: "Please enter a contact phone",
+  電話格式唔正確: "Invalid phone number format",
+  請填寫送貨地址: "Please enter a delivery address",
+  座標唔正確: "Invalid coordinates",
+  車手費超出可接受範圍: "Rider fee is out of range",
+  代收金額超出可接受範圍: "Cash-on-delivery amount is out of range",
+  呢張單已經有進行中嘅派單: "This order already has an active dispatch",
+  "派單資料表未建立，請先執行資料庫更新":
+    "Dispatch table is not created yet. Please run the database migration first.",
+  "伺服器未配置，暫時存唔到派單": "Server not configured — cannot save the dispatch right now",
+  資料格式唔正確: "Invalid data format",
+  "缺少店鋪資料，請重新登入": "Missing store information. Please sign in again.",
+
+  // ─── Delivery board (2026-10-31, components/delivery/delivery-board.tsx) ───
+  待派出: "To dispatch",
+  待接單: "Awaiting rider",
+  派送失敗: "Dispatch failed",
+  進行中: "In progress",
+  "派單進度一覽 · 共 {n} 張": "Dispatch overview · {n} in total",
+  店內單: "In-store",
+  代收: "COD",
+  未填收件人: "No recipient",
+  未填地址: "No address",
+  暫時冇外送派單: "No dispatches yet",
+  "喺訂單頁撳「派送」之後，張單就會出現喺呢度。":
+    "Once you tap Dispatch on the Orders page, the order shows up here.",
+  "外送功能未開啟：請開啟 NEXT_PUBLIC_DELIVERY_DISPATCH 後重新部署。":
+    "Delivery dispatch is off: set NEXT_PUBLIC_DELIVERY_DISPATCH and redeploy.",
+  "未登入或未綁定店鋪，請重新登入。": "Not signed in or no store bound. Please sign in again.",
+  "已記錄派單資料；車手平台接通後會自動送出。":
+    "Dispatch details saved; it will be sent automatically once the rider platform is connected.",
+
+  // ─── Dispatch detail modal (2026-10-31) ───
+  目前狀態: "Current status",
+  派送進度: "Dispatch progress",
+  已建立: "Created",
+  已送出: "Sent",
+  車手接單: "Rider assigned",
+  已取貨: "Picked up",
+  費用: "Fees",
+  查看派單詳情: "View dispatch details",
+  "已記錄派單資料，未送出（車手平台未接通）":
+    "Dispatch details saved but not sent yet (rider platform not connected).",
+  "呢張派單已經結束，可以喺訂單頁重新派送。":
+    "This dispatch has ended. You can dispatch again from the Orders page.",
+
+  // ─── Delivery tab date filter (2026-10-31) ───
+  今日: "Today",
+  本週: "This week",
+  全部日期: "All dates",
+  所選日期冇派單: "No dispatches in the selected range",
+  "試下揀「全部日期」睇返之前嘅派單。": "Try “All dates” to see earlier dispatches.",
 };
 
 /**
@@ -1963,6 +2079,7 @@ export const SHORT_EN_DICT: Record<string, string> = {
   // 側欄
   點: "ORD",
   單: "ORD",
+  送: "DLV",
   會: "MBR",
   印: "PRT",
   報: "RPT",
@@ -1999,6 +2116,8 @@ export const SHORT_EN_DICT: Record<string, string> = {
 export const SIDEBAR_EN_DICT: Record<string, string> = {
   點餐: "Order",
   訂單: "Orders",
+  // 側欄淨闊 56px → 一定要短（同 "Orders" 一樣 ≤6 字母）
+  外送: "Rider",
   會員: "Member",
   打印: "Print",
   報表: "Report",

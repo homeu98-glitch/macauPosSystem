@@ -67,6 +67,7 @@ import {
   LedgerOrderTab,
   mergeLedgerOrders,
   normalizeLedgerStatus,
+  orderCodeLabel,
   orderCodeLabelParts,
   paymentModeLabel,
   rawLedgerStatus,
@@ -100,6 +101,10 @@ import { buildDisplayFloors } from "@/lib/pos/display-floors";
 import { formatMoney } from "@/lib/format";
 import { formatSpecLine } from "@/lib/escpos-render";
 import { toResolvedSpecs } from "@/lib/ledger/order-item-specs";
+import { DeliveryDispatchModal } from "@/components/delivery/delivery-dispatch-modal";
+import { deliveryJobKey, useDeliveryDispatch } from "@/lib/pos/delivery/use-delivery-dispatch";
+import { useCanDispatchDelivery } from "@/lib/pos/delivery/use-can-dispatch-delivery";
+import { isActiveJobStatus } from "@/lib/pos/delivery/types";
 import { PosOrder } from "@/lib/types";
 
 /**
@@ -305,6 +310,19 @@ export function OnlineOrders({
     tRef.current = t;
   }, [t]);
   const merchantId = getLedgerMerchantId();
+  /**
+   * 外送派單（2026-10-31）。
+   *
+   * 🔴 **線上單只有「外送」類型先有派送掣**（用戶拍板）：
+   * 堂食／自取單如果客人想改外送，正確做法係客人取消再落一張，
+   * 或者商家線下自己處理 —— 喺 POS 硬轉會令 Ledger 嘅錢同狀態對唔上。
+   * 呢條規則寫死喺 `evaluateDispatchEligibility()`（`online_not_delivery`），
+   * 呢度只負責攞資格結果，唔自己再寫條件。
+   *
+   * 零 polling：同線下訂單 panel 共用 module cache（60 秒）＋ inflight 去重。
+   */
+  const canDispatchDelivery = useCanDispatchDelivery(merchantId);
+  const dispatch = useDeliveryDispatch(merchantId, { canDispatch: canDispatchDelivery });
   const [localSettings, setLocalSettings] = useState(() => loadPosLocalSettings());
   /**
    * 🔴 2026-09-13（商家實案：「排位後出來的又不是店內的桌台」）——
@@ -1298,6 +1316,15 @@ export function OnlineOrders({
     const hasRequest = hasPendingChangeRequest(order);
     // 按鈕規格與「店內線下訂單」卡片一致：rounded-xl px-3 py-2 text-xs（卡片同彈窗共用）
     const btn = "rounded-xl px-3 py-2 text-xs font-semibold";
+    // 外送派送（2026-10-31）：只有外送類型先攞到資格，其餘由 eligibility 回 reason
+    const dispatchState = dispatch.visible({
+      orderSource: "ledger",
+      orderRef: order.id,
+      kind: "online",
+      fulfillmentType: order.fulfillmentType,
+      status: raw,
+    });
+    const dispatchJob = dispatch.jobs[deliveryJobKey("ledger", order.id)];
 
     return (
       <>
@@ -1312,6 +1339,46 @@ export function OnlineOrders({
           >
             {t(onlineTableAssignLabel(order))}
           </button>
+        ) : null}
+        {/* 外送派送（2026-10-31）：只限 `merchant_delivery` 且已接單。
+            未接單 / 已取消 / 非外送類型 → 唔顯示（資格真源 `evaluateDispatchEligibility`）。 */}
+        {!hasRequest && dispatchState.visible ? (
+          <button
+            className={`${btn} whitespace-nowrap bg-orange-600 text-white hover:bg-orange-700 disabled:opacity-60`}
+            disabled={orderLoading}
+            onClick={() =>
+              dispatch.open({
+                orderSource: "ledger",
+                orderRef: order.id,
+                orderNoSnapshot: orderCodeLabel(order),
+                platform: null,
+                deliveryMode: "merchant",
+                totalMop: order.total,
+                defaultCustomerName: order.customerName ?? "",
+                defaultCustomerPhone: order.phone ?? "",
+                defaultCustomerAddress: order.deliveryAddress ?? "",
+              })
+            }
+            type="button"
+          >
+            {t("派送")}
+          </button>
+        ) : null}
+        {dispatchJob && isActiveJobStatus(dispatchJob.status) ? (
+          <span
+            className={`${btn} whitespace-nowrap ${
+              dispatchJob.status === "draft" || dispatchJob.status === "queued"
+                ? "bg-slate-100 text-slate-600 ring-1 ring-slate-200"
+                : "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200"
+            }`}
+          >
+            {/* draft = 已記錄未送出，唔可以寫「已派送」 */}
+            {dispatchJob.status === "draft" || dispatchJob.status === "queued"
+              ? t("待派出")
+              : dispatchJob.status === "new"
+                ? t("待接單")
+                : t("已派送")}
+          </span>
         ) : null}
         {/* 「返結」（2026-10-19 到店優惠改價）：線上單統一入口，樣式同線下「返結帳」。
             已收款單 → 搬去線下後彈返結確認（改價重結）；未收款單 → 搬去線下後直接去
@@ -1840,6 +1907,20 @@ export function OnlineOrders({
 
   const modals = (
     <>
+      {/* 外送派單彈窗（2026-10-31）—— 同線下訂單／快餐 strip 共用同一個元件 */}
+      <DeliveryDispatchModal
+        createdBy={authSession?.name ?? authSession?.account ?? null}
+        onClose={dispatch.close}
+        onSaved={(job) => {
+          dispatch.onSaved(job);
+          setToast({
+            tone: "success",
+            message: t("已建立派單：{no}", { no: job.orderNoSnapshot }),
+          });
+        }}
+        storeId={merchantId ?? null}
+        target={dispatch.target}
+      />
       {assigningOrder ? (
         <TableAssignModal
           busyTableId={assigningTableId}

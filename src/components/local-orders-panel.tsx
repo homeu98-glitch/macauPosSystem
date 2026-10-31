@@ -6,6 +6,11 @@ import { useRouter } from "next/navigation";
 
 import { ResponsiveModal } from "@/components/responsive-modal";
 import { useT } from "@/components/lang-provider";
+import { DeliveryDispatchModal } from "@/components/delivery/delivery-dispatch-modal";
+import { deliveryJobKey, useDeliveryDispatch } from "@/lib/pos/delivery/use-delivery-dispatch";
+import { useCanDispatchDelivery } from "@/lib/pos/delivery/use-can-dispatch-delivery";
+import { usePlatformDeliveryModes } from "@/lib/pos/delivery/use-platform-delivery-modes";
+import { isActiveJobStatus } from "@/lib/pos/delivery/types";
 import { ReceiptTicketPreview } from "@/components/receipt-ticket-preview";
 import { SelfOrderActionButtons } from "@/components/self-order-action-buttons";
 import { SelfOrderAutoAcceptToggle } from "@/components/self-order-auto-accept-toggle";
@@ -40,7 +45,7 @@ import {
 } from "@/lib/quick-order-fulfillment";
 import { isSelfOrder } from "@/lib/pos/order-source";
 import { confirmSelfOrder, isReopenable, cancelLocalOrder, rejectSelfOrder, reopenPosOrder, voidPlatformOrder } from "@/lib/pos-orders";
-import { canVoidPlatformOrder, isPlatformOrder } from "@/lib/pos/platform-order";
+import { canVoidPlatformOrder, isPlatformOrder, isPlatformOrderSource } from "@/lib/pos/platform-order";
 import { describeNoReceiptPrinterError, reprintReceiptForOrder } from "@/lib/print-jobs";
 import {
   addDeletedOrderIds,
@@ -201,6 +206,26 @@ export function LocalOrdersPanel({
   const [cancelTargetOrderId, setCancelTargetOrderId] = useState<string | null>(null);
   const [cancelReason, setCancelReason] = useState<string>("");
   const [cancelSubmitting, setCancelSubmitting] = useState(false);
+
+  /**
+   * 外送派單（2026-10-31）。
+   *
+   * 🔴 三條紀律（用戶明確要求）：
+   *   ① **零 polling**：`useDeliveryDispatch` 只喺掛載時拉一次（module cache 60s、
+   *      同隔籬「線上訂單」panel 共用 inflight），之後只有手動刷新／存完才再拉；
+   *   ② **不動 `pos_orders`**：派單寫獨立表 `pos_delivery_jobs`；
+   *   ③ **不動既有流程**：呢個 hook 只提供資料同開彈窗，冇改任何現有 state／handler。
+   *
+   * 平台單要知道「平台有冇自己派車手」→ `usePlatformDeliveryModes`（只傳 id，唔傳 raw payload）。
+   */
+  // useState 初始值而非每次 render 讀 localStorage（呢個 panel render 很頻繁）
+  const [storeId] = useState(() => loadAuthSession()?.merchantId ?? null);
+  const [operatorName] = useState(
+    () => loadAuthSession()?.name ?? loadAuthSession()?.account ?? null,
+  );
+  const canDispatchDelivery = useCanDispatchDelivery(storeId);
+  const dispatch = useDeliveryDispatch(storeId, { canDispatch: canDispatchDelivery });
+  const platformModes = usePlatformDeliveryModes(storeId, orders);
 
   function refresh() {
     setOrders(loadOrders().filter(isLocalOrTransferredDineIn));
@@ -588,6 +613,47 @@ export function LocalOrdersPanel({
   }
 
   /**
+   * 呢張單派唔派得（店內／平台）。
+   *
+   * 店內單：任何已送出、未取消嘅單都可以派（堂食「外賣自送」枱、快餐 counter、自取）。
+   * 平台單：**只限商家自送／自取**；平台專送／未知 → 唔顯示（見 `eligibility.ts`）。
+   *
+   * 純函式呼叫，冇 side effect、冇 fetch —— 每次 render 計一次唔會有性能問題。
+   */
+  function dispatchStateOf(order: PosOrder) {
+    if (isPlatformOrderSource(order.source)) {
+      return dispatch.visible({
+        orderSource: "pos",
+        orderRef: order.id,
+        kind: "platform",
+        source: String(order.source),
+        // 未載入到配送方式 = undefined → eligibility 當 unknown → fail-closed
+        mode: platformModes[order.id],
+        status: order.status,
+      });
+    }
+    return dispatch.visible({
+      orderSource: "pos",
+      orderRef: order.id,
+      kind: "local",
+      status: order.status,
+    });
+  }
+
+  /** 開派送彈窗（單號一律照舊顯示，唔會改成「外送 xxx」）。 */
+  function openDispatch(order: PosOrder) {
+    const isPlatform = isPlatformOrderSource(order.source);
+    dispatch.open({
+      orderSource: "pos",
+      orderRef: order.id,
+      orderNoSnapshot: order.localOrderNo,
+      platform: isPlatform ? (String(order.source) as "aomi" | "mfood") : null,
+      deliveryMode: isPlatform ? (platformModes[order.id] ?? "unknown") : "merchant",
+      totalMop: order.total,
+    });
+  }
+
+  /**
    * 每張單嘅操作掣（2026-10-23）。
    *
    * 由原本直接寫喺 `<td>` 入面抽成 function，只係為咗**表格版同卡片版共用同一份 JSX**
@@ -629,6 +695,47 @@ export function LocalOrdersPanel({
         >
           {t("查看")}
         </button>
+        {/* 外送派送（2026-10-31）：店內任何已送出單、平台自送／自取單都可以派。
+            資格全部由 `evaluateDispatchEligibility()` 話事 —— 呢度唔自己寫條件，
+            否則三個入口（訂單頁／快餐 strip／外送 tab）日後一定會走樣。 */}
+        {dispatchStateOf(order).visible ? (
+          <button
+            className="whitespace-nowrap rounded-xl bg-orange-600 px-3 py-2 text-xs font-semibold text-white"
+            onClick={() => openDispatch(order)}
+            type="button"
+          >
+            {t("派送")}
+          </button>
+        ) : null}
+        {/* 已派單 → 卡片直接見到，唔使入外送 tab 查 */}
+        {(() => {
+          const job = dispatch.jobs[deliveryJobKey("pos", order.id)];
+          if (!job) return null;
+          // ⚠️ `draft` / `queued` 代表「已記錄但未送出」—— 唔可以顯示「已派送」，
+          //    否則商家會以為車手已經嚟緊（車手平台未接通時尤其危險）。
+          if (job.status === "draft" || job.status === "queued") {
+            return (
+              <span className="whitespace-nowrap rounded-xl bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-600 ring-1 ring-slate-200">
+                {t("待派出")}
+              </span>
+            );
+          }
+          if (isActiveJobStatus(job.status)) {
+            return (
+              <span className="whitespace-nowrap rounded-xl bg-emerald-50 px-2 py-1 text-[11px] font-semibold text-emerald-700 ring-1 ring-emerald-200">
+                {job.status === "new" ? t("待接單") : t("已派送")}
+              </span>
+            );
+          }
+          if (job.status === "delivered") {
+            return (
+              <span className="whitespace-nowrap rounded-xl bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-600 ring-1 ring-slate-200">
+                {t("已送達")}
+              </span>
+            );
+          }
+          return null;
+        })()}
         {/* 🔴 2026-09-13：守門由 `status === "settled"` 放寬成 `isReopenable(order)`。
             `isReopenable()` 本身就**已經接受 `paid`**（見 pos-orders.ts），
             但呢度舊寫法多夾一個 `settled` 條件 → 排位後已付款嘅線上堂食單
@@ -1441,6 +1548,18 @@ export function LocalOrdersPanel({
           </div>
         </ResponsiveModal>
       ) : null}
+
+      {/* 外送派單彈窗：三個入口共用同一個元件，行為一定一致 */}
+      <DeliveryDispatchModal
+        createdBy={operatorName}
+        onClose={dispatch.close}
+        onSaved={(job) => {
+          dispatch.onSaved(job);
+          setToast(t("已建立派單：{no}", { no: job.orderNoSnapshot }));
+        }}
+        storeId={storeId}
+        target={dispatch.target}
+      />
 
       {toast ? (
         <div className="pointer-events-none fixed bottom-6 left-1/2 z-[70] -translate-x-1/2 rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-lg">

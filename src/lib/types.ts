@@ -21,6 +21,14 @@ export interface UserPermissions {
    * 任何已登入收銀都做得到）。後台／權限組可個別設 `false` 收起粒掣。
    */
   reprintReceipt?: boolean;
+  /**
+   * 外送派單（撳「派送」把訂單交畀車手）權位。缺省 = 有。
+   *
+   * 同 `reprintReceipt` 同一個口徑：呢個係 L1（商家帳號）層，L2 操作員另有
+   * `POS_STAFF_ACTION_IDS` 嘅 `dispatchDelivery`。兩者都要放行才會出掣。
+   * 會產生車手費（真金白銀），所以後台可以逐個帳號收。
+   */
+  dispatchDelivery?: boolean;
   manageAccounts?: boolean;
   /**
    * 可以登入**管理後台**（`/admin`）嘅店舖級帳號（2026-10-21 多店控制台 P1）。
