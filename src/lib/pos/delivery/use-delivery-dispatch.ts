@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { posDeviceAuthHeadersFresh } from "@/lib/pos/pos-sync-auth";
 import type { DeliveryMode } from "./delivery-mode.ts";
 import { resolveDispatchAction, type DispatchActionReason } from "./dispatch-action.ts";
 import type { DispatchInput } from "./eligibility.ts";
@@ -69,6 +70,9 @@ export function loadDeliveryJobs(
       const params = new URLSearchParams({ storeId, limit: "100" });
       const res = await fetch(`/api/pos/delivery/jobs?${params.toString()}`, {
         cache: "no-store",
+        // 🔴 2026-11-01：呢條 route 有 posRouteAuthGuard —— 冇 Bearer token 會 401，
+        // 外送 tab 會永遠空白（同派單彈窗「檢查網絡」同一根因：漏帶 device token）。
+        headers: { ...(await posDeviceAuthHeadersFresh()) },
       });
       const json = (await res.json()) as { ok?: boolean; jobs?: PosDeliveryJob[] };
       if (!json?.ok || !Array.isArray(json.jobs)) return null;

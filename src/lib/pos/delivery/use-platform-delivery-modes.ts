@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 
+import { posDeviceAuthHeadersFresh } from "@/lib/pos/pos-sync-auth";
 import {
   platformSourceOf,
   type DeliveryMode,
@@ -82,6 +83,8 @@ export function usePlatformDeliveryModes(
         });
         const res = await fetch(`/api/pos/delivery/modes?${params.toString()}`, {
           cache: "no-store",
+          // 🔴 2026-11-01：modes route 有 posRouteAuthGuard —— 冇 Bearer token 會 401。
+          headers: { ...(await posDeviceAuthHeadersFresh()) },
         });
         const json = (await res.json()) as {
           ok?: boolean;

@@ -6,6 +6,7 @@ import { useT } from "@/components/lang-provider";
 import { loadAuthSession, loadBootstrapCache } from "@/lib/storage";
 import { ResponsiveModal } from "@/components/responsive-modal";
 import { isDeliveryLiveEnabled } from "@/lib/pos/delivery/flag";
+import { posDeviceAuthHeadersFresh } from "@/lib/pos/pos-sync-auth";
 import {
   composeDeliveryAddress,
   isAddressReady,
@@ -173,6 +174,9 @@ export function DeliveryDispatchModal({
         const params = new URLSearchParams({ storeId, orderId: target.orderRef });
         const res = await fetch(`/api/pos/delivery/prefill?${params.toString()}`, {
           cache: "no-store",
+          // 🔴 2026-11-01：prefill route 有 posRouteAuthGuard —— 冇 Bearer token 會 401，
+          // 平台資料帶唔入（之前靜默失敗，店員以為要人手填晒）。
+          headers: { ...(await posDeviceAuthHeadersFresh()) },
         });
         const json = (await res.json()) as {
           ok?: boolean;
@@ -262,7 +266,13 @@ export function DeliveryDispatchModal({
     try {
       const res = await fetch("/api/pos/delivery/jobs", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        // 🔴 2026-11-01 根因：呢條 route 有 posRouteAuthGuard，而 POST 之前淨係帶
+        // `Content-Type`、冇 `Authorization: Bearer` device token ⇒ 一律 401，
+        // 前端跌去 generic「儲存派單失敗，請檢查網絡後重試」。migration 冇問題。
+        headers: {
+          "Content-Type": "application/json",
+          ...(await posDeviceAuthHeadersFresh()),
+        },
         body: JSON.stringify({
           storeId,
           orderSource: target.orderSource,
