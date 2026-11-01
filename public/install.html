@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Macau POS · 收銀 APK 下載</title>
+<meta name="robots" content="noindex">
+<!--
+  ────────────────────────────────────────────────────────────────────────────
+  收銀 APK 下載頁（2026-10-31）
+  ────────────────────────────────────────────────────────────────────────────
+  🔴 呢一頁係**刻意**手寫嘅靜態 HTML，同 Next.js 完全無關。三個死守嘅紀律：
+
+  1. **唔准引用任何 `/_next/` 資源**（唔准 React、唔准 Tailwind、唔准 hydration）。
+     原因：老機（實測 Android 6.0.1 + Chrome 81）打開主站會白屏 ——
+     Next 16 預設 target 係 Chrome 111+，App Router client runtime 用咗
+     `static {}` 類靜態塊（Chrome 94+）同 `Array.prototype.at`（92+），
+     Chrome 81 一解析就 SyntaxError，React 掛唔上 ⇒ 純白頁。
+     呢一頁只用 HTML + CSS + 少少 ES5，2014 年之後嘅瀏覽器都一定開得到。
+
+  2. **CSS 只准用老特性**。特別注意 Flexbox `gap` 要 Chrome 84+ 先有支援
+     ⇒ 呢度**全部用 margin 排版**，唔用 gap／grid／`:is()`／`aspect-ratio`／`inset`。
+
+  3. **版本號係「增強」唔係「必需」**。XHR 攞唔到就照樣顯示「最新版」，
+     下載按鈕**永遠**可用（佢只係一條 <a href>，指去 /api/download/apk，
+     由伺服器 302 去最新 signed URL）。任何 JS 錯誤都唔可以擋住下載。
+
+  呢個檔由 `public/` 直接 serve，唔經 route、唔經 middleware、唔經 Service Worker
+  （`sw.js` 對 `/api/` 同非 navigate 請求都有明確分支，而導航請求係 network-first）。
+  ────────────────────────────────────────────────────────────────────────────
+-->
+<style>
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    padding: 20px 16px 40px;
+    background: #f2f4f7;
+    color: #111827;
+    font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", "Microsoft YaHei", "PingFang SC", sans-serif;
+    font-size: 17px;
+    line-height: 1.65;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  .wrap { max-width: 560px; margin: 0 auto; }
+
+  .card {
+    background: #ffffff;
+    border: 1px solid #e4e7ec;
+    border-radius: 18px;
+    padding: 26px 22px 24px;
+    box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04), 0 8px 24px rgba(16, 24, 40, 0.06);
+  }
+
+  .kicker {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    color: #ea580c;
+    margin: 0 0 8px;
+  }
+
+  h1 {
+    margin: 0 0 10px;
+    font-size: 28px;
+    line-height: 1.25;
+    letter-spacing: -0.01em;
+  }
+
+  .lead {
+    margin: 0 0 18px;
+    font-size: 15px;
+    color: #667085;
+  }
+
+  .ver {
+    margin: 0 0 16px;
+    padding: 10px 14px;
+    background: #fff7ed;
+    border: 1px solid #fed7aa;
+    border-radius: 10px;
+    font-size: 14px;
+    color: #9a3412;
+  }
+
+  .ver b { font-weight: 700; }
+
+  .btn {
+    display: block;
+    width: 100%;
+    padding: 18px 16px;
+    background: #f97316;
+    border: 1px solid #ea580c;
+    border-radius: 14px;
+    color: #ffffff;
+    font-size: 20px;
+    font-weight: 700;
+    text-align: center;
+    text-decoration: none;
+  }
+
+  .btn:active { background: #ea580c; }
+
+  .hint {
+    margin: 10px 0 0;
+    font-size: 13px;
+    color: #98a2b3;
+    text-align: center;
+  }
+
+  .qr-box {
+    margin: 22px 0 0;
+    padding: 18px 16px;
+    background: #f9fafb;
+    border: 1px solid #eaecf0;
+    border-radius: 14px;
+    text-align: center;
+  }
+
+  .qr-box img {
+    display: block;
+    width: 200px;
+    height: 200px;
+    margin: 0 auto 12px;
+    background: #ffffff;
+    border: 1px solid #eaecf0;
+    border-radius: 8px;
+  }
+
+  .qr-cap { margin: 0; font-size: 13px; color: #667085; }
+
+  .url {
+    margin: 14px 0 0;
+    padding: 12px 14px;
+    background: #111827;
+    border-radius: 10px;
+    color: #e5e7eb;
+    font-family: Menlo, Consolas, "Courier New", monospace;
+    font-size: 14px;
+    text-align: center;
+    word-break: break-all;
+  }
+
+  .sec {
+    margin: 26px 0 0;
+    padding: 0;
+    border-top: 1px solid #eaecf0;
+  }
+
+  h2 {
+    margin: 22px 0 10px;
+    font-size: 15px;
+    font-weight: 700;
+    color: #344054;
+  }
+
+  ol, ul { margin: 0; padding-left: 22px; }
+  li { margin: 0 0 8px; font-size: 15px; color: #475467; }
+  li:last-child { margin-bottom: 0; }
+
+  .warn {
+    margin: 20px 0 0;
+    padding: 14px 16px;
+    background: #fffbeb;
+    border: 1px solid #fde68a;
+    border-radius: 12px;
+    font-size: 14px;
+    color: #92400e;
+  }
+
+  .warn b { font-weight: 700; }
+
+  .foot {
+    margin: 22px 0 0;
+    font-size: 12px;
+    color: #98a2b3;
+    text-align: center;
+  }
+
+  /* 印出嚟貼喺機旁邊：收埋按鈕，放大 QR */
+  @media print {
+    body { background: #ffffff; padding: 0; }
+    .card { border: 0; box-shadow: none; padding: 0; }
+    .btn, .hint, .warn, .foot { display: none; }
+    .qr-box img { width: 260px; height: 260px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+
+    <p class="kicker">MACAU POS</p>
+    <h1>收銀 APK 下載</h1>
+    <p class="lead">呢一頁專為收銀機而設，唔會用任何新式網頁技術，<br>舊機／舊瀏覽器都一定開得到。</p>
+
+    <div class="ver">目前版本：<b id="ver">最新版</b><span id="size"></span></div>
+
+    <a class="btn" href="/api/download/apk">下載 APK</a>
+    <p class="hint">約 5.3 MB · 下載完直接撳「安裝」</p>
+
+    <div class="qr-box">
+      <img src="/brand/apk-download-qr.svg" alt="APK 下載二維碼" width="200" height="200">
+      <p class="qr-cap">用手機掃一掃，或者喺呢部機直接開下面網址</p>
+    </div>
+
+    <div class="url">macau-pos-system.vercel.app/api/download/apk</div>
+
+    <div class="sec">
+      <h2>安裝步驟</h2>
+      <ol>
+        <li>撳上面嘅「下載 APK」，等檔案落完。</li>
+        <li>喺通知欄或者「下載」資料夾撳個檔案。</li>
+        <li>如果彈「不明來源」提示，去設定 → 安全性 → 允許安裝未知應用程式，返嚟再撳一次。</li>
+        <li>安裝完成後，用新 App 開店，唔好再用瀏覽器開網頁。</li>
+      </ol>
+    </div>
+
+    <div class="sec">
+      <h2>如果下載唔到</h2>
+      <ul>
+        <li>喺電腦開同一個網址下載，再用 U 盤或者微信傳去收銀機。</li>
+        <li>或者去後台「版本控制」頁，確認 Android 版本已經設為「啟用中」。</li>
+      </ul>
+    </div>
+
+    <div class="warn">
+      <b>提醒：</b>呢部收銀機係 Android 6 + Chrome 81，<b>唔支援</b>用瀏覽器開網頁版收銀系統（會白屏）。
+      日常開店請一律用 APK。
+    </div>
+
+    <p class="foot">Macau POS · 安裝包由後台版本控制統一派發</p>
+
+  </div>
+</div>
+
+<script>
+/* ES5 only. 任何錯誤都要靜靜吞掉，唔可以影響上面個下載按鈕。 */
+(function () {
+  try {
+    var xhr = new XMLHttpRequest();
+    xhr.open("GET", "/api/release/versions/active", true);
+    xhr.timeout = 8000;
+
+    xhr.onload = function () {
+      try {
+        if (xhr.status !== 200) return;
+        var data = JSON.parse(xhr.responseText);
+        var android = data && data.releases && data.releases.android;
+        if (!android) return;
+
+        if (android.version) {
+          var ver = document.getElementById("ver");
+          if (ver) ver.textContent = "v" + android.version;
+        }
+
+        if (typeof android.fileSize === "number" && android.fileSize > 0) {
+          var size = document.getElementById("size");
+          if (size) {
+            size.textContent = " · " + (android.fileSize / 1048576).toFixed(1) + " MB";
+          }
+        }
+      } catch (e) { /* 靜默 */ }
+    };
+
+    xhr.onerror = function () { /* 靜默 */ };
+    xhr.ontimeout = function () { /* 靜默 */ };
+
+    xhr.send();
+  } catch (e) { /* 靜默 */ }
+})();
+</script>
+</body>
+</html>
