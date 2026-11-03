@@ -83,6 +83,9 @@ import {
 } from "@/lib/ledger/order-date-filter";
 import type { CustomDateRange } from "@/lib/ledger/date-range";
 import { orderEventISO } from "@/lib/pos/order-event-time";
+// 交班「查看訂單」高亮（2026-11-03）：同交班彈窗用**同一套**判定
+// （非終態 = 未完成；本地有投影嘅由本地 panel 負責，呢邊自動剔除）。
+import { isUnfinishedOnlineOrder } from "@/lib/pos/unfinished-orders";
 import { reopenPosOrder } from "@/lib/pos-orders";
 import { getOrderDetail, listMerchantOrders } from "@/lib/ledger/orders";
 import { getLedgerMerchantId, restoreLedgerSession } from "@/lib/ledger/session";
@@ -274,6 +277,7 @@ async function listMerchantOrdersPaged({
 export function OnlineOrders({
   embedded = false,
   layout = "table",
+  highlightUnfinished = false,
   dateFilter: dateFilterProp,
   onDateFilterChange,
   onFilteredOrdersChange,
@@ -287,6 +291,13 @@ export function OnlineOrders({
    *    `filteredOrders` 同 `renderOrderActions()`）。
    */
   layout?: "table" | "cards";
+  /**
+   * 交班「查看訂單」高亮模式（2026-11-03）。
+   *
+   * `true` = 由交班提示跳入：非終態線上單加紅框 + 動畫、列表頂顯示 banner、
+   * 自動捲到第一張。判定用 `isUnfinishedOnlineOrder()`，同交班彈窗同一套。
+   */
+  highlightUnfinished?: boolean;
   /** 時間篩選：key 字串或 `{ key, custom }`（2026-09-13 加「自訂」）。 */
   dateFilter?: DateFilterArg;
   onDateFilterChange?: (key: LedgerOrderDateFilterKey, custom: CustomDateRange | null) => void;
@@ -904,6 +915,48 @@ export function OnlineOrders({
     if (activeTab === "all") return byDate;
     return byDate.filter((order) => order.tabType === activeTab);
   }, [activeTab, dateFilter, ledgerOrders]);
+
+  /**
+   * 交班高亮（2026-11-03）：當前列表入面「未完成」嘅線上單。
+   *
+   * 🔴 一定要剔除「本地已有投影」嘅 id（用 `loadLocalOrders()`，零請求）：
+   *    同一張單本地可能已經 settled、只係 Ledger 未推 completed（同步滯後），
+   *    呢種唔應該標紅；亦避免同右邊「線下訂單」panel 重複標示同一張單。
+   *    用 `localOrdersTick` 做 cache-buster：本機單一變（排位／採納／結帳）即刻重算。
+   */
+  const unfinishedIds = useMemo(() => {
+    // cache-buster：本機單一變（排位／採納／結帳）要即刻重算，但本身唔直接讀 tick 值。
+    void localOrdersTick;
+    if (!highlightUnfinished) return new Set<string>();
+    const localOnlineIds = new Set<string>();
+    for (const row of loadLocalOrders()) {
+      if (row.onlineOrderId) localOnlineIds.add(row.onlineOrderId);
+    }
+    return new Set(
+      filteredOrders
+        .filter((order) => !localOnlineIds.has(order.id) && isUnfinishedOnlineOrder(order))
+        .map((order) => order.id),
+    );
+    // `localOrdersTick` 係刻意嘅 cache-buster（見上）。
+  }, [filteredOrders, highlightUnfinished, localOrdersTick]);
+
+  const firstUnfinishedId = useMemo(
+    () => filteredOrders.find((order) => unfinishedIds.has(order.id))?.id ?? null,
+    [filteredOrders, unfinishedIds],
+  );
+  const firstUnfinishedRef = useRef<HTMLElement | null>(null);
+  const unfinishedScrolledRef = useRef(false);
+  useEffect(() => {
+    if (!highlightUnfinished) {
+      unfinishedScrolledRef.current = false;
+      return;
+    }
+    if (unfinishedScrolledRef.current) return;
+    const el = firstUnfinishedRef.current;
+    if (!el) return;
+    unfinishedScrolledRef.current = true;
+    el.scrollIntoView({ block: "center", behavior: "smooth" });
+  }, [highlightUnfinished, firstUnfinishedId]);
 
   // 匯出 CSV（2026-09-13）：把「當前 tab + 時間範圍」篩選後嘅線上單上報畀 `/orders` 頁，
   // 由頁面統一決定要唔要落檔（避免兩張表各自砌一份匯出邏輯）。
@@ -1675,6 +1728,18 @@ export function OnlineOrders({
           <div className="rounded-2xl border border-slate-200 bg-white p-6 text-sm text-slate-500">{t("正在載入…")}</div>
         ) : null}
 
+        {!loading && highlightUnfinished ? (
+          unfinishedIds.size > 0 ? (
+            <div className="mb-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-800">
+              {t("⚠️ 有 {n} 張未完成訂單（已用紅框標示）", { n: unfinishedIds.size })}
+            </div>
+          ) : filteredOrders.length > 0 ? (
+            <div className="mb-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700">
+              {t("✅ 呢邊全部訂單已完成")}
+            </div>
+          ) : null
+        ) : null}
+
         {!loading && filteredOrders.length === 0 ? (
           <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-10 text-center text-sm text-slate-500">
             {dateFilter === "today"
@@ -1702,9 +1767,21 @@ export function OnlineOrders({
                 const statusBadge = getLedgerStatusBadge(order);
                 const externalAccepted = rawLedgerStatus(order.status) === "accepted";
                 const scheduled = hasScheduledPickup(order);
+                const isUnfinished = unfinishedIds.has(order.id);
                 return (
                   <article
-                    className="rounded-2xl border border-slate-200 bg-white px-3.5 py-3 shadow-sm"
+                    ref={
+                      isUnfinished && order.id === firstUnfinishedId
+                        ? (el) => {
+                            firstUnfinishedRef.current = el;
+                          }
+                        : undefined
+                    }
+                    className={`rounded-2xl border bg-white px-3.5 py-3 shadow-sm ${
+                      isUnfinished
+                        ? "pos-unfinished-highlight border-rose-300 ring-2 ring-rose-400"
+                        : "border-slate-200"
+                    }`}
                     key={order.id}
                   >
                     <div className="flex items-center gap-2">
@@ -1768,6 +1845,11 @@ export function OnlineOrders({
                       {externalAccepted ? (
                         <span className="shrink-0 text-[11px] font-medium text-amber-600">{t("已由外部接單")}</span>
                       ) : null}
+                      {isUnfinished ? (
+                        <span className="inline-flex shrink-0 items-center whitespace-nowrap rounded-full bg-rose-600 px-2 py-0.5 text-[11px] font-semibold text-white">
+                          {t("⚠️ 未完成")}
+                        </span>
+                      ) : null}
                       <div className="ml-auto flex flex-wrap items-center justify-end gap-1.5">
                         <button
                           className="whitespace-nowrap rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-800"
@@ -1805,8 +1887,23 @@ export function OnlineOrders({
                 // 預約單（Ledger `scheduled_pickup_at` 有值）：類型欄出「預約單」標籤、
                 // 時間欄出預約時間。即時單兩處都唔會有任何變化。
                 const scheduled = hasScheduledPickup(order);
+                const isUnfinished = unfinishedIds.has(order.id);
                 return (
-                  <tr key={order.id} className="border-t border-slate-100 even:bg-slate-50/60">
+                  <tr
+                    ref={
+                      isUnfinished && order.id === firstUnfinishedId
+                        ? (el) => {
+                            firstUnfinishedRef.current = el;
+                          }
+                        : undefined
+                    }
+                    key={order.id}
+                    className={`border-t border-slate-100 ${
+                      isUnfinished
+                        ? "pos-unfinished-highlight bg-rose-50 ring-2 ring-inset ring-rose-300"
+                        : "even:bg-slate-50/60"
+                    }`}
+                  >
                     <td className={TD_CELL}>
                       <div className="truncate text-sm font-semibold text-slate-900">{tOrderCode(t, order)}</div>
                     </td>

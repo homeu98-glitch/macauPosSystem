@@ -74,8 +74,25 @@ export function macauRollingRange(days: number, now = new Date()): { start: stri
 
 export type ReportRangeKey = "today" | "yesterday" | "7d" | "30d" | "all" | "custom";
 
-/** 呼叫 predicate 時可以傳嘅第二參數（字串＝只用 key；object＝可帶 custom）。 */
-export type ReportRangeArg = ReportRangeKey | DateRangeSelection<ReportRangeKey>;
+/**
+ * 精確時間窗（ISO 8601，兩端皆含）。
+ *
+ * 🔴 2026-11-03 加（交班「本班」）：`custom` 只支援 `YYYY-MM-DD`（日級），
+ * 但夜宵店嘅班次係「11/3 20:00 → 11/4 02:00」——用日級區間會連 11/3 日間
+ * （上一班）都包埋。所以要有能力表達「任意起訖 instant」。
+ *
+ * 有 `window` 時**優先於** key / custom；`resolveReportRange()` 會先驗格式，
+ * 無效 → `null`（fail-closed，唔會靜靜退回「今日」）。
+ */
+export type ExactWindow = { start: string; end: string };
+
+/** 呼叫 predicate 時可以傳嘅第二參數（字串＝只用 key；object＝可帶 custom / 精確窗）。 */
+export type ReportRangeArg =
+  | ReportRangeKey
+  | (DateRangeSelection<ReportRangeKey> & {
+      /** 精確時間窗（交班「本班」用）；有值時優先於 key / custom。 */
+      window?: ExactWindow | null;
+    });
 
 export const REPORT_RANGE_OPTIONS: Array<{ key: ReportRangeKey; label: string }> = [
   { key: "today", label: "今天" },
@@ -86,18 +103,30 @@ export const REPORT_RANGE_OPTIONS: Array<{ key: ReportRangeKey; label: string }>
   { key: "custom", label: "自訂" },
 ];
 
-/** 拆解第二參數：回傳 key 同（如適用）自訂區間。 */
+/** 拆解第二參數：回傳 key 同（如適用）自訂區間／精確窗。 */
 export function splitReportRangeArg(arg: ReportRangeArg): {
   key: ReportRangeKey;
   custom: CustomDateRange | null;
+  window: ExactWindow | null;
 } {
-  if (typeof arg === "string") return { key: arg, custom: null };
-  return { key: arg.key, custom: arg.custom ?? null };
+  if (typeof arg === "string") return { key: arg, custom: null, window: null };
+  return { key: arg.key, custom: arg.custom ?? null, window: arg.window ?? null };
+}
+
+/** 精確窗驗證：兩端都要 parse 得到、`end >= start`；否則 `null`（fail-closed）。 */
+function normalizeExactWindow(window: ExactWindow | null | undefined): ExactWindow | null {
+  if (!window) return null;
+  const startMs = Date.parse(String(window.start ?? ""));
+  const endMs = Date.parse(String(window.end ?? ""));
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs < startMs) return null;
+  return { start: window.start, end: window.end };
 }
 
 /** `custom` 區間 → Macau 起訖 ISO；其他 key 走原本邏輯。`null` ＝ 無上限（全部）。 */
 export function resolveReportRange(arg: ReportRangeArg, now = new Date()): { start: string; end: string } | null {
-  const { key, custom } = splitReportRangeArg(arg);
+  const { key, custom, window } = splitReportRangeArg(arg);
+  // 🔴 精確窗優先：交班「本班」用（見 `ExactWindow` 註解）。無效 → null，唔會退回日級區間。
+  if (window) return normalizeExactWindow(window);
   if (key === "custom") {
     return custom ? customRangeToISO(custom) : null;
   }
@@ -125,14 +154,25 @@ export function ledgerReportRangeForKey(key: ReportRangeKey, now = new Date()): 
  * 保留成 wrapper 而唔刪，係為咗唔爆 6 個既有呼叫點。
  */
 export function orderMatchesReportRange(
-  order: { updatedAt?: string; createdAt?: string; reopenedAt?: string; originalSettledAt?: string },
+  // ⚠️ 一定要包 `settledAt`：`orderEventInstant()` 嘅第一優先就係佢（0057）。
+  // 之前個 type 漏咗 → 傳 object literal 會 TS 報錯，令人以為呢個口徑唔支援 settledAt。
+  order: {
+    updatedAt?: string;
+    createdAt?: string;
+    reopenedAt?: string;
+    originalSettledAt?: string;
+    settledAt?: string;
+  },
   range: ReportRangeArg,
   now = new Date(),
 ): boolean {
-  const { key } = splitReportRangeArg(range);
-  if (key === "all") return true;
-  // 自訂：未揀區間 → 當「全部」
-  if (key === "custom" && !(typeof range !== "string" && range.custom)) return true;
+  const { key, custom, window } = splitReportRangeArg(range);
+  // 精確窗（交班「本班」）優先：唔可以落下面嘅 key 短路（尤其 "all"／"custom 未有區間"）。
+  if (!window) {
+    if (key === "all") return true;
+    // 自訂：未揀區間 → 當「全部」
+    if (key === "custom" && !custom) return true;
+  }
 
   const eventMs = orderEventInstant(order);
   if (eventMs <= 0) return false;

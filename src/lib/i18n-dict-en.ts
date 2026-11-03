@@ -1655,6 +1655,45 @@ export const EN_DICT: Record<string, string> = {
   "多收": "Over",
 
   "開工 → 營業 → 結數交班。交班後會打印一張今日營業摘要。": "Open → Operate → Settle & close. After closing, a today's business summary is printed.",
+  // ── Shift window + unfinished-order prompt (2026-11-03) ──────────────
+  // A late-night shift (3 Nov 20:00 → 4 Nov 02:00) counts as ONE shift.
+  "開工 → 營業 → 結數交班。交班後會打印一張本班營業摘要。": "Open → Operate → Settle & close. After closing, this shift's business summary is printed.",
+  "本班摘要": "This shift's summary",
+  "店內堂食／快餐以本機 POS 為準；會員通線上以 Ledger 報表為準。所有金額只計本班（開工 → 交班），唔係日曆日。":
+    "In-store dine-in / fast food follows this POS; Member Pass online follows the Ledger report. All amounts cover this shift only (open → close), not the calendar day.",
+  "本班：": "This shift: ",
+  "現在": "now",
+  "跨午夜照計同一班；交班後清零": "Counts as one shift across midnight; resets to zero after closing",
+  "本班已交班（{time}），數據已清零。下一班由「開工」開始。": "This shift was closed at {time}; figures are reset to zero. The next shift starts with \"Open\".",
+  "未開工 · 開工後由 0 開始計。": "Not opened · figures start from 0 after opening.",
+  "（今日買貨；收據只有日期，唔跟班次）": "(Today's purchases; receipts only carry a date, not shift-aware)",
+  "本班未開工／已交班，冇支出數。": "No shift open / already closed — no expense figure.",
+  "訂單明細（本班已結帳）": "Order details (settled this shift)",
+  "本班暫無已結帳訂單。": "No settled orders in this shift yet.",
+  "（線上交單嘅本地投影，只列已結帳） ｜按結賬時間倒序；退款單唔列出。":
+    "(Local projections of online orders; settled only) | Newest settlement first; refunded orders are not listed.",
+  "尚未登入 Ledger，無法讀取本班線上訂單。": "Not signed in to Ledger; unable to read this shift's online orders.",
+  "讀取本班線上報表失敗": "Failed to load this shift's online report",
+  "系統已自動彙總本班所有金額。請先點算現金箱：若與應收現金有落差，喺下面輸入差額；冇落差可直接進行下一步。":
+    "All amounts for this shift have been calculated. Count the cash drawer first: enter any difference below; if none, continue to the next step.",
+  "— 店內（本班）—": "— In-store (this shift) —",
+  "— 會員通線上（本班）—": "— Member Pass online (this shift) —",
+  "（本班暫無已結帳線下訂單）": "(No settled in-store orders in this shift)",
+  "有 {n} 張訂單仲未完成": "{n} orders are still unfinished",
+  "其中 {n} 張已付款（MOP {amt}）—— 錢已計入本班數，只係訂單狀態未完成。你可以先去處理，或者照樣交班。":
+    "{n} of them are already paid (MOP {amt}) — the money is already counted in this shift; only the order status is unfinished. You can handle them first, or close anyway.",
+  "呢批單全部都未完成。你可以先去處理，或者照樣交班。": "All of these orders are unfinished. You can handle them first, or close anyway.",
+  "查看訂單": "View orders",
+  "仍然交班": "Close anyway",
+  "本機 {a} 張 · 線上 {b} 張": "This device {a} · Online {b}",
+  "（未付款 {n} 張）": " ({n} unpaid)",
+  "另有 {n} 張未顯示": "{n} more not shown",
+  "線上訂單狀態暫時讀唔到（Ledger 未登入或載入失敗），以上只列本機訂單。":
+    "Online order status is unavailable (Ledger not signed in or failed to load); only this device's orders are listed.",
+  "⚠️ 有 {n} 張未完成訂單（已用紅框標示）": "⚠️ {n} unfinished orders (highlighted in red)",
+  "✅ 呢邊全部訂單已完成": "✅ All orders here are completed",
+  "⚠️ 未完成": "⚠️ Unfinished",
+
   "開工備註（選填）": "Open-shift note (optional)",
   "例如：今日人手安排／開店檢查": "e.g. today's staffing / opening checklist",
   "⚠️ 交班已完成，但部分接單通道未能關閉": "⚠️ Closing done, but some ordering channels could not be turned off",

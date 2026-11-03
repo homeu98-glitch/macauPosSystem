@@ -53,7 +53,21 @@ export interface PaidLedgerOrdersTotal {
    * ② 列出「Ledger 純線上單」明細（交班明細要見到 001 / 005 呢類從未入 POS DB 嘅單）。
    */
   orders: LedgerOnlineOrder[];
+  /**
+   * 同一區間內**未付款**嘅線上單（非取消）。
+   *
+   * 🔴 2026-11-03 加（交班「未完成訂單」提示）：商家口徑係「任何未完成狀態都要提」，
+   * 包括客人落咗單但未付款／未接單嘅線上單。呢批單嘅錢唔計入 `amountMop`
+   * （未收到錢），只用嚟做提示，**唔可以**當收入。
+   *
+   * 同一張單如果同時喺 `orders`（已付款）出現，呼叫端要自己按 id 去重
+   * （`collectUnfinishedOrders()` 已內置）。
+   */
+  unpaidOrders: LedgerOnlineOrder[];
 }
+
+/** `unpaidOrders` 上限（提示用；正常一日遠低於此，防止異常資料塞爆記憶體）。 */
+const MAX_UNPAID_ORDERS = 200;
 
 /** `incompleteIds` 上限（防一次補推打爆 RPC；一日嘅量遠低於此）。 */
 const MAX_INCOMPLETE_IDS = 200;
@@ -88,6 +102,7 @@ export async function sumPaidLedgerOrders(params: {
   let incompleteAmountMop = 0;
   const incompleteIds: string[] = [];
   const paidOrders: LedgerOnlineOrder[] = [];
+  const unpaidOrders: LedgerOnlineOrder[] = [];
 
   // RPC `list_merchant_orders` 按 `updatedAt` DESC 排序，用 (since, sinceId) 由新到舊翻頁。
   let cursorSince: string | null = period.start;
@@ -115,7 +130,11 @@ export async function sumPaidLedgerOrders(params: {
       }
       if (Number.isFinite(endMs) && t > endMs) continue;
       if (String(order.status ?? "").toLowerCase().includes("cancel")) continue;
-      if (order.paymentStatus !== "paid") continue;
+      if (order.paymentStatus !== "paid") {
+        // 未付款：唔計錢，但交班提示要知（「任何未完成狀態都要提」，2026-11-03）。
+        if (unpaidOrders.length < MAX_UNPAID_ORDERS) unpaidOrders.push(order);
+        continue;
+      }
 
       const paid = Number(order.total ?? order.paidAmount ?? 0);
       const safePaid = Number.isFinite(paid) ? paid : 0;
@@ -143,5 +162,6 @@ export async function sumPaidLedgerOrders(params: {
     incompleteAmountMop: round2(incompleteAmountMop),
     incompleteIds,
     orders: paidOrders,
+    unpaidOrders,
   };
 }

@@ -13,7 +13,7 @@ import {
   LEDGER_ORDER_DATE_FILTERS,
   type LedgerOrderDateFilterKey,
 } from "@/lib/ledger/order-date-filter";
-import { customRangeLabel, type CustomDateRange } from "@/lib/ledger/date-range";
+import { customRangeLabel, isValidDateKey, type CustomDateRange } from "@/lib/ledger/date-range";
 import { formatMacauDateTime } from "@/lib/format";
 import type { LedgerOnlineOrder } from "@/lib/ledger/order-mapper";
 import {
@@ -56,6 +56,17 @@ export function OrdersHub() {
   const [dateFilter, setDateFilter] = useState<LedgerOrderDateFilterKey>("today");
   const [customRange, setCustomRange] = useState<CustomDateRange | null>(null);
   const [focusOrderId, setFocusOrderId] = useState<string | null>(null);
+  /**
+   * 交班「查看訂單」模式（2026-11-03）。
+   *
+   * `true` = 由交班提示跳入，兩個 panel 會：
+   *   ① 用同一套「未完成」predicate 標紅框 + 動畫；
+   *   ② 列表頂顯示「N 張未完成」banner；
+   *   ③ 自動捲到第一張。
+   *
+   * ⚠️ 只係**顯示模式**，唔會改任何篩選／結帳／返結行為。
+   */
+  const [highlightUnfinished, setHighlightUnfinished] = useState(false);
 
   /**
    * 兩張表當前篩選後嘅資料（由子元件上報）。
@@ -189,9 +200,25 @@ export function OrdersHub() {
   }
 
   useEffect(() => {
-    const orderId = new URLSearchParams(window.location.search).get("orderId");
-    if (!orderId) return;
-    setFocusOrderId(orderId);
+    const params = new URLSearchParams(window.location.search);
+    const orderId = params.get("orderId");
+    const unfinished = params.get("unfinished") === "1";
+    if (!orderId && !unfinished) return;
+    if (orderId) setFocusOrderId(orderId);
+    if (unfinished) {
+      /**
+       * 交班跳入（2026-11-03）：日期範圍由交班頁計好（班次窗 ∪ 最早未完成單）。
+       * 一定要覆寫預設「今天」—— 夜宵店嘅未完成單可能係「昨日」嘅事，
+       * 用今日篩選會令高亮嗰張根本唔喺列表入面。
+       */
+      const from = params.get("from");
+      const to = params.get("to");
+      if (isValidDateKey(from) && isValidDateKey(to) && from <= to) {
+        setDateFilter("custom");
+        setCustomRange({ start: from, end: to });
+      }
+      setHighlightUnfinished(true);
+    }
     window.history.replaceState(null, "", window.location.pathname);
   }, []);
 
@@ -250,6 +277,7 @@ export function OrdersHub() {
             <OnlineOrders
               dateFilter={dateSelection}
               embedded
+              highlightUnfinished={highlightUnfinished}
               layout="cards"
               onDateFilterChange={handleDateChange}
               onFilteredOrdersChange={setOnlineRows}
@@ -260,6 +288,7 @@ export function OrdersHub() {
             <LocalOrdersPanel
               dateFilter={dateSelection}
               focusOrderId={focusOrderId}
+              highlightUnfinished={highlightUnfinished}
               layout="cards"
               onFilteredOrdersChange={setLocalRows}
             />

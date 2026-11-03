@@ -787,3 +787,32 @@ body {
     animation: none;
   }
 }
+
+/* ── 交班「未完成訂單」高亮（2026-11-03）────────────────────────────────
+   由交班提示跳去 /orders 之後，每一張未完成單閃 3 下（紅圈由粗到散），
+   動畫完之後仍然靠 Tailwind 嘅 `ring-2 ring-rose-400` 保持標示。
+   用 `outline` 而唔用 `box-shadow`：ring 本身已經食咗 box-shadow，
+   而且 `outline` 喺 `<tr>` 上面一樣畫得出（表格版都要高亮）。 */
+@keyframes pos-unfinished-pulse {
+  0%,
+  100% {
+    outline-color: rgba(244, 63, 94, 0.95);
+    outline-offset: 0px;
+  }
+  50% {
+    outline-color: rgba(244, 63, 94, 0.15);
+    outline-offset: 6px;
+  }
+}
+
+.pos-unfinished-highlight {
+  outline: 2px solid rgba(244, 63, 94, 0.95);
+  outline-offset: 0px;
+  animation: pos-unfinished-pulse 1.4s ease-in-out 3;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pos-unfinished-highlight {
+    animation: none;
+  }
+}

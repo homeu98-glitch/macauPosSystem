@@ -38,6 +38,9 @@ import {
   mergeOrderLists,
   filterResurrectedOrders,
 } from "@/lib/pos-order-filters";
+// 交班「查看訂單」高亮（2026-11-03）：同交班彈窗用**同一個** predicate，
+// 兩邊數字一定夾得埋（平台單亦同一套排除規則）。
+import { isUnfinishedLocalOrder } from "@/lib/pos/unfinished-orders";
 import {
   markQuickOrderCompletedInStore,
   quickCompleteLabel,
@@ -168,6 +171,7 @@ function QuickOrderActions({
 export function LocalOrdersPanel({
   dateFilter = "today",
   focusOrderId = null,
+  highlightUnfinished = false,
   layout = "table",
   onFilteredOrdersChange,
 }: {
@@ -186,13 +190,28 @@ export function LocalOrdersPanel({
    * 由收銀機右上角自助單提示撳入嚟（`pos-app.openSelfOrderNotice`，docs/115 G5）。
    */
   focusOrderId?: string | null;
+  /**
+   * 交班「查看訂單」高亮模式（2026-11-03）。
+   *
+   * `true` = 由交班提示跳入：未完成單加紅框 + 動畫、列表頂顯示 banner、
+   * 並**連快餐 counter 單一齊顯示**（平時由 `isLocalOrTransferredDineIn` 濾走，
+   * 唔顯示就高亮唔到）。
+   */
+  highlightUnfinished?: boolean;
   /** 當前 tab + 時間範圍篩選後嘅線下單（供 `/orders` 頁匯出 CSV）。 */
   onFilteredOrdersChange?: (orders: PosOrder[]) => void;
 }) {
   const t = useT();
   const currency = loadBootstrapCache()?.currency ?? "MOP";
   const router = useRouter();
-  const [orders, setOrders] = useState<PosOrder[]>(() => loadOrders().filter(isLocalOrTransferredDineIn));
+  /**
+   * 2026-11-03：state 改存**全量**本地單（唔再預先 `isLocalOrTransferredDineIn`）。
+   *
+   * 原因：交班「查看訂單」高亮模式要連快餐 counter 單一齊顯示（否則高亮唔到），
+   * 而 counter 單／線上 counter 單平時係被嗰個 filter 濾走。改為**渲染時**篩選，
+   * 平時行為逐字不變（見 `filteredOrders`），高亮模式先放寬。
+   */
+  const [orders, setOrders] = useState<PosOrder[]>(() => loadOrders());
   const [statusTab, setStatusTab] = useState<LocalOrderPanelTab>("all");
   const [viewingOrderId, setViewingOrderId] = useState<string | null>(null);
   const [reopenTargetOrderId, setReopenTargetOrderId] = useState<string | null>(null);
@@ -228,7 +247,7 @@ export function LocalOrdersPanel({
   const platformModes = usePlatformDeliveryModes(storeId, orders);
 
   function refresh() {
-    setOrders(loadOrders().filter(isLocalOrTransferredDineIn));
+    setOrders(loadOrders());
   }
 
   useEffect(() => {
@@ -387,6 +406,9 @@ export function LocalOrdersPanel({
 
   const filteredOrders = useMemo(() => {
     return orders
+      // 2026-11-03：高亮模式放寬到「全部本地單」（連快餐 counter 單），
+      // 平時仍然只顯示本地單 + 已排真枱嘅線上堂食單（行為逐字不變）。
+      .filter((order) => highlightUnfinished || isLocalOrTransferredDineIn(order))
       .filter((order) => orderMatchesLocalDateFilter(order, dateFilter))
       .filter((order) => matchesLocalOrderPanelTab(order, statusTab))
       // 監察頁用 newest-first：用戶要求「最新的放最上面，最舊的放下面」。
@@ -398,7 +420,31 @@ export function LocalOrdersPanel({
         if (ca !== cb) return cb - ca;
         return String(b.id).localeCompare(String(a.id));
       });
-  }, [dateFilter, orders, statusTab]);
+  }, [dateFilter, highlightUnfinished, orders, statusTab]);
+
+  /** 交班高亮模式：當前列表入面「未完成」嗰批（同一個 predicate，平台單自動排除）。 */
+  const unfinishedIds = useMemo(() => {
+    if (!highlightUnfinished) return new Set<string>();
+    return new Set(filteredOrders.filter(isUnfinishedLocalOrder).map((order) => order.id));
+  }, [filteredOrders, highlightUnfinished]);
+  const firstUnfinishedId = useMemo(
+    () => filteredOrders.find((order) => unfinishedIds.has(order.id))?.id ?? null,
+    [filteredOrders, unfinishedIds],
+  );
+  /** 自動捲到第一張未完成單（每次進入高亮模式只做一次，唔會同用戶搶滾動）。 */
+  const firstUnfinishedRef = useRef<HTMLElement | null>(null);
+  const unfinishedScrolledRef = useRef(false);
+  useEffect(() => {
+    if (!highlightUnfinished) {
+      unfinishedScrolledRef.current = false;
+      return;
+    }
+    if (unfinishedScrolledRef.current) return;
+    const el = firstUnfinishedRef.current;
+    if (!el) return;
+    unfinishedScrolledRef.current = true;
+    el.scrollIntoView({ block: "center", behavior: "smooth" });
+  }, [highlightUnfinished, firstUnfinishedId]);
 
   // 匯出 CSV（2026-09-13）：把「當前 tab + 時間範圍」篩選後嘅線下單上報畀 `/orders` 頁。
   // ⚠️ ref 存 callback，避免 inline 函式每次 render identity 都變 → 無限 loop。
@@ -862,6 +908,18 @@ export function LocalOrdersPanel({
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto p-3">
+        {/* 交班「查看訂單」模式（2026-11-03）：同隔籬線上 panel 各自計自己嗰邊，數字唔會互相污染。 */}
+        {highlightUnfinished ? (
+          unfinishedIds.size > 0 ? (
+            <div className="mb-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-800">
+              {t("⚠️ 有 {n} 張未完成訂單（已用紅框標示）", { n: unfinishedIds.size })}
+            </div>
+          ) : filteredOrders.length > 0 ? (
+            <div className="mb-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700">
+              {t("✅ 呢邊全部訂單已完成")}
+            </div>
+          ) : null
+        ) : null}
         {filteredOrders.length === 0 ? (
           <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center text-sm text-slate-500">
             {dateFilter === "today"
@@ -884,9 +942,21 @@ export function LocalOrdersPanel({
               const itemSaving = orderItemDiscountTotal(order.items);
               const wholeSaving = Math.max(0, order.discountAmount ?? 0);
               const original = Math.round((order.total + itemSaving + wholeSaving) * 100) / 100;
+              const isUnfinished = unfinishedIds.has(order.id);
               return (
                 <article
-                  className="rounded-2xl border border-slate-200 bg-white px-3.5 py-3 shadow-sm"
+                  ref={
+                    isUnfinished && order.id === firstUnfinishedId
+                      ? (el) => {
+                          firstUnfinishedRef.current = el;
+                        }
+                      : undefined
+                  }
+                  className={`rounded-2xl border bg-white px-3.5 py-3 shadow-sm ${
+                    isUnfinished
+                      ? "pos-unfinished-highlight border-rose-300 ring-2 ring-rose-400"
+                      : "border-slate-200"
+                  }`}
                   key={order.id}
                 >
                   <div className="flex items-center gap-2">
@@ -947,6 +1017,11 @@ export function LocalOrdersPanel({
                         {t(diffBadge.label)}
                       </span>
                     ) : null}
+                    {isUnfinished ? (
+                      <span className="inline-flex shrink-0 items-center whitespace-nowrap rounded-full bg-rose-600 px-2 py-0.5 text-[11px] font-semibold text-white">
+                        {t("⚠️ 未完成")}
+                      </span>
+                    ) : null}
                     <div className="ml-auto">{renderRowActions(order)}</div>
                   </div>
                 </article>
@@ -993,8 +1068,23 @@ export function LocalOrdersPanel({
                   const itemSaving = orderItemDiscountTotal(order.items);
                   const wholeSaving = Math.max(0, order.discountAmount ?? 0);
                   const original = Math.round((order.total + itemSaving + wholeSaving) * 100) / 100;
+                  const isUnfinished = unfinishedIds.has(order.id);
                   return (
-                    <tr key={order.id} className="border-t border-slate-100 even:bg-slate-50/60">
+                    <tr
+                      ref={
+                        isUnfinished && order.id === firstUnfinishedId
+                          ? (el) => {
+                              firstUnfinishedRef.current = el;
+                            }
+                          : undefined
+                      }
+                      key={order.id}
+                      className={`border-t border-slate-100 ${
+                        isUnfinished
+                          ? "pos-unfinished-highlight bg-rose-50 ring-2 ring-inset ring-rose-300"
+                          : "even:bg-slate-50/60"
+                      }`}
+                    >
                       <td className={TD_CELL}>
                         {/* 🔴 返結標籤放訂單號**下面**（2026-09-18 修正）。
                             ⚠️ 原本寫「同號碼同一行 + flex」（緊貼右側），實測出事：

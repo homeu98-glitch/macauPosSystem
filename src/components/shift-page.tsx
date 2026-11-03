@@ -1,6 +1,7 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { formatMacauDateTime } from "@/lib/format";
 
 import { AppSidebar } from "@/components/app-sidebar";
@@ -16,7 +17,17 @@ import { sumPaidLedgerOrders, type PaidLedgerOrdersTotal } from "@/lib/ledger/pa
 // 補推：把「已付款但 Ledger 未 completed」嘅線上單推上梯頂（同一條堂食爬梯，零依賴可測）。
 import { syncOnlineDineInCompletionById } from "@/lib/pos/online-dinein-fulfillment";
 import { posPaymentMethodLabel } from "@/lib/pos/payment-method-label";
-import { orderMatchesReportRange, macauTodayRange, macauDateKey } from "@/lib/ledger/report-period";
+import { orderMatchesReportRange, macauDateKey } from "@/lib/ledger/report-period";
+// 交班「本班」時間窗（2026-11-03）：所有金額／訂單一律以 [開班時間, 現在] 計，
+// 唔再用日曆日 —— 夜宵店 11/3 20:00 → 11/4 02:00 係同一個班，交班後清零。
+// 純模組（零 `@/`），有 `shift-window.test.ts` 覆蓋跨午夜。
+import { earlierDayKey, shiftDayKeys, shiftWindowOf, type ShiftWindow } from "@/lib/pos/shift-window";
+// 交班前「未完成訂單」提示（2026-11-03 商家要求）：本地任何未完成狀態 ＋ 線上非終態。
+// 平台單（澳覓／MFood）刻意唔算，否則每班誤報。
+import { collectUnfinishedOrders, type UnfinishedSummary } from "@/lib/pos/unfinished-orders";
+// 本機／雲端訂單合併：**終態優先**（2026-11-03）。放寬 merge 到全部非取消單之後，
+// 一條遲到嘅「未完成」舊 event 唔可以蓋走本地「已結帳」，否則交班少錢。
+import { mergeOrdersPreferTerminal } from "@/lib/pos/order-merge";
 import { restoreLedgerSession } from "@/lib/ledger/session";
 import { fetchPurchaseSummary, type PurchaseApiResponse } from "@/lib/inventory-stats";
 import { isLocalPosOrder } from "@/lib/pos-order-filters";
@@ -189,9 +200,16 @@ function shiftHistoryDayLabel(day: string, t: (k: string, vars?: Record<string, 
  *
  * ## 🔴 2026-09-19：時間口徑已收口
  *
- * 本頁所有「今日」篩選一律用 `orderMatchesReportRange`，而佢已委派去
+ * 本頁所有篩選一律用 `orderMatchesReportRange`，而佢已委派去
  * `orderEventInstant()`（`pos/order-event-time.ts`）。
  * 唔准再自己讀 `o.updatedAt` / `o.createdAt` —— 詳見 docs/113 開頭嗰節。
+ *
+ * ## 🔴 2026-11-03：範圍由「日曆日」改為「本班」
+ *
+ * 夜宵店 11/3 20:00 開班、11/4 02:00 交班係同一個班。舊寫法用 `"today"`
+ * ⇒ 只計 11/4 00:00–02:00，11/3 晚市全部唔見；交班後數字又唔清零。
+ * 而家一律傳 `shiftRange`（`{ key:"custom", window: shiftWindow }`，見 `lib/pos/shift-window.ts`）；
+ * 未開工／已交班 → `shiftRange = null` → 所有數字 0。
  */
 function summarizeClosedOrders(orders: PosOrder[]) {
   const closedOrders = orders.filter((order) => order.status === "settled");
@@ -385,12 +403,28 @@ function pickShiftPrinter(config: DeviceConfig): DevicePrinterConfig | null {
 export function ShiftPage() {
   // ⚠️ 一定要放喺所有 early return 之前（Rules of Hooks）。
   const t = useT();
+  const router = useRouter();
   const [shift, setShift] = useState(() => loadShiftState());
+  /**
+   * 「本班」時間窗嘅動態尾（2026-11-03）。
+   *
+   * 開班中每 60 秒 tick 一次，令 `[openedAt, now]` 嘅尾跟得上新結帳單；
+   * 唔 tick 嘅話，頁面靜置幾個鐘之後撳交班會用一個舊 `now` 計少最後一截數。
+   * 未開工 / 已交班 → 唔需要 tick（區間本身係 null）。
+   */
+  const [nowMs, setNowMs] = useState(() => Date.now());
   // 「開工備註」draft：只喺未開工時顯示，開工時寫入 openingNote 後清空；
   // 交班備註（closingNote）改喺結數交班彈窗入面填，唔再同開工共用同一欄（2026-09-07 修正）。
   const [shiftNote, setShiftNote] = useState("");
   const [status, setStatus] = useState(t("開工後可於下班時做結數交班並打印交班單。"));
   const [confirmOpen, setConfirmOpen] = useState(false);
+  /**
+   * 交班前「未完成訂單」提示（2026-11-03）。
+   *
+   * `null` = 唔顯示。撳「結數交班並打印」時**即場重新計一次**（唔靠舊 state），
+   * 有未完成單先彈呢個窗；0 張 → 直接入原本 step1，流程零改動。
+   */
+  const [unfinishedPrompt, setUnfinishedPrompt] = useState<UnfinishedSummary | null>(null);
   // 結數交班彈窗三步（2026-09-08）：1 = 核對金額（填差額）→ 2 = 二次確認 → 3 = 交班明細打印預覽（打印／跳過）。
   // step3 先實際交班：打印 = 出紙並完成；跳過 = 唔打印直接完成。
   const [confirmStep, setConfirmStep] = useState<1 | 2 | 3>(1);
@@ -466,29 +500,57 @@ export function ShiftPage() {
   const deviceConfig = useMemo(() => loadDeviceConfig() ?? defaultDeviceConfig, []);
   const [orders, setOrders] = useState<PosOrder[]>(() => loadOrders());
 
+  /**
+   * ── 本班時間窗（2026-11-03）────────────────────────────────────────────
+   *
+   * `shiftWindow` = `[shift.openedAt, nowMs]`；未開工／已交班 → `null`（所有數字 0）。
+   *
+   * ⚠️ 唔可以喺 render 直接 `new Date()` 計尾：memo 會依賴一個每次都變嘅值，
+   *    或者永遠唔更新。所以尾由 `nowMs` state 控制，開班中每 60 秒 tick 一次。
+   */
+  useEffect(() => {
+    if (!shift.openedAt) return;
+    setNowMs(Date.now());
+    const timer = window.setInterval(() => setNowMs(Date.now()), 60_000);
+    return () => window.clearInterval(timer);
+  }, [shift.openedAt]);
+
+  const shiftWindow = useMemo<ShiftWindow | null>(
+    () => shiftWindowOf({ openedAt: shift.openedAt }, nowMs),
+    [shift.openedAt, nowMs],
+  );
+  /**
+   * 餵 `orderMatchesReportRange()` 嘅精確窗參數。
+   * `key: "custom"` 只係佔位 —— `window` 有值時 `resolveReportRange()` 會優先採用。
+   */
+  const shiftRange = useMemo(
+    () => (shiftWindow ? { key: "custom" as const, window: shiftWindow } : null),
+    [shiftWindow],
+  );
+
+  /**
+   * 本機單一變（喺另一頁結帳／取消／返結）→ 交班頁即時反映（2026-11-03）。
+   *
+   * 只重讀本機 + 把新窗口尾推前，**唔重拉雲端、唔落 loading**（避免整頁閃）。
+   * 唔加呢個 listener 嘅話，頁面靜置期間嘅新結帳單要等到切換分頁（visibilitychange）先出現，
+   * 交班一刻就會用舊數。
+   */
+  useEffect(() => {
+    function onOrdersChanged() {
+      setOrders((prev) => mergeOrdersPreferTerminal(prev, loadOrders()));
+      setNowMs(Date.now());
+    }
+    window.addEventListener("pos-orders-changed", onOrdersChanged);
+    return () => window.removeEventListener("pos-orders-changed", onOrdersChanged);
+  }, []);
+
   // 2026-09-09：交班摘要數據源由「純本機 localStorage」改為「本機 + 雲端 merge」。
   // 根因：多機協作時，另一部機結帳嘅單只上咗雲端（pos_orders），唔會落呢部機嘅 localStorage，
   // 令交班少計（案例：本機 13 張=762 vs 雲端 17 張=903，漏咗 4 張今日正常結帳單）。
-  // 做法：入頁 + focus + 網絡恢復時，拉 `/api/pos/state?ordersOnly=1&start&end` 今日單，
+  // 做法：入頁 + focus + 網絡恢復時，拉 `/api/pos/state?ordersOnly=1&start&end` 本班單，
   //       按 id 同本機 merge（雲端較新 wins），令交班數 = 報表數。離線 / 失敗 → 維持本機 fallback。
   useEffect(() => {
     let cancelled = false;
-
-    function mergeByUpdatedAt(local: PosOrder[], cloud: PosOrder[]): PosOrder[] {
-      const map = new Map<string, PosOrder>();
-      for (const o of local) map.set(o.id, o);
-      for (const o of cloud) {
-        const existing = map.get(o.id);
-        if (!existing) {
-          map.set(o.id, o);
-          continue;
-        }
-        const localTs = existing.updatedAt ? Date.parse(existing.updatedAt) : 0;
-        const cloudTs = o.updatedAt ? Date.parse(o.updatedAt) : 0;
-        if (cloudTs >= localTs) map.set(o.id, o); // 雲端較新（或同刻）→ 採雲端
-      }
-      return [...map.values()];
-    }
 
     async function refreshOrders() {
       // 每次（重）跑都先落返「未完成」—— 呢個 effect 亦係 focus / online 事件嘅處理器，
@@ -496,16 +558,17 @@ export function ShiftPage() {
       setOrdersLoaded(false);
       setOrders(loadOrders());
       const storeId = resolveStoreId();
-      // 🔴 兩條 early return 都**必須**放行 `ordersLoaded`，否則全頁 loading 一世都唔完：
-      // ① 未登入／未綁店：冇雲端單可拉，本機 orders 就係全部 → 直接完成。
-      // ② 離線：同上，離線交班係合法場景（本機 fallback），唔應該被 loading 擋住。
-      if (!storeId || !readNetworkOnline()) {
+      // 🔴 三條 early return 都**必須**放行 `ordersLoaded`，否則全頁 loading 一世都唔完：
+      // ① 未開工／已交班：本班區間係 null → 唔應該拉任何單（畫面數字一律 0）。
+      // ② 未登入／未綁店：冇雲端單可拉，本機 orders 就係全部 → 直接完成。
+      // ③ 離線：同上，離線交班係合法場景（本機 fallback），唔應該被 loading 擋住。
+      const range = shiftWindowOf(loadShiftState(), Date.now());
+      if (!storeId || !readNetworkOnline() || !range) {
         setOrdersLoaded(true);
         return;
       }
 
       try {
-        const range = macauTodayRange();
         const url = `/api/pos/state?storeId=${encodeURIComponent(storeId)}&ordersOnly=1&limit=5000&start=${encodeURIComponent(range.start)}&end=${encodeURIComponent(range.end)}`;
         // 2026-09-10 P0-4：/api/pos/state 需要 POS 終端憑證（先續期，否則 401）。
         await refreshPosDeviceTokenIfNeeded();
@@ -514,16 +577,21 @@ export function ShiftPage() {
         if (!res.ok) return;
         const payload = (await res.json()) as { ok?: boolean; orders?: PosOrder[] };
         if (!payload.ok || !Array.isArray(payload.orders)) return;
-        // 只採今日、本店、可計數（settled/refunded 等）嘅單，避免將 open 單嘅金額計入交班。
-        const cloudSettled = payload.orders.filter(
-          (o) =>
-            o.storeId === storeId &&
-            (o.status === "settled" ||
-              o.status === "partially_refunded" ||
-              o.status === "refunded"),
+        /**
+         * 2026-11-03：由「只 merge 已結帳」放寬為 **merge 全部非取消**。
+         *
+         * 原因：交班前要提示「未完成訂單」，而另一部機開住嘅單（draft / 製作中 /
+         * 已付款未完成）只存在雲端，唔 merge 就永遠偵測唔到。
+         * ⚠️ 唔會影響金額：所有彙總（`summarizeClosedOrders` / `onlineLocal*` /
+         * `detailOrders`）本身就只認 settled / refunded，open 單入到陣列都唔會被計。
+         */
+        const cloudRelevant = payload.orders.filter(
+          (o) => o.storeId === storeId && o.status !== "cancelled",
         );
-        if (cloudSettled.length === 0) return;
-        setOrders((prev) => mergeByUpdatedAt(prev, cloudSettled));
+        if (cloudRelevant.length === 0) return;
+        // 🔴 一定要用 `mergeOrdersPreferTerminal()`：終態（已結帳）唔可以被遲到嘅
+        //    「未完成」雲端版本覆蓋，否則交班會少錢（見函式註解）。
+        setOrders((prev) => mergeOrdersPreferTerminal(prev, cloudRelevant));
       } catch {
         // 拉雲端失敗 → 維持本機（fallback），唔影響離線交班。
       } finally {
@@ -558,7 +626,9 @@ export function ShiftPage() {
       document.removeEventListener("visibilitychange", handleVisibility);
       window.removeEventListener("online", refreshOrders);
     };
-  }, []);
+    // 🔴 2026-11-03：加 `shift.openedAt` —— 開班／交班都要即刻用新嘅本班區間重拉一次。
+    //    只會喺班次狀態真正變嗰陣重跑（唔係 focus 嗰種高頻事件），唔會引致閃爍。
+  }, [shift.openedAt]);
 
   // 2026-09-07（問題一）：入頁即同 server active 班次 reconcile ——
   // 若另一部機／另一個 browser 已開工而本地未開 → adopt server 開工狀態（時間以 server 為準），
@@ -587,20 +657,26 @@ export function ShiftPage() {
     };
   }, []);
 
-  const todayLocalOrders = useMemo(
-    () =>
-      orders.filter(
-        (order) =>
-          isLocalPosOrder(order) &&
-          orderMatchesReportRange(order, "today") &&
-          (order.status === "settled" ||
-            order.status === "partially_refunded" ||
-            order.status === "refunded"),
-      ),
-    [orders],
-  );
+  /**
+   * 本班（＝ `[openedAt, now]`）已結帳嘅本地單（唔含線上投影）。
+   *
+   * 🔴 2026-11-03：由 `orderMatchesReportRange(order, "today")` 改為班次窗。
+   * 夜宵店 11/3 20:00 → 11/4 02:00 係同一班；用日曆日會令 11/3 晚市全部唔計。
+   * 未開工／已交班 → `shiftRange` 係 null → 回空陣列（畫面清零）。
+   */
+  const shiftLocalOrders = useMemo(() => {
+    if (!shiftRange) return [];
+    return orders.filter(
+      (order) =>
+        isLocalPosOrder(order) &&
+        orderMatchesReportRange(order, shiftRange) &&
+        (order.status === "settled" ||
+          order.status === "partially_refunded" ||
+          order.status === "refunded"),
+    );
+  }, [orders, shiftRange]);
 
-  const summary = useMemo(() => summarizeClosedOrders(todayLocalOrders), [todayLocalOrders]);
+  const summary = useMemo(() => summarizeClosedOrders(shiftLocalOrders), [shiftLocalOrders]);
 
   /**
    * 線上（Ledger）「實收」金額 —— 🔴 2026-09-14 商家口徑：「實收 = 今日實際收到嘅錢」。
@@ -610,23 +686,30 @@ export function ShiftPage() {
    * 會靜默少計未完成單）→ 所以 UI 必須標示係「已完成口徑」，唔可以靜默。
    */
   /**
-   * 本地／POS 側「**今日**帶 `onlineOrderId` 且已結帳」嘅單（＝線上交單嘅本地投影：掃碼／排位／快餐採納）。
+   * 本地／POS 側「**本班**帶 `onlineOrderId` 且已收款」嘅單（＝線上交單嘅本地投影：掃碼／排位／快餐採納）。
    * 呢啲單**本地有真實收款記錄**，金額一定要計入線上實收。
    *
-   * 🔴 2026-09-15 修（商家實案：報表今日「線上」MOP 0、交班卻顯示 602）：
-   * 呢個 filter 以前**冇日期條件**，會把**往日**（甚至幾個星期前）嘅線上投影單一齊加落「今日」線上實收，
-   * 令交班「線上線下合計（實收）」長期大過報表。
-   * 同一個檔案裏面其餘三個口徑（`todayLocalOrders` 線下／`ledgerOnlyRows` Ledger 純線上／
-   * `detailOrders` 明細）**全部**係 `orderMatchesReportRange(o, "today")`，唯獨呢個冇 →
-   * 交班自己「卡片線上數」同「明細線上小計」都夾唔到，更加同報表夾唔到。
+   * 🔴 2026-11-03（商家拍板）：由「只認 `settled`」放寬為「`settled` **或** `paid`」。
+   *
+   * 病：一張線上單客人已付款、店員未完成（本地 `status = "paid"`），
+   *   本地側唔計（未 settled）、Ledger 側又被 `localOnlineIds` 按 id 排除
+   *   ⇒ 線上實收變 **0**，即「未完成但已付款」嗰筆錢憑空消失。
+   *   呢個正正係「有未完成訂單」最常見嘅狀態，唔可以漏。
+   *
+   * ⚠️ `paid` 一定係 `prepaidAmount = total`（見 `ledger-pos-bridge.ts` 的投影規則），
+   *    所以用 `total` 加總＝實收，唔會多計未收部分。
+   * ⚠️ `reopened` **唔包**：佢係「曾結帳、返結中」，筆錢已喺上一個班／上一次結帳計過，
+   *    再加一次就會雙計。
    */
-  const onlineLocalOrders = useMemo(
-    () =>
-      orders.filter(
-        (o) => !!o.onlineOrderId && o.status === "settled" && orderMatchesReportRange(o, "today"),
-      ),
-    [orders],
-  );
+  const onlineLocalOrders = useMemo(() => {
+    if (!shiftRange) return [];
+    return orders.filter(
+      (o) =>
+        !!o.onlineOrderId &&
+        (o.status === "settled" || o.status === "paid") &&
+        orderMatchesReportRange(o, shiftRange),
+    );
+  }, [orders, shiftRange]);
   const onlineLocalMop = useMemo(
     () => Math.round(onlineLocalOrders.reduce((s, o) => s + (o.total || 0), 0) * 100) / 100,
     [onlineLocalOrders],
@@ -635,10 +718,10 @@ export function ShiftPage() {
   /**
    * 「本地已經有 POS 投影單」嘅 Ledger id 集合（去重／核對用）。
    *
-   * 🔴 2026-09-24 修正（事故）：唔可以只用**今日**嘅 `onlineLocalOrders`。
-   * 較早日期嘅 POS 投影單唔喺今日 ⇒ 對應嘅 Ledger 單（Ledger 側今日有更新 ⇒
-   * `sumPaidLedgerOrders("today")` 會收錄）會被誤判「Ledger 純線上單」⇒
-   * 加落**今日**線上實收 ⇒ 同**昨日**已經入帳嘅 POS 單**雙計**。
+   * 🔴 2026-09-24 修正（事故）：唔可以只用**本班**嘅 `onlineLocalOrders`。
+   * 較早嘅 POS 投影單唔喺本班窗內 ⇒ 對應嘅 Ledger 單（Ledger 側本班有更新 ⇒
+   * `sumPaidLedgerOrders(本班窗)` 會收錄）會被誤判「Ledger 純線上單」⇒
+   * 加落**本班**線上實收 ⇒ 同**上一班**已經入帳嘅 POS 單**雙計**。
    *
    * ⇒ 補上本機全量（`loadOrders()`，**零請求**）。
    */
@@ -749,18 +832,19 @@ export function ShiftPage() {
   }, [ledgerPaidOrders, orders]);
 
   /**
-   * 明細用：今日**所有**已結帳本地單 —— **包括帶 `onlineOrderId` 嘅線上投影單**
+   * 明細用：本班**所有**已結帳本地單 —— **包括帶 `onlineOrderId` 嘅線上投影單**
    * （掃碼／排位／快餐採納：本地有真實收款記錄），並標「線上」chip 分辨。
    *
    * 🔴 2026-09-14 商家要求：舊版明細只列 `!onlineOrderId`（`isLocalPosOrder`），
    * 令 002 呢類線上交單喺交班明細**完全消失**（金額卻計入帳）→ 對數對唔到張單。
    * 退款單照樣唔列（口徑同上面「退款」統計一致）。
+   *
+   * 🔴 2026-11-03：範圍改跟班次窗（同上）。
    */
-  const detailOrders = useMemo(
-    () =>
-      orders.filter((o) => orderMatchesReportRange(o, "today") && o.status === "settled"),
-    [orders],
-  );
+  const detailOrders = useMemo(() => {
+    if (!shiftRange) return [];
+    return orders.filter((o) => orderMatchesReportRange(o, shiftRange) && o.status === "settled");
+  }, [orders, shiftRange]);
 
   /** 明細兩個小計（令明細 ↔ 支付方式分項／線上實收 一眼對得上）。 */
   const detailSplit = useMemo(() => {
@@ -864,29 +948,42 @@ export function ShiftPage() {
   }, [detailOrders, ledgerOnlyRows]);
 
   /**
-   * 拉今日 Ledger 數據（RPC 摘要 + 已付款單加總）。
+   * 拉本班 Ledger 數據（RPC 摘要 + 已付款單加總）。
    * 抽成 callback 係因為「補推線上單狀態」之後要即刻重新拉一次（見 `handleBackfillOnlineCompleted`）。
+   *
+   * 🔴 2026-11-03：區間由 `"today"` 改為**班次窗**。
+   * 唔可以用 `shiftRange`（memo）做 dep：佢嘅尾每 60 秒變 → 會變成分鐘一次重拉。
+   * 所以喺**呼叫當刻**由 `loadShiftState()` 重新計一次；班次一開一關由下面個 effect 主動重拉。
    */
   const refreshLedgerToday = useCallback(async () => {
     setLedgerTodayError(null);
     // 每次重跑都落返「未完成」→ 全頁 loading（商家要求 refresh 期間顯示 loading）。
     setLedgerLoaded(false);
+    // 未開工／已交班：本班冇數，唔應該打 Ledger（亦唔應該顯示上一班嘅數）。
+    const shiftWindowNow = shiftWindowOf(loadShiftState(), Date.now());
+    if (!shiftWindowNow) {
+      setLedgerToday(null);
+      setLedgerPaidOrders(null);
+      setLedgerLoaded(true);
+      return;
+    }
+    const range = { key: "custom" as const, window: shiftWindowNow };
     try {
       const restored = await restoreLedgerSession();
       if (!restored) {
         setLedgerToday(null);
         setLedgerPaidOrders(null);
-        setLedgerTodayError(t("尚未登入 Ledger，無法讀取今日線上訂單。"));
+        setLedgerTodayError(t("尚未登入 Ledger，無法讀取本班線上訂單。"));
         return;
       }
-      const data = await getMerchantReportSummary("today");
+      const data = await getMerchantReportSummary(range);
       setLedgerToday(data);
       // 線上「實收」＝已付款單逐張加總（含未完成單）。RPC `order_paid_avos` 只認「已完成」，
       // 客人已付款但未推 completed 嘅單會漏 ⇒ 唔可以單靠 RPC 做「實收」。
       const merchantId = loadAuthSession()?.merchantId ?? null;
       if (merchantId) {
         try {
-          setLedgerPaidOrders(await sumPaidLedgerOrders({ merchantId, range: "today" }));
+          setLedgerPaidOrders(await sumPaidLedgerOrders({ merchantId, range }));
         } catch {
           setLedgerPaidOrders(null);
         }
@@ -896,7 +993,7 @@ export function ShiftPage() {
     } catch (error) {
       setLedgerToday(null);
       setLedgerPaidOrders(null);
-      setLedgerTodayError(error instanceof Error ? error.message : t("讀取今日線上報表失敗"));
+      setLedgerTodayError(error instanceof Error ? error.message : t("讀取本班線上報表失敗"));
     } finally {
       // 🔴 放 `finally`：上面「未登入 Ledger」嗰條 `return` 同 catch 都係「未拿到線上數」
       // 兩種合法結局（UI 各自有明確錯誤橫幅）。若唔放行，錯咗之後全頁會**永久 loading**，
@@ -908,6 +1005,24 @@ export function ShiftPage() {
   useEffect(() => {
     void refreshLedgerToday();
   }, [refreshLedgerToday]);
+
+  /**
+   * 開班／交班 → 用新嘅班次窗重拉 Ledger（2026-11-03）。
+   *
+   * `refreshLedgerToday` 嘅 deps 係 `[]`（見上面註解），所以唔會自己跟 `shift.openedAt`。
+   * 呢個 effect 專門喺班次狀態真正變嗰陣補一刀；mount 時跳過（上面個 effect 已經拉咗）。
+   */
+  const ledgerShiftSyncRef = useRef<string | null | undefined>(undefined);
+  useEffect(() => {
+    const openedAt = shift.openedAt ?? null;
+    if (ledgerShiftSyncRef.current === undefined) {
+      ledgerShiftSyncRef.current = openedAt;
+      return;
+    }
+    if (ledgerShiftSyncRef.current === openedAt) return;
+    ledgerShiftSyncRef.current = openedAt;
+    void refreshLedgerToday();
+  }, [shift.openedAt, refreshLedgerToday]);
 
   /**
    * 🔴 2026-09-15 交班歷史雲端回填（商家明確要求：「我在別的電腦登入這個帳號，需要上雲！」）。
@@ -1724,6 +1839,67 @@ export function ShiftPage() {
   const closeGateNothingToDo =
     storeOpenStatus.isOpen !== true && onlineOrderConfig.merchantEnabled !== true;
 
+  /**
+   * 撳「結數交班並打印」→ **先檢查未完成訂單**（2026-11-03 商家要求）。
+   *
+   * 0 張 → 直接入原本 step1（流程零改動）；有 → 先彈提示，職員可以選擇去處理或者「仍然交班」。
+   *
+   * ⚠️ 一定要**即場重算**（本機 `loadOrders()` ∪ 已 merge 嘅 `orders` state），唔可以淨靠 state：
+   *    職員可能啱啱喺另一頁完成／取消咗單，state 未及更新就會誤報；
+   *    但另一部機開住嘅單只喺雲端（state 先有）⇒ 兩邊都要。
+   * ⚠️ Ledger 側要連 `unpaidOrders` 一齊傳：商家口徑係「任何未完成狀態都要提」，
+   *    包括客人落咗單但未付款。平台單由 `collectUnfinishedOrders()` 內部剔除。
+   */
+  function openCloseFlow() {
+    setClosingDiff("");
+    setClosingNote("");
+    /**
+     * 本機快照 ∪ 已 merge 嘅 `orders` state。
+     *
+     * 🔴 唔可以只用 `loadOrders()`：另一部機開住嘅單只喺雲端，
+     *    `orders` state 先有（見 `refreshOrders` 嘅 merge）；亦唔可以只用 state：
+     *    職員啱啱喺呢部機完成／取消嘅單，`loadOrders()` 先係最新。
+     * 同一 id 用 `mergeOrdersPreferTerminal()`：終態永遠贏（唔會被舊「未完成」蓋走）。
+     */
+    const localSnapshot = mergeOrdersPreferTerminal(orders, loadOrders());
+    const found = collectUnfinishedOrders({
+      localOrders: localSnapshot,
+      onlineOrders: [
+        ...(ledgerPaidOrders?.orders ?? []),
+        ...(ledgerPaidOrders?.unpaidOrders ?? []),
+      ],
+    });
+    if (found.total === 0) {
+      setUnfinishedPrompt(null);
+      setConfirmStep(1);
+      setConfirmOpen(true);
+      return;
+    }
+    setUnfinishedPrompt(found);
+  }
+
+  /**
+   * 「查看訂單」→ 跳 `/orders` 並高亮未完成單。
+   *
+   * 日期範圍一定要包住**班次窗**（跨午夜）同**最早嗰張未完成單**（可能係幾日前留低），
+   * 否則訂單頁預設「今日」會令職員見唔到高亮嗰張。
+   */
+  function goToUnfinishedOrders() {
+    const todayKey = macauDateKey(new Date());
+    const candidates: Array<string | null> = [
+      shiftWindow ? shiftDayKeys(shiftWindow)?.from ?? null : null,
+      ...(unfinishedPrompt?.items ?? []).map((item) =>
+        item.eventAt > 0 ? macauDateKey(new Date(item.eventAt)) : null,
+      ),
+    ];
+    const earliest = candidates.reduce<string | null>((acc, day) => earlierDayKey(acc, day), null);
+    const from = earliest && earliest <= todayKey ? earliest : todayKey;
+    setUnfinishedPrompt(null);
+    router.push(
+      `/orders?unfinished=1&from=${encodeURIComponent(from)}&to=${encodeURIComponent(todayKey)}`,
+    );
+  }
+
   return (
     <div className="h-[100dvh] overflow-hidden bg-slate-100">
       <AppSidebar />
@@ -1732,7 +1908,7 @@ export function ShiftPage() {
           <div className="min-w-[240px] flex-1">
             <div className="text-lg font-semibold text-slate-900">{t("交班")}</div>
             <div className="mt-1 text-sm text-slate-500">
-              {t("開工 → 營業 → 結數交班。交班後會打印一張今日營業摘要。")}
+              {t("開工 → 營業 → 結數交班。交班後會打印一張本班營業摘要。")}
             </div>
             {!shift.openedAt ? (
               <label className="mt-4 grid max-w-sm gap-1">
@@ -1795,12 +1971,7 @@ export function ShiftPage() {
               ) : (
                 <button
                   className="h-11 rounded-2xl bg-slate-900 px-5 text-sm font-semibold text-white"
-                  onClick={() => {
-                    setClosingDiff("");
-                    setClosingNote("");
-                    setConfirmStep(1);
-                    setConfirmOpen(true);
-                  }}
+                  onClick={openCloseFlow}
                   type="button"
                 >
                   {t("結數交班並打印")}
@@ -1832,8 +2003,29 @@ export function ShiftPage() {
         ) : (
           <>
         <section className="mt-3 rounded-2xl border border-slate-200 bg-white p-4">
-          <div className="text-base font-semibold text-slate-900">{t("今日摘要")}</div>
-            <div className="mt-1 text-xs text-slate-500">{t("店內堂食／快餐以本機 POS 為準；會員通線上以 Ledger 報表為準。")}</div>
+          <div className="text-base font-semibold text-slate-900">{t("本班摘要")}</div>
+          <div className="mt-1 text-xs text-slate-500">
+            {t("店內堂食／快餐以本機 POS 為準；會員通線上以 Ledger 報表為準。所有金額只計本班（開工 → 交班），唔係日曆日。")}
+          </div>
+          {/* 本班區間（2026-11-03）：跨午夜照計同一班；交班後清零。 */}
+          {shiftWindow ? (
+            <div className="mt-2 inline-flex flex-wrap items-center gap-x-2 gap-y-1 rounded-xl bg-slate-50 px-3 py-1.5 text-xs text-slate-600">
+              <span className="font-semibold text-slate-800">{t("本班：")}</span>
+              <span className="tabular-nums">
+                {formatMacauDateTime(shiftWindow.start)} → {t("現在")}
+              </span>
+              <span className="text-slate-400">·</span>
+              <span>{t("跨午夜照計同一班；交班後清零")}</span>
+            </div>
+          ) : (
+            <div className="mt-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
+              {shift.closedAt
+                ? t("本班已交班（{time}），數據已清零。下一班由「開工」開始。", {
+                    time: formatMacauDateTime(shift.closedAt),
+                  })
+                : t("未開工 · 開工後由 0 開始計。")}
+            </div>
+          )}
 
             {/* 金額合計（線上 + 線下）第一行：對數先睇呢度，確認條數啱唔啱 */}
             <div className="mt-4">
@@ -1858,7 +2050,7 @@ export function ShiftPage() {
                     ⚠️ `purchaseToday` **唔喺 `pageReady` 閘內**（pageReady = ordersLoaded && ledgerLoaded），
                        API 失敗時佢永遠 null ⇒ **唔可以用佢做 loading 判斷**，否則卡會永久卡 loading。
                        呢度做法同 `summary`（由本機 orders 計出）一致：null ⇒ 出空狀態。 */}
-                {purchaseToday?.summary ? (
+                {shiftWindow && purchaseToday?.summary ? (
                   <article className="rounded-2xl border border-rose-200 bg-rose-50/40 p-4">
                     <div className="flex items-start justify-between gap-2">
                       <div className="text-sm text-rose-700">{t("已付支出")}</div>
@@ -1888,7 +2080,9 @@ export function ShiftPage() {
                     <div className="mt-1 text-xs text-slate-500">
                       {/* 2026-10-13：全購貨統計已改 paid-only（`supplierStats` 亦然），
                           故張數要用 `paidCount`，唔可以用 `count`（全部收據含未付）。 */}
-                      {purchaseToday.summary.paidCount} {t("張收據 · 供貨商 ")}{purchaseToday.summary.supplierStats.length} {t("間")}</div>
+                      {purchaseToday.summary.paidCount} {t("張收據 · 供貨商 ")}{purchaseToday.summary.supplierStats.length} {t("間")}
+                      <span className="ml-1 text-slate-400">{t("（今日買貨；收據只有日期，唔跟班次）")}</span>
+                    </div>
                     {/* 供貨商分拆：預設收起（J 拍板），撳一下先展開 */}
                     {purchaseToday.summary.supplierStats.length > 0 ? (
                       <details className="mt-2 rounded-xl border border-rose-200 bg-white/70 px-3 py-2 text-xs text-slate-600">
@@ -1913,7 +2107,9 @@ export function ShiftPage() {
                     <div className="text-sm text-slate-500">{t("已付支出")}</div>
                     <div className="mt-2 text-2xl font-semibold text-slate-400">—</div>
                     <div className="mt-1 text-xs text-slate-400">
-                      {t("今日暫無買貨收據（或庫存資料未載入）。")}
+                      {!shiftWindow
+                        ? t("本班未開工／已交班，冇支出數。")
+                        : t("今日暫無買貨收據（或庫存資料未載入）。")}
                     </div>
                   </article>
                 )}
@@ -2109,11 +2305,11 @@ export function ShiftPage() {
             </div>
 
             <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
-              <div className="text-sm font-semibold text-slate-900">{t("訂單明細（今日已結帳）")}</div>
+              <div className="text-sm font-semibold text-slate-900">{t("訂單明細（本班已結帳）")}</div>
               <div className="mt-1 text-xs text-slate-500">
-                {t("線下 ")}{detailSplit.offlineCount} {t("張 ")}{formatMoney(detailSplit.offlineMop)}{t("（＝上方「店內支付方式拆分（線下 POS）」合計） ｜「線上」標記 ")}{detailSplit.onlineCount} {t("張 ")}{formatMoney(detailSplit.onlineMop)}{t("（線上交單嘅本地投影，＝上方線上實收嘅本地部分） ｜按結賬時間倒序；退款單唔列出。")}</div>
+                {t("線下 ")}{detailSplit.offlineCount} {t("張 ")}{formatMoney(detailSplit.offlineMop)}{t("（＝上方「店內支付方式拆分（線下 POS）」合計） ｜「線上」標記 ")}{detailSplit.onlineCount} {t("張 ")}{formatMoney(detailSplit.onlineMop)}{t("（線上交單嘅本地投影，只列已結帳） ｜按結賬時間倒序；退款單唔列出。")}</div>
               <div className="mt-3 max-h-[420px] overflow-auto rounded-xl border border-slate-200 bg-white">
-                <OrderDetailList rows={orderDetailRows} emptyText={t("今天暫無已結帳訂單。")} />
+                <OrderDetailList rows={orderDetailRows} emptyText={t("本班暫無已結帳訂單。")} />
               </div>
             </div>
 
@@ -2482,6 +2678,115 @@ export function ShiftPage() {
 
       </div>
 
+      {/*
+        交班前「未完成訂單」提示（2026-11-03 商家要求）。
+        ⚠️ 呢個窗**唔會**阻止交班：紅色「仍然交班」＝照樣入 step1。
+        商家原話：「有訂單還沒完成，你需要繼續進行嗎？」—— 提示，唔係硬閘。
+      */}
+      {unfinishedPrompt ? (
+        <ResponsiveModal
+          title={t("有 {n} 張訂單仲未完成", { n: unfinishedPrompt.total })}
+          description={
+            unfinishedPrompt.paidCount > 0
+              ? t(
+                  "其中 {n} 張已付款（MOP {amt}）—— 錢已計入本班數，只係訂單狀態未完成。你可以先去處理，或者照樣交班。",
+                  { n: unfinishedPrompt.paidCount, amt: formatMoneyValue(unfinishedPrompt.paidAmount) },
+                )
+              : t("呢批單全部都未完成。你可以先去處理，或者照樣交班。")
+          }
+          onClose={() => setUnfinishedPrompt(null)}
+          actions={
+            <>
+              <button
+                className="h-11 rounded-2xl bg-white px-5 text-sm font-semibold text-slate-900 shadow-sm ring-1 ring-slate-200"
+                onClick={goToUnfinishedOrders}
+                type="button"
+              >
+                {t("查看訂單")}
+              </button>
+              <button
+                className="h-11 rounded-2xl bg-rose-600 px-5 text-sm font-semibold text-white hover:bg-rose-700"
+                onClick={() => {
+                  setUnfinishedPrompt(null);
+                  setConfirmStep(1);
+                  setConfirmOpen(true);
+                }}
+                type="button"
+              >
+                {t("仍然交班")}
+              </button>
+            </>
+          }
+        >
+          <div className="text-xs text-slate-500">
+            {t("本機 {a} 張 · 線上 {b} 張", {
+              a: unfinishedPrompt.localCount,
+              b: unfinishedPrompt.onlineCount,
+            })}
+            {unfinishedPrompt.unpaidCount > 0
+              ? t("（未付款 {n} 張）", { n: unfinishedPrompt.unpaidCount })
+              : ""}
+          </div>
+          <div className="mt-2 max-h-[42vh] overflow-auto rounded-xl border border-slate-200">
+            <table className="w-full border-collapse text-left text-sm">
+              <tbody>
+                {unfinishedPrompt.items.slice(0, 5).map((item) => {
+                  const label =
+                    item.source === "local"
+                      ? item.order.localOrderNo ?? item.id.slice(0, 8)
+                      : item.order.pickupCode
+                        ? `#${item.order.pickupCode}`
+                        : item.id.slice(0, 8);
+                  const typeText =
+                    item.source === "local"
+                      ? item.order.tableName ?? ""
+                      : item.order.tabType === "dine_in"
+                        ? t("堂食")
+                        : item.order.tabType === "pickup"
+                          ? t("外賣自取")
+                          : t("外送");
+                  return (
+                    <tr className="border-b border-slate-100 last:border-b-0" key={`${item.source}:${item.id}`}>
+                      <td className="px-3 py-2">
+                        <div className="font-semibold text-slate-900">{label}</div>
+                        <div className="text-xs text-slate-500">
+                          {typeText ? `${typeText} · ` : ""}
+                          {item.eventAt > 0
+                            ? formatMacauDateTime(new Date(item.eventAt).toISOString())
+                            : ""}
+                        </div>
+                      </td>
+                      <td className="px-3 py-2 text-right">
+                        <div className="font-semibold tabular-nums text-slate-900">{formatMoney(item.amount)}</div>
+                        <span
+                          className={`mt-0.5 inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                            item.paid
+                              ? "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200"
+                              : "bg-amber-50 text-amber-700 ring-1 ring-amber-200"
+                          }`}
+                        >
+                          {item.paid ? t("已付款") : t("未付款")}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          {unfinishedPrompt.total > 5 ? (
+            <div className="mt-2 text-xs text-slate-500">
+              {t("另有 {n} 張未顯示", { n: unfinishedPrompt.total - 5 })}
+            </div>
+          ) : null}
+          {ledgerPaidOrders === null ? (
+            <div className="mt-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+              {t("線上訂單狀態暫時讀唔到（Ledger 未登入或載入失敗），以上只列本機訂單。")}
+            </div>
+          ) : null}
+        </ResponsiveModal>
+      ) : null}
+
       {confirmOpen ? (
         <ResponsiveModal
           title={
@@ -2493,7 +2798,7 @@ export function ShiftPage() {
           }
           description={
             confirmStep === 1
-              ? t("系統已自動彙總今日所有金額。請先點算現金箱：若與應收現金有落差，喺下面輸入差額；冇落差可直接進行下一步。")
+              ? t("系統已自動彙總本班所有金額。請先點算現金箱：若與應收現金有落差，喺下面輸入差額；冇落差可直接進行下一步。")
               : confirmStep === 2
                 ? t("交班後本班次會寫入歷史並切回「未開工」，金額與差額記錄即鎖定、不可再更改。請最後核對下列數字。")
                 : t("以下為固定格式交班明細（內容同版面不可編輯）。按「打印」由指定打印機出紙並完成交班；按「跳過」唔打印直接完成交班。")
@@ -2852,7 +3157,7 @@ export function ShiftPage() {
                   </div>
 
                   <div className="mt-3 border-t border-dashed border-slate-300 pt-2">
-                    <div className="font-semibold text-slate-700">{t("— 店內（今日）—")}</div>
+                    <div className="font-semibold text-slate-700">{t("— 店內（本班）—")}</div>
                     <div className="mt-1 space-y-0.5">
                       <div className="flex items-baseline justify-between gap-2">
                         <span>{t("已結帳訂單")}</span>
@@ -2885,7 +3190,7 @@ export function ShiftPage() {
 
                   {previewData.online ? (
                     <div className="mt-3 border-t border-dashed border-slate-300 pt-2">
-                      <div className="font-semibold text-slate-700">{t("— 會員通線上（今日）—")}</div>
+                      <div className="font-semibold text-slate-700">{t("— 會員通線上（本班）—")}</div>
                       <div className="mt-1 space-y-0.5">
                         <div className="flex items-baseline justify-between gap-2">
                           <span>{t("線上訂單")}</span>
@@ -2914,7 +3219,7 @@ export function ShiftPage() {
                   <div className="mt-3 border-t border-dashed border-slate-300 pt-2">
                     <div className="font-semibold text-slate-700">{t("— 支付方式分項 —")}</div>
                     {previewData.payments.length === 0 ? (
-                      <div className="mt-1 text-slate-500">{t("（今日暫無已結帳線下訂單）")}</div>
+                      <div className="mt-1 text-slate-500">{t("（本班暫無已結帳線下訂單）")}</div>
                     ) : (
                       <div className="mt-1 space-y-0.5">
                         {previewData.payments.map((bucket) => (

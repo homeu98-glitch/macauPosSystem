@@ -429,9 +429,13 @@ export const SHIFT_SECTION_TITLES: Record<
   Extract<ShiftSectionId, `section_${string}`>,
   string
 > = {
-  section_store: "— 店內（今日）—",
-  section_online: "— 會員通線上（今日）—",
+  // 2026-11-03：交班數字改計「本班」（開工 → 交班），唔再係日曆日 ——
+  // 夜宵店 11/3 20:00 → 11/4 02:00 係同一班。標題如實寫「本班」，
+  // 免得紙本寫「今日」但數字其實橫跨兩日。商家仍可喺設計介面自改。
+  section_store: "— 店內（本班）—",
+  section_online: "— 會員通線上（本班）—",
   section_payment: "— 支付方式分項（線下 POS）—",
+  // ⚠️ 買貨成本仍然係「今日」：收據只有 `receipt_date`（冇時刻），做唔到班次級。
   section_purchase: "— 買貨成本（今日）—",
   section_cash: "— 現金箱核對 —",
 };
@@ -1218,7 +1222,7 @@ export function buildShiftContent(data: ShiftSettlementSnapshot, opts: ShiftCont
   // 預覽用 `whitespace-pre-wrap`、出紙 `buf.line()` 兩邊都照印成多行。
   const breakdown =
     data.payments.length === 0
-      ? "（今日暫無已結帳線下訂單）"
+      ? "（本班暫無已結帳線下訂單）"
       : data.payments
           .map((b) => `${b.method}：應收 ${money(b.receivable)} / 實收 ${money(b.paid)} · ${b.count} 張`)
           .join("\n");
