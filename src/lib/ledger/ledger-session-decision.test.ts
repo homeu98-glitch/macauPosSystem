@@ -82,6 +82,40 @@ describe("ledger-session-decision ── bootstrap（每頁一次 setSession）"
   });
 });
 
+describe("ledger-session-decision ── 開頁時 storage 張票已過期（2026-11-03 修）", () => {
+  /**
+   * 實案：收銀機過夜，Ledger access token（1h TTL）一定過期，而 `persistSession:false`
+   * ⇒ 每次開頁 client 都未有 session。舊決策一律落 `bootstrap`（拿過期票去 setSession），
+   * 必敗 ⇒ 全店當成「未登入」⇒ `/api/pos/device-token` 每 30 秒 `JWT expired`。
+   *
+   * 正確：仲有 refresh token 就應該**換票**，而唔係拿過期票去撞。
+   */
+  it("client 未有 session、storage 已過期 ⇒ refresh（唔可以 bootstrap）", () => {
+    assert.deepEqual(
+      decideLedgerSessionAction(
+        base({ clientAccessToken: null, storedExpiresAtMs: NOW - HOUR }),
+      ),
+      { action: "refresh" },
+    );
+  });
+
+  it("client 未有 session、storage 只剩 1 分鐘 ⇒ refresh（快過期等同上）", () => {
+    assert.deepEqual(
+      decideLedgerSessionAction(
+        base({ clientAccessToken: null, storedExpiresAtMs: NOW + 60_000 }),
+      ),
+      { action: "refresh" },
+    );
+  });
+
+  it("client 未有 session、讀唔到 exp ⇒ 保守行 bootstrap（唔博）", () => {
+    assert.deepEqual(
+      decideLedgerSessionAction(base({ clientAccessToken: null, storedExpiresAtMs: null })),
+      { action: "bootstrap" },
+    );
+  });
+});
+
 describe("ledger-session-decision ── reuse（零網路）", () => {
   it("同一張票、未過期 ⇒ reuse", () => {
     assert.deepEqual(decideLedgerSessionAction(base()), { action: "reuse" });

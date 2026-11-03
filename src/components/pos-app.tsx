@@ -58,6 +58,7 @@ import {
 import { getStoreStatusSnapshot } from "@/lib/pos/use-store-status";
 import { observeServerBuildFromResponse } from "@/lib/build-info-observe";
 import { BuildStaleBanner } from "@/components/build-stale-banner";
+import { PosAuthExpiredBanner } from "@/components/pos-auth-expired-banner";
 import { SessionRevokedBanner } from "@/components/pos-session-revoked-banner";
 import { markPosSessionRevoked } from "@/lib/pos/session-revoked";
 import { POS_SESSION_CLOSED_HEADER } from "@/lib/pos/session-record";
@@ -5749,6 +5750,11 @@ export function PosApp() {
           pendingSyncCount={queue.filter((event) => event.status === "pending").length}
           settlementOpen={Boolean(payingOrderId)}
         />
+        {/* ⚠️ 雲端登入（Ledger 會話）失效（2026-11-03）：只有 `/api/pos/device-token`
+            明確回 401／session_expired 才出現。舊版呢個情況係**完全靜默**
+            （每 30 秒重試、收銀員零提示、單全部上唔到雲）。
+            同樣 in-flow、唔自動 reload。詳見 `pos-auth-expired-banner.tsx`。 */}
+        <PosAuthExpiredBanner />
         {/* 2026-10-30（P4 收尾）：離線登入出嚟嘅 session server 未驗證過身份
             → 恢復網絡之後提示重新登入。**in-flow**（推低內容、唔蓋控制項），
             而且**唔踢人落線**（離線單可能仲未補傳完）。詳見該元件頂部說明。 */}

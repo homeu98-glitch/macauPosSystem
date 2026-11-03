@@ -14,7 +14,8 @@
  * | 情況 | 動作 | 網路 |
  * |---|---|---|
  * | POS storage 冇 token | `unauthorized` | 零 |
- * | client 記憶體未有 session | `bootstrap` | 1 次 `setSession`（每頁僅此一次） |
+ * | client 記憶體未有 session、storage 張**仍然有效** | `bootstrap` | 1 次 `setSession`（每頁僅此一次） |
+ * | client 記憶體未有 session、storage 張**已過期／快過期** | `refresh` | 1 次 `refreshSession`（2026-11-03 修：以前誤落 bootstrap，必敗） |
  * | storage 同 client 票唔同、storage 張**仍然有效** | `bootstrap` | 1 次（另一分頁登入過／刷新過 ⇒ 換身份） |
  * | storage 同 client 票唔同、storage 張已過期／快過期 | 以 client 為準 | 零（client 先醒 refresh 過，舊票已被 rotation） |
  * | client 張 ≤5 分鐘到期｜讀唔到到期時間 | `refresh` | 1 次 `refreshSession` |
@@ -64,17 +65,33 @@ export interface LedgerSessionDecisionInput {
 export function decideLedgerSessionAction(input: LedgerSessionDecisionInput): LedgerSessionAction {
   if (!input.storedAccessToken) return { action: "unauthorized" };
 
-  // client 未接管過（每次開頁第一次）⇒ 一定要 setSession 一次。
-  if (!input.clientAccessToken) return { action: "bootstrap" };
+  /**
+   * storage 張票仲有冇「新鮮」到可以直接交去 `setSession()`。
+   *
+   * 🔴 2026-11-03：呢個判斷以前**只喺「client 有票但同 storage 唔同」時用**，
+   *    「client 完全未有票」（＝每次開頁第一次）就直接 `bootstrap` —— 即係
+   *    拿住張**過夜已經過期**嘅票去 `setSession()`，必敗，然後 return null。
+   *
+   *    實測後果：收銀機每日早上都變成「未登入」，`/api/pos/device-token` 每 30 秒
+   *    回 `JWT expired`（Vercel log 滿屏），收銀員完全唔知要重新登入。
+   */
+  const storedFresh =
+    input.storedExpiresAtMs !== null &&
+    input.storedExpiresAtMs - input.nowMs > LEDGER_REFRESH_SKEW_MS;
+
+  // client 未接管過（每次開頁第一次）。
+  if (!input.clientAccessToken) {
+    // 張票仲新 ⇒ 照舊 setSession；已經過期／快過期 ⇒ **直接用 refresh token 換新票**，
+    // 唔好再拿過期票去撞（讀唔到 exp 就照舊 bootstrap，唔博）。
+    if (input.storedExpiresAtMs === null || storedFresh) return { action: "bootstrap" };
+    return { action: "refresh" };
+  }
 
   if (input.clientAccessToken !== input.storedAccessToken) {
     // storage 張仍然有效 ⇒ 係「新身份」（另一分頁登入過／刷新過）⇒ bootstrap 換過去。
     // storage 張已過期／快過期 ⇒ client 先醒 refresh 過（rotation 換咗票）⇒ 以 client
     //   為準，落去個 reuse／refresh 判斷（上層會順手 sync 返 storage）。
-    const storedStillFresh =
-      input.storedExpiresAtMs !== null &&
-      input.storedExpiresAtMs - input.nowMs > LEDGER_REFRESH_SKEW_MS;
-    if (storedStillFresh) return { action: "bootstrap" };
+    if (storedFresh) return { action: "bootstrap" };
   }
 
   // 到期時間讀唔到 ⇒ 唔好博，寧願 refresh 一次都唔好放過期票出去。

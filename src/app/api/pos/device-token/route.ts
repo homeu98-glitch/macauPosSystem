@@ -23,6 +23,18 @@ import { clientIp, rateLimit } from "@/lib/pos/rate-limit";
  * 安全：fail closed —— 讀唔到 merchant_staff 就唔簽。
  */
 
+/**
+ * PostgREST 對「票過期／簽名唔對」嘅回應。
+ *
+ * 🔴 2026-11-03：呢個判斷決定**收銀機會唔會無限重試**。
+ *    舊版一律回 503「無法驗證商戶身份」⇒ client 當「server 一時故障」，
+ *    每 30 秒再試，永遠唔會叫收銀員重新登入（實測全店機一齊燒足一晚）。
+ */
+function isJwtRejected(message: string | undefined): boolean {
+  if (!message) return false;
+  return /jwt expired|invalid jwt|jwt malformed|no valid jwt/i.test(message);
+}
+
 export async function POST(request: Request) {
   if (!rateLimit(`pos-device-token:${clientIp(request)}`, 60, 60_000)) {
     return NextResponse.json({ ok: false, error: "請求過於頻繁，請稍後再試。" }, { status: 429 });
@@ -49,7 +61,15 @@ export async function POST(request: Request) {
   const { data: userData, error: userError } = await client.auth.getUser();
   const userId = userData?.user?.id;
   if (userError || !userId) {
-    return NextResponse.json({ ok: false, error: "Ledger 會話已失效，請重新登入。" }, { status: 401 });
+    /**
+     * 🔴 401 + `code`：呢個係**終態**，唔係「server 一時故障」。
+     * client 端收到 `session_expired` 就必須停止重試 + 提示重新登入，
+     * 唔可以再每 30 秒打一次（2026-11-03：嗰個迴圈令全店 POS 靜靜壞機）。
+     */
+    return NextResponse.json(
+      { ok: false, code: "session_expired", error: "Ledger 會話已失效，請重新登入。" },
+      { status: 401 },
+    );
   }
 
   // ── 審計身分：由 Ledger Auth email 還原 8 位登入電話（2026-09-23）──────────
@@ -81,6 +101,13 @@ export async function POST(request: Request) {
 
   if (staffError) {
     console.error("[pos/device-token] 讀取 merchant_staff 失敗:", staffError.message);
+    // 票過期／簽名唔對 ⇒ 同 401 一樣係終態（唔係 infra 故障），client 要停手。
+    if (isJwtRejected(staffError.message)) {
+      return NextResponse.json(
+        { ok: false, code: "session_expired", error: "登入憑證已過期，請重新登入。" },
+        { status: 401 },
+      );
+    }
     return NextResponse.json({ ok: false, error: "無法驗證商戶身份。" }, { status: 503 });
   }
 

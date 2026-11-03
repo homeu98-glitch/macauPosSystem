@@ -2175,3 +2175,42 @@ Observability 12 小時 569K，Top paths 五條**完全 1:1:1:1:1、各 68K**：
 - 「發現無效」同「清走憑證」**唔可以分家** —— 分家就會 A 邊跳走、B 邊見到同一張票又跳返。
 - 自動踢人用窄口徑（只清 admin token）；`clearAuthSession()` 留返畀用戶主動登出。
 - 呢類 bug **build／tsc／lint 全過**，只會喺「token 過期 + 分頁留住」時爆 ⇒ 一定要源碼掃描守衛。
+
+---
+
+## 🔴🔴 POS 憑證續期「三邊都唔會續」→ 全店每日早上靜靜壞機（2026-11-03）
+
+**病症**：Vercel log 滿屏 `[pos/device-token] 讀取 merchant_staff 失敗: JWT expired`，
+每部機每 **30 秒**一次、幾部機一齊；收銀員**零提示**，單全部留喺本機 outbox 上唔到雲。
+
+**三個缺陷（缺一都唔會咁靜）**
+
+| 位置 | 缺陷 |
+|---|---|
+| `src/lib/ledger/ledger-session-decision.ts` | 開頁時 client 未有 session（`persistSession:false` 必然）**一律 bootstrap** ⇒ 拿**已過期** access token 去 `setSession()`，必敗 ⇒ return null |
+| `src/lib/ledger/supabase-server-auth.ts` | `createLedgerServerClient()` 把 `Authorization: Bearer <舊票>` 釘死喺 `global.headers`；`setSession()` 只更新 `client.auth`，**唔會改呢個 header** ⇒ `merchant_staff` 查詢永遠帶過期票 |
+| `src/app/api/pos/device-token/route.ts` | 一律回 **503** ⇒ client 當「臨時故障」無限重試（舊 `refreshPosDeviceTokenIfNeeded` 失敗後 0ms 清 inflight、零退避） |
+
+**修法**
+
+1. 決策層：client 未有 session 而 storage 張票已過期／快過期 ⇒ `refresh`（唔再 bootstrap）；
+   `session.ts` 喺「client 未有 session」時用 **storage 嘅 refresh token** 換票
+   （`refreshSession({ refresh_token })`）。
+2. server client：換票成功後**用新 token 重建 client**（`createLedgerServerClient(fresh)`），
+   否則 PostgREST 永遠用舊票。
+3. route：JWT 類錯誤 → **401 + `code:"session_expired"`**（唔再 503）；只有真 infra 問題才 503。
+4. client：`refreshPosDeviceTokenIfNeeded()` 先 `await ensureLedgerSession()` 再換票；
+   收到 401／`session_expired` → 落閂 **10 分鐘**（期間零網絡）＋出 `PosAuthExpiredBanner`；
+   成功則解閂。**比對 storage 張票有冇換過 ⇒ 重新登入自動解閂**，唔使 login 流程特別通知。
+5. 新檔：`src/lib/pos/auth-expired.ts`（零 import store）＋`src/components/pos-auth-expired-banner.tsx`
+   （in-flow、唔自動 reload，文案明講「本機照開單、只係上唔到雲，重新登入後補傳」）。
+6. 守衛：`src/app/api/pos/device-token/device-token-contract.test.ts`（9 項源碼掃描）
+   ＋ `ledger-session-decision.test.ts` 加 3 個「開頁遇到過期票」case。
+
+**鐵律**
+
+- **任何「拿 storage 張票直接用」嘅路徑，都要先問「佢過期未、邊個負責續」。**
+  呢個系統有兩個 token（Ledger access token 1h、POS device token 12h），漏一個就係靜默壞機。
+- **換票之後一定要重建 client**（header 係建立時釘死嘅），唔可以只 `setSession()`。
+- **終態要回 401，唔可以回 503** —— 503 嘅語意係「等陣再試」，會製造無限重試。
+- 收銀機係 24/7 開住：任何「開頁時才續期」嘅設計，都要假設張票**一定已經過期**。

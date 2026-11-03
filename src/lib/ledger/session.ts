@@ -110,10 +110,15 @@ async function resolveLedgerSession(): Promise<string | null> {
     });
     if (setError) return null;
   } else if (decision.action === "refresh") {
-    // 用 client 而家嘅 session 去 refresh —— **唔可以**攰 storage 舊票：
+    // 有 client session 就用佢 —— **唔可以**攞 storage 舊票：
     // 舊 refresh token 可能已被輪換（另一分頁／auto-ticker 醒先刷新）。
-    if (!clientSession) return null;
-    const { error: refreshError } = await client.auth.refreshSession(clientSession);
+    //
+    // 🔴 2026-11-03：**開頁第一次 client 一定未有 session**（`persistSession:false`），
+    //    而決策層以前喺呢個情況一律 `bootstrap`（拿過期 access token 去 setSession ⇒
+    //    必敗）。改成「已過期就 refresh」之後，呢度要識得**用 storage 嘅 refresh token**
+    //    換票，否則決策層改咗都執行唔到。
+    const refreshArg = clientSession ?? { refresh_token: stored.ledgerRefreshToken };
+    const { error: refreshError } = await client.auth.refreshSession(refreshArg);
     if (refreshError) return null;
   }
 

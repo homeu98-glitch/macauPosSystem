@@ -1,3 +1,5 @@
+import { ensureLedgerSession } from "@/lib/ledger/session";
+import { clearPosAuthExpired, markPosAuthExpired } from "@/lib/pos/auth-expired";
 import { loadAuthSession, saveAuthSession, type AuthSession } from "@/lib/storage";
 
 import { readClientBuildInfo } from "@/lib/build-info";
@@ -93,6 +95,57 @@ const REFRESH_MARGIN_MS = 10 * 60 * 1000;
 let inflight: Promise<boolean> | null = null;
 
 /**
+ * 會話已死嘅「閂水喉」狀態（2026-11-03）。
+ *
+ * ## 為何需要（實測）
+ *
+ * Ledger 會話一死，`/api/pos/device-token` 每次都失敗。舊版失敗之後即刻清 `inflight`
+ * （`setTimeout(...,0)`）、冇任何退避 ⇒ 每個 caller（state 拉取／sync flush 每 30 秒／
+ * orders panel）都會再打一次，一部機一日 **2,880 次**，幾部機一齊燒 Vercel 額度，
+ * 而收銀員零提示。
+ *
+ * ## 機制
+ *
+ * · 只有 server **明確**回 401 / `code:"session_expired"` 才落閂（網絡錯誤唔算）；
+ * · 冷卻 10 分鐘（期間 `return false`，零網絡）；
+ * · **用戶重新登入會自動解閂** —— 靠比對 storage 張 `ledgerAccessToken` 有冇換過，
+ *   唔需要 login 流程特別通知呢個 module。
+ */
+const SESSION_DEAD_COOLDOWN_MS = 10 * 60 * 1000;
+let latchedLedgerToken: string | null = null;
+let latchedUntil = 0;
+
+function currentLedgerToken(): string {
+  return loadAuthSession()?.ledgerAccessToken ?? "";
+}
+
+function resetAuthLatch(): void {
+  latchedLedgerToken = null;
+  latchedUntil = 0;
+}
+
+/** 而家係咪「已判定會話失效、暫時唔再試」。 */
+export function isPosDeviceAuthLatched(nowMs: number = Date.now()): boolean {
+  if (!latchedUntil) return false;
+  // 重新登入過（storage 換咗票）⇒ 即刻解閂，唔使等冷卻完。
+  if (latchedLedgerToken !== null && latchedLedgerToken !== currentLedgerToken()) {
+    resetAuthLatch();
+    return false;
+  }
+  if (nowMs >= latchedUntil) {
+    resetAuthLatch();
+    return false;
+  }
+  return true;
+}
+
+function latchSessionExpired(reason: string): void {
+  latchedLedgerToken = currentLedgerToken();
+  latchedUntil = Date.now() + SESSION_DEAD_COOLDOWN_MS;
+  markPosAuthExpired(reason);
+}
+
+/**
  * 需要時續期 POS 終端憑證。
  *
  * - 冇 authSession / 冇 ledgerAccessToken → 直接回 false（匿名，唔會阻擋落單）。
@@ -112,24 +165,61 @@ export async function refreshPosDeviceTokenIfNeeded(force = false): Promise<bool
     if (exp !== null && exp - Date.now() > REFRESH_MARGIN_MS) return true;
   }
 
+  // 已判定會話死亡 → 零網絡（見上面 `SESSION_DEAD_COOLDOWN_MS` 註釋）。
+  // ⚠️ 一定要放喺「現有 token 仲有效」之後：手上憑證未過期就唔應該被閂影響。
+  if (isPosDeviceAuthLatched()) return false;
+
   if (inflight) return inflight;
   inflight = (async () => {
     try {
+      /**
+       * 🔴🔴 2026-11-03 根因修正：**先續 Ledger 會話，再換 POS 憑證**。
+       *
+       * 舊版直接拿 storage 張 `ledgerAccessToken` 去 POST。收銀機過夜之後張票
+       * 一定過期（access token 1 小時 TTL）⇒ 每次都 `JWT expired`。
+       *
+       * 而 client 側唯一會續期嘅地方（`ensureLedgerSession()`）喺 AuthGuard mount 時
+       * 跑一次；佢以前對「已過期票」會落 bootstrap（setSession 必敗）——
+       * 即係**兩邊都唔會真正續期**，全店靜靜咁壞到有人重新登入為止。
+       *
+       * ⇒ 呢度明確先等一次 `ensureLedgerSession()`（single-flight、未過期時零網絡），
+       *   佢失敗都照 POST —— 由 server 判斷係「票死」定「網絡問題」，
+       *   只有前者才落閂（見下面 401 分支）。
+       */
+      await ensureLedgerSession().catch(() => null);
+      const fresh = loadAuthSession();
+      if (!fresh?.ledgerAccessToken) return false;
+
       const res = await fetch("/api/pos/device-token", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          accessToken: session.ledgerAccessToken,
-          refreshToken: session.ledgerRefreshToken,
+          accessToken: fresh.ledgerAccessToken,
+          refreshToken: fresh.ledgerRefreshToken,
         }),
       });
-      const payload = (await res.json().catch(() => null)) as { ok?: boolean; token?: string } | null;
+      const payload = (await res.json().catch(() => null)) as
+        | { ok?: boolean; token?: string; code?: string }
+        | null;
+
+      /**
+       * 🔴 終態（唔係「重試就會好」）：停手 + 出橫幅叫收銀員重新登入。
+       * 舊版 server 呢兩種情況一律回 503，client 當成臨時故障 ⇒ 無限重試。
+       */
+      if (res.status === 401 || payload?.code === "session_expired") {
+        latchSessionExpired("session_expired");
+        return false;
+      }
+
       if (!res.ok || !payload?.ok || !payload.token) return false;
 
-      const latest = loadAuthSession() ?? session;
+      const latest = loadAuthSession() ?? fresh;
       // ⚠️ 一定要經 saveAuthSession（會保留其他欄位）；直接寫 localStorage 會漏 normalise。
       const next: AuthSession = { ...latest, posDeviceToken: payload.token };
       saveAuthSession(next);
+      // 續期成功 ⇒ 之前嘅「會話已死」判斷作廢（例如中途網絡恢復、或店主喺另一頁登入過）。
+      resetAuthLatch();
+      clearPosAuthExpired();
       return true;
     } catch {
       return false;
