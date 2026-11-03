@@ -39,6 +39,14 @@
 - 本地快餐 counter 單可返結（`isReopenable()` 喺 `pos-order-filters.ts`）；`reopenPosOrder()` counter 跳過 temp 枱；`handleReopen()` 必帶 `order.tableId`。
 - temp-reopen 枱只寫本機 ⇒ 跨機返結失聯（未修，已知）。
 
+## 交班（2026-11-03 改制，docs/164）
+- 交班頁所有金額／明細＝**本班** `[shift.openedAt, now]`（`lib/pos/shift-window.ts`），**唔再用日曆日**；未開工／已交班 → 0。夜宵 11/3 20:00→11/4 02:00 係同一班。
+- 精確窗經 `ReportRangeArg.window {start,end}`；`custom` 只到日級，唔可以用嚟做班次（會包埋上一班日間）。
+- 未完成＝本地 `draft/sent_to_kitchen/paid/reopened`（平台單除外）＋線上任何非終態（含未付款），見 `lib/pos/unfinished-orders.ts`；撳交班先彈提示，可「仍然交班」→ `/orders?unfinished=1&from&to` 高亮。
+- `onlineLocalOrders` 認 `settled|paid`（修「已付款未結帳」兩邊都唔計）；`reopened` 唔包（會雙計）。
+- 合併本機／雲端一律用 `lib/pos/order-merge.ts`：**終態優先**，唔可以被遲到嘅「未完成」舊 event 蓋走。
+
+
 ## 鑑權／Realtime／打印
 - `posRouteAuthGuard()` 放 early-return 之後；`POS_REQUIRE_DEVICE_AUTH` **未設＝fail-closed 強制鑑權**（2026-10-22 查碼糾正：顯式 `0` 先至全域開閘，緊急回滾用；之前記憶寫「未設＝開閘」係誤讀）。
 - anon 時間窗 RLS（pos_orders 72h／pos_print_jobs 24h）係刻意；收緊＝出紙 1–3 秒變 180 秒。
