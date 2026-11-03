@@ -1492,6 +1492,40 @@ export function clearAuthSession() {
   notifyAuthSessionChanged(prev, null);
 }
 
+/**
+ * **只**清走 admin 操作 token，保留其餘 session（POS 收銀登入、merchantId、device token…）。
+ *
+ * ## 為何唔可以一律用 `clearAuthSession()`
+ *
+ * 收銀機同後台好多時係同一部機、同一個瀏覽器。admin token 過期（12h TTL）只需要
+ * 「重新登入後台」，**唔應該順手把店員嘅收銀 session 都清走** —— 夜更收銀員會突然
+ * 被踢返 `/login`，而佢根本冇掂過 admin。
+ *
+ * ## 為何一定要清（2026-11-03 事故）
+ *
+ * `/admin` 登入頁舊邏輯只睇 `adminSessionToken` **存在**就跳去 `/admin/dashboard`；
+ * 而 `AdminShell` 見到過期就跳返 `/admin` —— 過期票如果一直留喺 storage，
+ * 兩邊就會**無限互相跳**（實測一晚燒咗 810K CDN Requests，Vercel 直接停服務）。
+ * 所以「發現無效」同「清走」必須係同一步。
+ *
+ * ⚠️ 唔會 dispatch `pos-auth-changed`：`notifyAuthSessionChanged()` 本身對
+ *    「同一個 account」係 no-op，而呢度 account 冇變，唔應該觸發 AuthGuard 整頁 reload。
+ */
+export function clearAdminSessionToken() {
+  if (typeof window === "undefined") return;
+  const prev = loadAuthSession();
+  if (!prev?.adminSessionToken) return;
+  // ⚠️ 用 delete 而唔係 destructuring：`const { adminSessionToken, ...rest }` 會留低
+  //    一個「宣告咗但冇用」嘅變數，eslint 會報 no-unused-vars。
+  const next: AuthSession = { ...prev };
+  delete next.adminSessionToken;
+  try {
+    writeJson(KEYS.authSession, next);
+  } catch {
+    // ignore：寫唔入都唔應該令畫面爆（最壞情況係下一個 tick 再試）
+  }
+}
+
 export type SoldOutState = Record<
   string,
   {

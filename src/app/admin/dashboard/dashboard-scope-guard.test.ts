@@ -31,7 +31,9 @@ describe("/admin/dashboard ── scope gate 契約", () => {
 
   it("🔴 fetch 一定要帶 `Authorization: Bearer`（同其他 admin 頁一致）", () => {
     assert.ok(
-      /Authorization:\s*`Bearer \$\{token/.test(PAGE),
+      // 2026-11-03：token 變數改由 `readAdminSessionState()` 出（`admin.token`），
+      //   但仍然一定要帶 `Authorization: Bearer`，兩種寫法都接受。
+      /Authorization:\s*`Bearer \$\{(?:token|admin\.token)/.test(PAGE),
       "冇帶 Authorization 標頭 ⇒ /api/admin/me 會 401，scope 永遠拎唔到",
     );
   });

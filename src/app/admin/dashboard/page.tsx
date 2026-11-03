@@ -5,8 +5,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { AdminShell } from "@/components/admin-shell";
 import { AdminMerchantModulesDialog } from "@/components/admin-merchant-modules-dialog";
+import { readAdminSessionState } from "@/lib/admin-session-guard-client";
 import { orderEventISO } from "@/lib/pos/order-event-time";
-import { loadAuthSession } from "@/lib/storage";
 import type { PosOrder } from "@/lib/types";
 
 /**
@@ -108,16 +108,24 @@ export default function AdminDashboardPage() {
   const [ordersError, setOrdersError] = useState<string | null>(null);
 
   const loadMerchants = useCallback(async () => {
+    /**
+     * 🔴🔴 2026-11-03 事故：呢三個 fetch（merchants / orders / me）寫喺 page body，
+     * **喺 `AdminShell` 之外**，所以「token 過期」時佢哋照樣每輪打一次 401，
+     * 同 AdminShell 嘅跳轉組成無限迴圈（一晚 810K CDN Requests）。
+     *
+     * ⇒ 未有效登入就**一個請求都唔打**（判斷統一走 `readAdminSessionState()`）。
+     *   畫面會由 `AdminShell` 負責跳去 `/admin`，呢度唔需要自己 redirect。
+     */
+    const admin = readAdminSessionState();
+    if (!admin.valid) {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
-      const token = loadAuthSession()?.adminSessionToken;
-      if (!token) {
-        setError("未授權，請先登入。");
-        return;
-      }
       const res = await fetch("/api/admin/merchants", {
-        headers: { Authorization: `Bearer ${token}` },
+        headers: { Authorization: `Bearer ${admin.token}` },
       });
       const json = (await res.json()) as { ok?: boolean; merchants?: AdminMerchant[]; ledgerConfigured?: boolean; error?: string };
       if (!res.ok || !json.ok) {
@@ -153,10 +161,15 @@ export default function AdminDashboardPage() {
   useEffect(() => {
     let cancelled = false;
     void (async () => {
+      // 同 `loadMerchants` 一樣：憑證無效就唔打（見上面 2026-11-03 事故註釋）。
+      const admin = readAdminSessionState();
+      if (!admin.valid) {
+        if (!cancelled) setIsPlatform(false);
+        return;
+      }
       try {
-        const token = loadAuthSession()?.adminSessionToken;
         const res = await fetch("/api/admin/me", {
-          headers: { Authorization: `Bearer ${token ?? ""}` },
+          headers: { Authorization: `Bearer ${admin.token}` },
         });
         const json = (await res.json()) as { ok?: boolean; scope?: { all?: boolean } };
         if (cancelled) return;
@@ -181,10 +194,15 @@ export default function AdminDashboardPage() {
     }
     setBusyMerchantId(m.id);
     try {
-      const token = loadAuthSession()?.adminSessionToken;
+      // 統一走 guard：過期票唔好再送出（送出只會多一個 401 + 一次無謂跳轉）。
+      const admin = readAdminSessionState();
+      if (!admin.valid) {
+        window.alert("登入已過期，請重新登入後台。");
+        return;
+      }
       const res = await fetch("/api/admin/merchants/status", {
         method: "PATCH",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token ?? ""}` },
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${admin.token}` },
         body: JSON.stringify({ merchantId: m.id, status: next }),
       });
       const json = (await res.json()) as { ok?: boolean; error?: string };
@@ -207,20 +225,21 @@ export default function AdminDashboardPage() {
   }
 
   const loadOrders = useCallback(async () => {
+    // 同 `loadMerchants`：憑證無效唔打 API（2026-11-03 無限迴圈事故）。
+    const admin = readAdminSessionState();
+    if (!admin.valid) {
+      setOrdersLoading(false);
+      return;
+    }
     setOrdersLoading(true);
     setOrdersError(null);
     try {
-      const token = loadAuthSession()?.adminSessionToken;
-      if (!token) {
-        setOrdersError("未授權，請先登入。");
-        return;
-      }
       const params = new URLSearchParams({ limit: "500" });
       if (filterStore !== "all") params.set("storeId", filterStore);
       if (dateFrom) params.set("start", `${dateFrom}T00:00:00+08:00`);
       if (dateTo) params.set("end", `${dateTo}T23:59:59+08:00`);
       const res = await fetch(`/api/admin/orders?${params.toString()}`, {
-        headers: { Authorization: `Bearer ${token}` },
+        headers: { Authorization: `Bearer ${admin.token}` },
       });
       const json = (await res.json()) as { ok?: boolean; orders?: PosOrder[]; error?: string };
       if (!res.ok || !json.ok) {

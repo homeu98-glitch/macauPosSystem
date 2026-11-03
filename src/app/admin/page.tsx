@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
+import { clearAdminSessionIfInvalid, readAdminSessionState } from "@/lib/admin-session-guard-client";
 import { loadAuthSession, saveAuthSession, type AuthSession } from "@/lib/storage";
 import { markTerminalUnlocked } from "@/lib/pos/terminal-lock";
 import { UserPermissions, UserRole } from "@/lib/types";
@@ -31,11 +32,26 @@ export default function AdminLoginPage() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
+  /**
+   * 🔴🔴 2026-11-03 事故（Vercel CDN Requests 一夜 810K）：
+   *
+   * 舊寫法係 `if (session?.adminSessionToken) router.replace("/admin/dashboard")`
+   * —— **只驗「有冇票」，冇驗「張票過期未」**。
+   *
+   * 而 `AdminShell` 見到過期會跳返呢一頁，於是：
+   *   dashboard（過期）→ `/admin`（見到票當已登入）→ dashboard → … 永不停止。
+   * 每輪 5 個請求（2 個 RSC + 3 個 401 API），一晚 ≈ 810K CDN Requests。
+   *
+   * ⇒ 由今日起：**一律用 `readAdminSessionState()`**（存在 + 可解碼 + 未過期），
+   *    無效就即刻清走張票，令對面嗰邊唔會再見到它。
+   *    ⚠️ 只清 admin token，唔會清走同一個瀏覽器嘅 POS 收銀 session。
+   */
   useEffect(() => {
-    const session = loadAuthSession();
-    if (session?.adminSessionToken) {
+    if (readAdminSessionState().valid) {
       router.replace("/admin/dashboard");
+      return;
     }
+    clearAdminSessionIfInvalid();
   }, [router]);
 
   async function submit(e: React.FormEvent) {

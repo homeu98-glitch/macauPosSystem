@@ -5,7 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 
 import { AdminChangePinModal } from "@/components/admin-change-pin-modal";
-import { clearAuthSession, loadAuthSession } from "@/lib/storage";
+import { clearAdminSessionToken, clearAuthSession, loadAuthSession } from "@/lib/storage";
 import { decodeAdminSessionToken, isAdminSessionTokenExpired } from "@/lib/admin-session-token-client";
 
 /**
@@ -54,6 +54,17 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
     //（每個 admin API route 都會再 verify 一次，客戶端解密唔等於放行）。
     const claims = token ? decodeAdminSessionToken(token) : null;
     if (!claims || isAdminSessionTokenExpired(claims)) {
+      /**
+       * 🔴🔴 2026-11-03：**一定要喺跳走之前清票**。
+       *
+       * 舊版只 `router.replace("/admin")`，張過期票仍然留喺 localStorage ⇒
+       * `/admin` 登入頁「見到票就當已登入」又跳返 dashboard ⇒ 兩邊無限互相跳
+       * （實測一晚 810K CDN Requests，Vercel 免費額度直接爆）。
+       *
+       * 用 `clearAdminSessionToken()` 而唔係 `clearAuthSession()`：
+       * 同一部機可能同時有 POS 收銀 session，admin 過期唔應該踢走收銀員。
+       */
+      clearAdminSessionToken();
       router.replace("/admin");
       return;
     }
@@ -76,7 +87,10 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
         if (cancelled) return;
 
         if (res.status === 401) {
-          clearAuthSession();
+          // 🔴 一定要**強制**清（唔可以行 `clearAdminSessionIfInvalid()`）：
+          //    呢個 case 係「本地睇落未過期、但 server 拒收」（簽名唔對／已撤銷），
+          //    `readAdminSessionState()` 會判定 valid ⇒ 清唔到 ⇒ 又係無限迴圈。
+          clearAdminSessionToken();
           router.replace("/admin");
           return;
         }

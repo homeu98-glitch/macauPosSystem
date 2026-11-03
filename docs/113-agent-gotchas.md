@@ -2130,3 +2130,48 @@ pill 量到 **122 × 46**（唔係設計嘅 104 × 40），而且**完全唔會�
 
 
 
+
+---
+
+## 🔴🔴 admin 後台「過期票」無限跳轉 → 一晚燒 810K CDN Requests（2026-11-03 · Vercel 免費額度爆）
+
+**病症**：Vercel 通知「已用 104% CDN Requests（1,011,747 / 1,000,000），24 小時後 pause」。
+Observability 12 小時 569K，Top paths 五條**完全 1:1:1:1:1、各 68K**：
+
+```
+/admin   /admin/dashboard   /api/admin/me   /api/admin/merchants   /api/admin/orders
+```
+
+**讀法**：五條同數 = 同一個迴圈，每輪 5 個請求（2 個 RSC + 3 個 401 API），約 1.9 輪/秒。
+（`/manifest.webmanifest` 122K、`/apple-icon` 102K 係同一批 page load；
+**Vercel 嘅 cached 請求照計 CDN Requests**，唔好以為 100% cached 就唔怕。）
+
+**三個缺陷疊埋（單獨睇個個都「正常」）**
+
+| 位置 | 舊行為 |
+|---|---|
+| `src/app/admin/page.tsx` | 只睇 `adminSessionToken` **存在**就 `router.replace("/admin/dashboard")`，**冇驗 exp** |
+| `src/components/admin-shell.tsx` | 見到過期 → `router.replace("/admin")`，**冇清走張票** |
+| `src/app/admin/dashboard/page.tsx` | 3 個 fetch 喺 page body（**AdminShell 之外**），mount 即打 ⇒ 每輪 3 個 401 |
+
+⇒ dashboard（過期）→ `/admin`（見到票當已登入）→ dashboard → … 只要**有人留一個
+`/admin/dashboard` 分頁過夜**（admin token TTL 12h 一過就觸發），就會跑到有人關 tab 為止。
+
+**修法（已落 code）**
+
+1. 新增 `src/lib/admin-session-guard-client.ts`：`readAdminSessionState()`（存在＋可解碼＋未過期）
+   ＋ `clearAdminSessionIfInvalid()`（**判斷同清理綁埋一齊**）。
+2. `/admin` 登入頁、`AdminShell` 過期分支一律行上面兩支；401 分支**強制** `clearAdminSessionToken()`
+   （本地睇落未過期但 server 拒收時，`...IfInvalid()` 清唔到，會再迴圈）。
+3. dashboard 三個 fetch 之前 `if (!admin.valid) return;` —— **憑證無效一個請求都唔打**。
+4. 新增 `storage.clearAdminSessionToken()`：**只清 admin token**，保留同一部機嘅 POS 收銀 session
+   （舊寫法用 `clearAuthSession()` 會連店員一齊踢走）。
+5. 守衛測試 `src/app/admin/admin-session-loop-guard.test.ts`（8 項）釘死以上契約。
+
+**鐵律**
+
+- 「登入咗未」**只准**用 `readAdminSessionState()`。任何地方寫
+  `if (session?.adminSessionToken)` 都係同一個 bug 嘅種子。
+- 「發現無效」同「清走憑證」**唔可以分家** —— 分家就會 A 邊跳走、B 邊見到同一張票又跳返。
+- 自動踢人用窄口徑（只清 admin token）；`clearAuthSession()` 留返畀用戶主動登出。
+- 呢類 bug **build／tsc／lint 全過**，只會喺「token 過期 + 分頁留住」時爆 ⇒ 一定要源碼掃描守衛。
