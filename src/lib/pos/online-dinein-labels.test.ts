@@ -20,6 +20,7 @@ import {
   onlinePaymentBadge,
   onlineTableAssignLabel,
   onlineTableBadge,
+  shouldOfferTableAssign,
   type OnlineTableInfo,
   type SettleableOrderInfo,
 } from "./online-dinein-labels.ts";
@@ -78,6 +79,31 @@ describe("線上單：枱位維度", () => {
   it("排位掣文案：未排位 = 排位；已排位 = 改枱", () => {
     assert.equal(onlineTableAssignLabel(online({})), "排位");
     assert.equal(onlineTableAssignLabel(online({ tableId: "table-a01", tableName: "A01" })), "改枱");
+  });
+
+  // 2026-11-05 商家：「如果是快餐模式，線上訂單都不應該出現排位，因為他們沒有位置可以排。」
+  it("🔴 快餐模式：線上堂食單唔出排位掣（冇位可以排）", () => {
+    assert.equal(shouldOfferTableAssign(online({}), { quickMode: true }), false);
+    // 甚至已經有枱（例如轉模式前排過）都唔應該出「改枱」
+    assert.equal(
+      shouldOfferTableAssign(online({ tableId: "table-a01", tableName: "A01" }), { quickMode: true }),
+      false,
+    );
+    assert.equal(shouldOfferTableAssign(online({ tabType: "pickup" }), { quickMode: true }), false);
+  });
+
+  it("堂食模式：線上堂食單一律有排位入口（未排位＝排位；已排位＝改枱）", () => {
+    assert.equal(shouldOfferTableAssign(online({}), { quickMode: false }), true);
+    assert.equal(
+      shouldOfferTableAssign(online({ tableId: "table-a01", tableName: "A01" }), { quickMode: false }),
+      true,
+    );
+    // 自取／外賣單冇枱要排
+    assert.equal(shouldOfferTableAssign(online({ tabType: "pickup" }), { quickMode: false }), false);
+    assert.equal(
+      shouldOfferTableAssign(online({ tabType: "self_delivery" }), { quickMode: false }),
+      false,
+    );
   });
 });
 

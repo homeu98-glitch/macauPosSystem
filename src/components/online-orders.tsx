@@ -32,6 +32,7 @@ import {
   onlinePaymentBadge,
   onlineTableAssignLabel,
   onlineTableBadge,
+  shouldOfferTableAssign,
 } from "@/lib/pos/online-dinein-labels";
 import {
   acceptFailed,
@@ -335,6 +336,16 @@ export function OnlineOrders({
   const canDispatchDelivery = useCanDispatchDelivery(merchantId);
   const dispatch = useDeliveryDispatch(merchantId, { canDispatch: canDispatchDelivery });
   const [localSettings, setLocalSettings] = useState(() => loadPosLocalSettings());
+  /**
+   * 快餐模式（2026-11-05 商家）：「快餐店冇位可以排」⇒ 線上訂單（連堂食單）一律
+   * 出餐口自取，**唔可以**出「排位」掣，詳情彈窗亦唔可以寫「待安排座位」。
+   *
+   * ⚠️ 同 `runAcceptAndBridge()`（接單採納 counter）／`runReopenFlow()`（返結唔揀枱）
+   *    用同一個真源 `loadOperatingMode()`，三條路徑唔可以各自判斷，否則會出現
+   *    「唔排位但顯示待安排座位」呢類半套狀態。
+   * ⚠️ 讀一次就夠：切換營業模式要離開本頁（設定頁）再返嚟 = 重新 mount。
+   */
+  const [quickMode] = useState(() => loadOperatingMode() === "quick");
   /**
    * 🔴 2026-09-13（商家實案：「排位後出來的又不是店內的桌台」）——
    * 排位彈窗嘅枱**一定要 `bootstrap.tables`（共享真源）＋ 本地 overlay 合併**，
@@ -1382,8 +1393,9 @@ export function OnlineOrders({
     return (
       <>
         {/* 「排位」（2026-09-12 商家需求）：線上堂食單 assign 到桌台。
-            獨立於接單 —— 未接單、已接單、自動接單之後都可以按。 */}
-        {!hasRequest && isOnlineDineIn(order) ? (
+            獨立於接單 —— 未接單、已接單、自動接單之後都可以按。
+            🔴 2026-11-05：快餐模式一律冇呢個掣（冇位可以排，客人出餐口自取）。 */}
+        {!hasRequest && shouldOfferTableAssign(order, { quickMode }) ? (
           <button
             className={`${btn} bg-orange-600 text-white hover:bg-orange-700 disabled:opacity-60`}
             disabled={orderLoading}
@@ -2018,14 +2030,14 @@ export function OnlineOrders({
         storeId={merchantId ?? null}
         target={dispatch.target}
       />
-      {assigningOrder ? (
+      {assigningOrder && !quickMode ? (
         <TableAssignModal
           busyTableId={assigningTableId}
           description={
-            onlineTableBadge(assigningOrder, { quickMode: false }).label === "待安排座位"
+            onlineTableBadge(assigningOrder, { quickMode }).label === "待安排座位"
               ? t("選擇桌台後會將線上單轉到該枱（建立本地堂食單）並補印一張帶枱名嘅廚房單。")
               : t("現時：{status}。選擇新桌台即改枱。", {
-                  status: t(onlineTableBadge(assigningOrder, { quickMode: false }).label),
+                  status: t(onlineTableBadge(assigningOrder, { quickMode }).label),
                 })
           }
           occupiedTableIds={occupiedTableIds}
@@ -2149,13 +2161,14 @@ export function OnlineOrders({
                 status: viewingOrder.paymentStatus === "paid" ? t("已支付") : t("未支付"),
               })}
             </div>
-            {/* 派生標籤（唔新增 status 值）：付款維度「已結帳」＋枱位維度「待安排座位」。 */}
+            {/* 派生標籤（唔新增 status 值）：付款維度「已結帳」＋枱位維度
+                「待安排座位 / 枱名」；快餐模式一律「出餐口自取」（唔會有位可排）。 */}
             {isOnlineDineIn(viewingOrder) ? (
               <div className="flex flex-wrap items-center gap-2 pt-1">
                 {(() => {
                   const badges = [
                     onlinePaymentBadge(viewingOrder),
-                    onlineTableBadge(viewingOrder, { quickMode: false }),
+                    onlineTableBadge(viewingOrder, { quickMode }),
                   ];
                   return badges.map((badge) => (
                     <span

@@ -185,6 +185,24 @@ export function needsTableAssignment(
 }
 
 /**
+ * 要唔要出「排位／改枱」掣（2026-11-05 商家口徑）。
+ *
+ * 🔴 快餐模式**一律唔出**：快餐店冇位可以安排（客人自己搵位／出餐口自取），
+ * 出咗掣只會誤導收銀，以為仲有一張枱要排。線上堂食單喺快餐模式一樣唔排位。
+ *
+ * ⚠️ 同 `needsTableAssignment()` 分工唔同：
+ *   - `needsTableAssignment()` 答「**仲未**排位？」（已排位 → false，但掣仍然要出「改枱」）
+ *   - 本函式答「呢個模式／呢張單**應唔應該**有排位入口」
+ */
+export function shouldOfferTableAssign(
+  order: OnlineTableInfo,
+  options: { quickMode: boolean },
+): boolean {
+  if (options.quickMode) return false;
+  return isOnlineDineIn(order);
+}
+
+/**
  * 枱位維度標籤。
  *
  * - 快餐模式 → 「出餐口自取」（唔排位）
