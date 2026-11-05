@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="zh-HK">
+<head>
+<meta charset="utf-8" />
+<title>會員／支付掃碼認會員 + 兌換券 · 實機圖 2026-11-05</title>
+<style>
+  :root{
+    --slate-900:#0f172a; --slate-800:#1e293b; --slate-700:#334155;
+    --slate-600:#475569; --slate-500:#64748b; --slate-400:#94a3b8;
+    --slate-300:#cbd5e1; --slate-200:#e2e8f0; --slate-100:#f1f5f9; --slate-50:#f8fafc;
+    --orange-500:#f97316; --orange-600:#ea580c; --orange-50:#fff7ed;
+    --emerald-500:#10b981; --emerald-600:#059669; --emerald-50:#ecfdf5;
+    --red-600:#dc2626; --amber-500:#f59e0b; --white:#ffffff;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    font-family:"PingFang SC","Microsoft YaHei",system-ui,-apple-system,"Segoe UI",sans-serif;
+    background:#0b1220;color:var(--slate-900);-webkit-font-smoothing:antialiased;
+  }
+  .reviewbar{max-width:1280px;margin:0 auto;padding:14px 16px 10px;display:flex;flex-wrap:wrap;align-items:center;gap:10px}
+  .rtag{font-size:12px;color:#cbd5e1;background:#1e293b;border:1px solid #334155;border-radius:999px;padding:5px 11px;font-weight:600}
+  .rtag b{color:#f97316}
+  .grouplbl{font-size:11px;color:#94a3b8;font-weight:600;letter-spacing:.5px;margin-left:6px}
+  .steps{display:flex;gap:7px;flex-wrap:wrap;align-items:center}
+  .steps button{font:inherit;cursor:pointer;border:1px solid #334155;background:#0f172a;color:#e2e8f0;border-radius:12px;padding:8px 12px;font-size:12px;font-weight:600}
+  .steps button.on{background:var(--orange-500);border-color:var(--orange-500);color:#fff}
+  .steps button:hover{border-color:#475569}
+
+  .stage{position:relative;max-width:1280px;margin:0 auto;overflow:hidden;border-radius:18px}
+  .canvas{width:1280px;height:880px;position:absolute;top:0;left:0;transform-origin:top left;display:flex;overflow:hidden;background:var(--slate-100);border-radius:14px}
+
+  .sidebar{width:72px;flex:none;background:var(--slate-900);color:#fff;display:flex;flex-direction:column;padding:12px 8px;gap:8px;overflow:hidden}
+  .navitem{display:flex;flex-direction:column;align-items:center;gap:8px;border-radius:16px;padding:12px 8px;font-size:12px;font-weight:600;background:var(--slate-800);color:#e2e8f0}
+  .navitem.active{background:var(--orange-500);color:#fff}
+  .navitem .ico{width:28px;height:28px;border-radius:999px;background:rgba(255,255,255,.1);display:grid;place-items:center;font-size:13px}
+  .sidebar .spacer{flex:1}
+  .storebtn{border-radius:16px;padding:8px 6px;text-align:center;background:var(--slate-800);color:#e2e8f0}
+  .storebtn .nm{font-size:8px;line-height:1.2}
+  .storebtn .role{font-size:6px;line-height:1.2;color:#94a3b8;margin-top:4px}
+  .synbadge{border-radius:16px;padding:8px 6px;text-align:center;font-size:12px;font-weight:600;background:var(--emerald-600);color:#fff}
+
+  .main{flex:1;min-width:0;display:flex;flex-direction:column;min-height:0}
+  .mhead{flex:none;border-bottom:1px solid var(--slate-200);background:#fff;padding:16px 20px}
+  .toprow{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+  .title{font-size:18px;font-weight:700;color:var(--slate-900)}
+  .sub{font-size:13px;color:var(--slate-500);margin-top:4px}
+  .searchrow{display:flex;gap:8px;margin-top:14px;align-items:center}
+  .searchinput{flex:1;max-width:480px;border:1px solid var(--slate-200);border-radius:16px;background:#fff;padding:10px 14px;font-size:14px;color:var(--slate-900);display:flex;align-items:center;gap:8px}
+  .searchinput .ph{color:var(--slate-400)}
+  .mbody{flex:1;min-height:0;overflow-y:auto;padding:20px}
+
+  .scanbtn{font:inherit;cursor:pointer;border:none;border-radius:16px;background:var(--orange-500);color:#fff;
+    height:44px;min-width:104px;padding:0 16px;font-size:14px;font-weight:700;display:inline-flex;align-items:center;justify-content:center;gap:8px;white-space:nowrap}
+  .scanbtn:hover{background:var(--orange-600)}
+  .scanbtn svg{width:20px;height:20px;flex:none}
+  .scanbtn.ghost{background:#fff;color:var(--slate-700);border:1px solid var(--slate-200)}
+  .scanbtn.sm{height:44px;min-width:92px;padding:0 14px;font-size:13px}
+
+  .scene{position:absolute;inset:0;display:none}
+  .scene.on{display:flex}
+
+  .posbg{flex:1;background:var(--slate-100);padding:18px;display:flex;flex-direction:column;gap:14px}
+  .posbg .bar{background:#fff;border:1px solid var(--slate-200);border-radius:16px;padding:14px 18px;display:flex;justify-content:space-between;align-items:center}
+  .posbg .bar .t{font-size:16px;font-weight:700}
+  .posbg .bar .n{font-size:12px;color:var(--slate-500)}
+  .posbg .cards{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+  .posbg .cards div{background:#fff;border:1px solid var(--slate-200);border-radius:16px;height:150px;padding:16px;font-size:13px;color:var(--slate-500)}
+  .posbg .foot{margin-top:auto;background:#fff;border:1px solid var(--slate-200);border-radius:16px;height:180px;padding:16px;font-size:13px;color:var(--slate-500)}
+
+  .paymask{position:absolute;inset:0;background:rgba(15,23,42,.45);z-index:20;display:flex;align-items:center;justify-content:center}
+  .paymodal{width:1010px;height:660px;background:#fff;border-radius:24px;display:flex;overflow:hidden;box-shadow:0 24px 70px rgba(0,0,0,.30)}
+  .payleft{width:660px;flex:none;padding:24px;border-right:1px solid var(--slate-200);display:flex;flex-direction:column}
+  .payleft .h{font-size:19px;font-weight:700}
+  .payleft .ord{font-size:12px;color:var(--slate-500);margin-top:4px}
+  .lines{margin-top:20px;display:grid;gap:10px}
+  .line{display:flex;justify-content:space-between;font-size:14px;color:var(--slate-700);border-bottom:1px dashed var(--slate-200);padding-bottom:10px}
+  .total{margin-top:auto;background:var(--slate-50);border-radius:18px;padding:18px}
+  .total .k{font-size:13px;color:var(--slate-500)}
+  .total .v{font-size:32px;font-weight:700;color:var(--slate-900);margin-top:4px}
+  .paybtn{width:100%;height:52px;border:none;border-radius:16px;background:var(--orange-500);color:#fff;font:inherit;font-size:15px;font-weight:700;margin-top:14px}
+  .payaside{width:350px;flex:none;background:#fff;display:flex;flex-direction:column}
+  .asidehead{border-bottom:1px solid var(--slate-100);padding:18px 18px 14px;display:flex;align-items:center;justify-content:space-between;gap:10px}
+  .asidehead .h{font-size:15px;font-weight:700}
+  .asidehead .s{font-size:12px;color:var(--slate-500);margin-top:3px}
+  .asidebody{padding:18px;flex:1;min-height:0}
+  .lbl{font-size:12px;font-weight:600;color:var(--slate-500)}
+  .phoneinput{margin-top:8px;width:100%;border:1px solid var(--slate-200);border-radius:16px;padding:14px;font:inherit;font-size:17px;font-weight:600;letter-spacing:2px;color:var(--slate-900)}
+  .membercard{margin-top:16px;border:1px solid var(--slate-200);border-radius:18px;background:var(--slate-50);padding:16px}
+  .membercard.found{border-color:#a7f3d0;background:var(--emerald-50)}
+  .membercard .nm{font-size:16px;font-weight:700}
+  .membercard .ph{font-size:13px;color:var(--slate-600);margin-top:4px}
+  .membercard .bal{font-size:13px;color:var(--slate-600);margin-top:10px}
+  .foundbadge{display:inline-flex;align-items:center;gap:6px;margin-top:12px;background:var(--emerald-600);color:#fff;border-radius:999px;padding:6px 12px;font-size:12px;font-weight:700}
+  .asidenote{margin-top:14px;font-size:12px;color:var(--slate-500);line-height:1.6}
+  .keypad{border-top:1px solid var(--slate-200);padding:14px;display:grid;gap:8px}
+  .kprow{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+  .kprow button{height:44px;border:1px solid var(--slate-200);border-radius:14px;background:var(--slate-50);font:inherit;font-size:17px;font-weight:600;color:var(--slate-900)}
+  .kprow button.act{background:var(--orange-500);border-color:var(--orange-500);color:#fff}
+
+  .memberwrap{display:grid;grid-template-columns:360px minmax(0,1fr);gap:16px;align-items:start}
+  .wallet{background:#fff;border:1px solid var(--slate-200);border-radius:16px;padding:16px}
+  .wallet .nm{font-size:16px;font-weight:700}
+  .wallet .ph{font-size:13px;color:var(--slate-500);margin-top:4px}
+  .balgrid{display:grid;gap:12px;margin-top:16px}
+  .balbox{background:var(--slate-50);border-radius:14px;padding:12px}
+  .balbox .k{font-size:12px;color:var(--slate-500)}
+  .balbox .v{font-size:18px;font-weight:700;margin-top:4px}
+  .bal2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .redeemnote{margin-top:12px;background:var(--orange-50);border:1px solid #fed7aa;border-radius:14px;padding:12px;font-size:13px;color:#9a3412}
+  .rightcol{display:grid;gap:16px}
+  .section{background:#fff;border:1px solid var(--slate-200);border-radius:16px;padding:16px}
+  .section .h{font-size:14px;font-weight:700;margin-bottom:12px}
+  .grant{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center;border:1px solid var(--slate-200);border-radius:16px;padding:12px 14px}
+  .grant + .grant{margin-top:10px}
+  .grant .title{font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .grant .meta{font-size:12px;color:var(--slate-500);margin-top:4px}
+  .usebtn{font:inherit;cursor:pointer;border:none;border-radius:14px;padding:12px 18px;min-height:44px;font-size:14px;font-weight:700;background:var(--orange-500);color:#fff}
+  .pill{display:inline-flex;align-items:center;background:var(--slate-100);border-radius:999px;padding:3px 10px;font-size:11px;font-weight:600;color:var(--slate-600)}
+  .topupbox{background:var(--orange-50);border:1px solid #fed7aa;border-radius:16px;padding:16px;font-size:13px;color:#9a3412}
+  .rightpad{width:290px;flex:none;background:#fff;border-left:1px solid var(--slate-200);display:flex;flex-direction:column}
+  .padhead{padding:16px;border-bottom:1px solid var(--slate-100)}
+  .padhead .pt{font-size:16px;font-weight:700}
+  .padhead .ps{font-size:12px;color:var(--slate-500);margin-top:4px}
+  .padbody{padding:16px}
+  .paddisplay{border:1px solid var(--slate-200);background:var(--slate-50);border-radius:16px;padding:12px 16px;font-size:26px;font-weight:700;text-align:right;letter-spacing:2px}
+  .padkeys{margin-top:16px;display:grid;gap:8px}
+  .padkeys .row{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+  .padkey{height:48px;border:1px solid var(--slate-200);border-radius:16px;background:var(--slate-50);font:inherit;font-size:18px;font-weight:600}
+  .padkey.act{background:var(--orange-500);border-color:var(--orange-500);color:#fff}
+
+  .scanner{position:absolute;inset:0;z-index:60;background:#0b1220;display:none;flex-direction:column;align-items:center;color:#fff}
+  .scanner.on{display:flex}
+  .scanner .stopbar{width:100%;height:72px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 28px;border-bottom:1px solid rgba(255,255,255,.10)}
+  .scanner .st{font-size:17px;font-weight:700}
+  .scanner .ss{font-size:12px;color:#94a3b8;margin-top:3px}
+  .closebtn{height:44px;min-width:88px;border-radius:14px;border:1px solid rgba(255,255,255,.22);background:rgba(255,255,255,.08);color:#fff;font:inherit;font-size:14px;font-weight:700}
+  .camarea{flex:1;width:100%;display:flex;align-items:center;justify-content:center;gap:60px}
+  .viewfinder{width:360px;height:360px;position:relative;border-radius:24px;background:#111c2e;overflow:hidden;display:grid;place-items:center}
+  .corner{position:absolute;width:44px;height:44px;border:4px solid var(--orange-500)}
+  .corner.tl{top:16px;left:16px;border-right:none;border-bottom:none;border-radius:10px 0 0 0}
+  .corner.tr{top:16px;right:16px;border-left:none;border-bottom:none;border-radius:0 10px 0 0}
+  .corner.bl{bottom:16px;left:16px;border-right:none;border-top:none;border-radius:0 0 0 10px}
+  .corner.br{bottom:16px;right:16px;border-left:none;border-top:none;border-radius:0 0 10px 0}
+  .scanline{position:absolute;left:20px;right:20px;height:3px;background:var(--orange-500);border-radius:3px;animation:scanmove 2.2s ease-in-out infinite}
+  @keyframes scanmove{0%{top:26px}50%{top:328px}100%{top:26px}}
+  .caminfo{width:340px}
+  .caminfo .bignum{font-size:15px;font-weight:700;color:var(--orange-500)}
+  .caminfo h3{font-size:24px;font-weight:700;line-height:1.4;margin-top:14px}
+  .caminfo p{font-size:14px;color:#cbd5e1;line-height:1.8;margin-top:14px}
+  .flow{margin-top:22px;display:grid;gap:10px}
+  .flowrow{background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);border-radius:14px;padding:12px 14px;font-size:13px;line-height:1.5}
+  .flowrow b{color:var(--orange-500)}
+  .flowrow.em b{color:#6ee7b7}
+  .scanfoot{width:100%;flex:none;height:112px;border-top:1px solid rgba(255,255,255,.10);display:flex;align-items:center;justify-content:center;gap:14px}
+  .manualbtn{height:48px;min-width:150px;border-radius:16px;border:1px solid rgba(255,255,255,.22);background:rgba(255,255,255,.08);color:#fff;font:inherit;font-size:14px;font-weight:700}
+  .cancelbtn{height:48px;min-width:150px;border-radius:16px;border:none;background:var(--orange-500);color:#fff;font:inherit;font-size:14px;font-weight:700}
+  .securenote{font-size:11px;color:#64748b;margin-left:16px}
+
+  .modalmask{position:absolute;inset:0;z-index:70;background:rgba(15,23,42,.55);display:none;align-items:center;justify-content:center}
+  .modalmask.on{display:flex}
+  .modal{width:460px;background:#fff;border-radius:24px;padding:26px;box-shadow:0 24px 70px rgba(0,0,0,.3)}
+  .modal .mt{font-size:19px;font-weight:700}
+  .modal .mc{font-size:13px;color:var(--slate-500);margin-top:8px;line-height:1.6}
+  .couponcard{margin-top:18px;background:var(--slate-50);border:1px solid var(--slate-200);border-radius:18px;padding:16px}
+  .couponcard .badge{display:inline-flex;background:var(--orange-50);border:1px solid #fed7aa;color:#9a3412;border-radius:999px;padding:4px 10px;font-size:11px;font-weight:700}
+  .couponcard .ct{font-size:18px;font-weight:700;margin-top:10px}
+  .couponcard .cm{font-size:13px;color:var(--slate-600);margin-top:8px;line-height:1.7}
+  .couponcard .code{font-size:11px;color:var(--slate-400);margin-top:10px;font-family:ui-monospace,monospace;word-break:break-all}
+  .warn{margin-top:16px;background:var(--orange-50);border:1px solid #fed7aa;border-radius:14px;padding:12px 14px;font-size:12px;color:#9a3412;line-height:1.7}
+  .modal .acts{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:20px}
+  .modal .acts button{height:48px;border-radius:16px;font:inherit;font-size:15px;font-weight:700}
+  .btncancel{background:#fff;color:var(--slate-700);border:1px solid var(--slate-200)}
+  .btnconfirm{background:var(--orange-500);color:#fff;border:none}
+
+  .success{position:absolute;inset:0;z-index:80;background:rgba(15,23,42,.62);display:none;align-items:center;justify-content:center;overflow:hidden}
+  .success.on{display:flex}
+  .succard{width:440px;background:#fff;border-radius:26px;padding:34px 30px 28px;text-align:center;position:relative;z-index:2;animation:cardpop .45s cubic-bezier(.2,1.3,.4,1) both}
+  @keyframes cardpop{0%{transform:scale(.78);opacity:0}100%{transform:scale(1);opacity:1}}
+  .checkring{width:104px;height:104px;margin:0 auto;border-radius:999px;background:var(--emerald-50);border:3px solid #a7f3d0;display:grid;place-items:center;animation:ringpop .5s .1s cubic-bezier(.2,1.5,.4,1) both}
+  @keyframes ringpop{0%{transform:scale(.3);opacity:0}70%{transform:scale(1.12)}100%{transform:scale(1);opacity:1}}
+  .checkring svg{width:56px;height:56px}
+  .checkring path{stroke:var(--emerald-600);stroke-width:6;stroke-linecap:round;stroke-linejoin:round;fill:none;stroke-dasharray:70;stroke-dashoffset:70;animation:draw .45s .45s ease forwards}
+  @keyframes draw{to{stroke-dashoffset:0}}
+  .succard h2{font-size:26px;font-weight:700;color:var(--emerald-600);margin-top:20px;animation:fadeup .4s .5s both}
+  .succard .sc{font-size:15px;font-weight:600;color:var(--slate-900);margin-top:12px;animation:fadeup .4s .6s both}
+  .succard .sd{font-size:13px;color:var(--slate-500);margin-top:6px;line-height:1.7;animation:fadeup .4s .7s both}
+  .succard .gift{margin-top:18px;background:var(--emerald-50);border:1px solid #a7f3d0;border-radius:14px;padding:12px;font-size:14px;font-weight:700;color:var(--emerald-600);animation:fadeup .4s .8s both}
+  @keyframes fadeup{0%{transform:translateY(10px);opacity:0}100%{transform:translateY(0);opacity:1}}
+  .donebtn{width:100%;height:48px;margin-top:22px;border:none;border-radius:16px;background:var(--emerald-600);color:#fff;font:inherit;font-size:15px;font-weight:700}
+  .confetti{position:absolute;inset:0;z-index:1;pointer-events:none}
+  .confetti i{position:absolute;top:-20px;width:9px;height:16px;border-radius:2px;opacity:0;animation:fall 1.6s linear infinite}
+  @keyframes fall{0%{transform:translateY(-20px) rotate(0deg);opacity:1}100%{transform:translateY(920px) rotate(540deg);opacity:0}}
+
+  .anno{position:absolute;z-index:95;background:#0f172a;color:#e2e8f0;border:1px solid #f97316;border-radius:12px;padding:11px 13px;font-size:12px;line-height:1.6;max-width:270px;display:none}
+  .anno.on{display:block}
+  .anno b{color:#f97316}
+  .legend{max-width:1280px;margin:12px auto 30px;padding:14px 18px;background:#111c2e;border:1px solid #334155;border-radius:14px;color:#cbd5e1;font-size:12px;line-height:1.9}
+  .legend b{color:#f97316}
+  .legend code{color:#6ee7b7;font-family:ui-monospace,monospace}
+</style>
+</head>
+<body>
+
+<div class="reviewbar">
+  <span class="rtag">實機圖 · <b>非產品介面</b> · 會員掃碼認人＋兌換券 2026-11-05</span>
+  <span class="grouplbl">A 支付頁</span>
+  <div class="steps">
+    <button data-state="1" class="on">① 會員旁新增掃碼掣</button>
+    <button data-state="2">② 開相機</button>
+    <button data-state="3">③ 認到會員</button>
+  </div>
+  <span class="grouplbl">B 會員頁</span>
+  <div class="steps">
+    <button data-state="4">④ 同一款掃碼掣</button>
+    <button data-state="5">⑤ 開相機（通用）</button>
+    <button data-state="6">⑥ 掃到券 → 確認彈窗</button>
+    <button data-state="7">⑦ 兌換成功動畫</button>
+  </div>
+</div>
+
+<div class="stage" id="stage">
+<div class="canvas" id="canvas">
+
+  <!-- ============ A · 支付頁 ============ -->
+  <div class="scene on" id="scenePay" data-k="scene-pay">
+    <aside class="sidebar">
+      <div class="navitem active"><span class="ico">收</span><span>收銀</span></div>
+      <div class="navitem"><span class="ico">單</span><span>訂單</span></div>
+      <div class="navitem"><span class="ico">會</span><span>會員</span></div>
+      <div class="navitem"><span class="ico">庫</span><span>庫存</span></div>
+      <div class="navitem"><span class="ico">報</span><span>報表</span></div>
+      <div class="spacer"></div>
+      <div class="storebtn"><div class="nm">澳門某茶餐廳</div><div class="role">收銀</div></div>
+      <div class="synbadge">在線</div>
+    </aside>
+
+    <div class="posbg">
+      <div class="bar"><div class="t">收銀 · 堂食 #A03</div><div class="n">2026/11/05 21:42 · 店員：阿儀</div></div>
+      <div class="cards"><div>小計 MOP 105.00</div><div>付款方式</div><div>廚房單</div></div>
+      <div class="foot">訂單明細（背景，被結帳彈窗遮住）</div>
+    </div>
+
+    <div class="paymask">
+      <div class="paymodal">
+        <div class="payleft">
+          <div class="h">結帳</div>
+          <div class="ord">堂食 #A03 · 2 位 · 取餐碼 001</div>
+          <div class="lines">
+            <div class="line"><span>大麥克牛肉麵 ×1</span><span>MOP 100.00</span></div>
+            <div class="line"><span>熱檸茶 ×1</span><span>MOP 5.00</span></div>
+            <div class="line"><span>會員價折扣</span><span style="color:#059669">− MOP 15.00</span></div>
+          </div>
+          <div class="total">
+            <div class="k">應收</div>
+            <div class="v">MOP 90.00</div>
+            <button class="paybtn">確認收款 · MOP 90.00</button>
+          </div>
+        </div>
+
+        <aside class="payaside">
+          <div class="asidehead">
+            <div>
+              <div class="h">會員</div>
+              <div class="s">輸入 8 位電話後自動查詢</div>
+            </div>
+            <button class="scanbtn sm" data-k="scan-btn-pay" onclick="showState(2)">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 9V5a2 2 0 0 1 2-2h4M15 3h4a2 2 0 0 1 2 2v4M21 15v4a2 2 0 0 1-2 2h-4M9 21H5a2 2 0 0 1-2-2v-4"/><path d="M3 12h18"/></svg>
+              掃碼
+            </button>
+          </div>
+          <div class="asidebody">
+            <div class="lbl">會員號碼（8 位）</div>
+            <input class="phoneinput" id="payPhone" value="" placeholder="例如：63936542" />
+            <div class="membercard" id="payMemberCard">
+              <div class="ph" id="payEmpty">尚未查詢會員 · 可直接掃客人會員碼</div>
+              <div id="payFound" style="display:none">
+                <div class="nm">陳小姐</div>
+                <div class="ph">6622 3344</div>
+                <div class="bal">餘額 MOP 120.00 · 可用券 3 張</div>
+                <div class="foundbadge">✓ 已由掃碼認出會員</div>
+              </div>
+            </div>
+            <div class="asidenote">認到會員後自動套會員價／折扣；此處<b>只做識別</b>，唔會寫入 Ledger。</div>
+          </div>
+          <div class="keypad">
+            <div class="kprow"><button>7</button><button>8</button><button>9</button></div>
+            <div class="kprow"><button>4</button><button>5</button><button>6</button></div>
+            <div class="kprow"><button>1</button><button>2</button><button>3</button></div>
+            <div class="kprow"><button>清除</button><button>0</button><button class="act">搜尋</button></div>
+          </div>
+        </aside>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ B · 會員頁 ============ -->
+  <div class="scene" id="sceneMember" data-k="scene-member">
+    <aside class="sidebar">
+      <div class="navitem"><span class="ico">收</span><span>收銀</span></div>
+      <div class="navitem"><span class="ico">單</span><span>訂單</span></div>
+      <div class="navitem active"><span class="ico">會</span><span>會員</span></div>
+      <div class="navitem"><span class="ico">庫</span><span>庫存</span></div>
+      <div class="navitem"><span class="ico">報</span><span>報表</span></div>
+      <div class="spacer"></div>
+      <div class="storebtn"><div class="nm">澳門某茶餐廳</div><div class="role">收銀</div></div>
+      <div class="synbadge">在線</div>
+    </aside>
+
+    <div class="main">
+      <div class="mhead">
+        <div class="toprow">
+          <div>
+            <div class="title">會員</div>
+            <div class="sub">輸入 8 位電話查詢；或直接掃客人的會員碼／優惠券 QR。</div>
+          </div>
+        </div>
+        <div class="searchrow">
+          <div class="searchinput"><span class="ph">輸入 8 位手機號碼</span><span style="color:#0f172a;font-weight:600">6622 3344</span></div>
+          <button class="scanbtn" data-k="scan-btn-member" onclick="showState(5)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 9V5a2 2 0 0 1 2-2h4M15 3h4a2 2 0 0 1 2 2v4M21 15v4a2 2 0 0 1-2 2h-4M9 21H5a2 2 0 0 1-2-2v-4"/><path d="M3 12h18"/></svg>
+            掃碼
+          </button>
+          <span style="font-size:12px;color:#64748b">一個掣通用：認會員／兌換券</span>
+        </div>
+      </div>
+
+      <div class="mbody">
+        <div class="memberwrap">
+          <article class="wallet">
+            <div class="nm">陳小姐</div>
+            <div class="ph">6622 3344</div>
+            <div class="balgrid">
+              <div class="balbox"><div class="k">錢包合計</div><div class="v">MOP 120.00</div></div>
+              <div class="bal2">
+                <div class="balbox"><div class="k">充值餘額</div><div class="v">MOP 120.00</div></div>
+                <div class="balbox"><div class="k">贈送餘額</div><div class="v" id="giftVal">MOP 0.00</div></div>
+              </div>
+              <div class="redeemnote">可核銷 <b id="cntVal">3</b> 張 · 共 4 張獎賞券</div>
+            </div>
+          </article>
+          <div class="rightcol">
+            <section class="section">
+              <div class="h">可核銷獎賞券</div>
+              <div class="grant"><div style="min-width:0"><div class="title">滿 100 減 20</div><div class="meta"><span class="pill">現金券</span> · MOP 20.00 · 到期 2026/11/15</div></div><button class="usebtn">使用</button></div>
+              <div class="grant"><div style="min-width:0"><div class="title">飲品券</div><div class="meta"><span class="pill">現金券</span> · MOP 10.00 · 到期 2026/12/31</div></div><button class="usebtn">使用</button></div>
+              <div class="grant"><div style="min-width:0"><div class="title">小食券</div><div class="meta"><span class="pill">禮品券</span> · 到期 2026/12/31</div></div><button class="usebtn">使用</button></div>
+            </section>
+            <section class="topupbox">現場充值（已註冊會員）· 走 Ledger merchant_apply_pos_txn(topup)</section>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <aside class="rightpad">
+      <div class="padhead"><div class="pt">數字鍵盤</div><div class="ps">輸入會員手機號碼</div></div>
+      <div class="padbody">
+        <div class="paddisplay">66223344</div>
+        <div class="padkeys">
+          <div class="row"><button class="padkey">7</button><button class="padkey">8</button><button class="padkey">9</button></div>
+          <div class="row"><button class="padkey">4</button><button class="padkey">5</button><button class="padkey">6</button></div>
+          <div class="row"><button class="padkey">1</button><button class="padkey">2</button><button class="padkey">3</button></div>
+          <div class="row"><button class="padkey">0</button><button class="padkey">00</button><button class="padkey">.</button></div>
+          <div class="row"><button class="padkey">清除</button><button class="padkey">刪除</button><button class="padkey act">搜尋</button></div>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <!-- ============ 共用相機掃碼 ============ -->
+  <div class="scanner" id="scanner" data-k="scanner">
+    <div class="stopbar">
+      <div><div class="st" id="scanTitle">掃碼 · 認會員</div><div class="ss">iPad 後置鏡頭 · 請將 QR Code 放入框內</div></div>
+      <button class="closebtn" onclick="scanBack()">關閉 ✕</button>
+    </div>
+    <div class="camarea">
+      <div class="viewfinder">
+        <div class="corner tl"></div><div class="corner tr"></div><div class="corner bl"></div><div class="corner br"></div>
+        <svg width="230" height="230" viewBox="0 0 21 21" shape-rendering="crispEdges" aria-label="客人手機上的 QR Code">
+          <rect width="21" height="21" fill="#ffffff"/>
+          <g fill="#0f172a">
+            <rect x="1" y="1" width="7" height="7"/><rect x="2" y="2" width="5" height="5" fill="#ffffff"/><rect x="3" y="3" width="3" height="3"/>
+            <rect x="13" y="1" width="7" height="7"/><rect x="14" y="2" width="5" height="5" fill="#ffffff"/><rect x="15" y="3" width="3" height="3"/>
+            <rect x="1" y="13" width="7" height="7"/><rect x="2" y="14" width="5" height="5" fill="#ffffff"/><rect x="3" y="15" width="3" height="3"/>
+            <rect x="9" y="1" width="1" height="2"/><rect x="11" y="1" width="2" height="1"/><rect x="9" y="4" width="2" height="1"/><rect x="10" y="6" width="1" height="2"/>
+            <rect x="1" y="9" width="2" height="1"/><rect x="4" y="9" width="1" height="2"/><rect x="6" y="10" width="2" height="1"/><rect x="9" y="9" width="3" height="1"/>
+            <rect x="13" y="9" width="1" height="2"/><rect x="15" y="9" width="2" height="1"/><rect x="18" y="10" width="2" height="2"/><rect x="17" y="9" width="1" height="1"/>
+            <rect x="9" y="11" width="1" height="2"/><rect x="11" y="12" width="2" height="1"/><rect x="14" y="12" width="1" height="2"/><rect x="16" y="13" width="2" height="1"/>
+            <rect x="9" y="14" width="2" height="1"/><rect x="12" y="15" width="1" height="2"/><rect x="15" y="15" width="1" height="1"/><rect x="18" y="15" width="2" height="1"/>
+            <rect x="9" y="17" width="1" height="1"/><rect x="11" y="18" width="2" height="1"/><rect x="14" y="18" width="3" height="1"/><rect x="18" y="18" width="1" height="2"/>
+            <rect x="9" y="19" width="1" height="1"/><rect x="10" y="20" width="2" height="1"/><rect x="13" y="20" width="1" height="1"/><rect x="16" y="20" width="1" height="1"/>
+          </g>
+        </svg>
+        <div class="scanline"></div>
+      </div>
+      <div class="caminfo">
+        <div class="bignum">同一個掃碼元件 · 兩頁共用</div>
+        <h3 id="scanHeadline">請客人出示<br/>會員通 App 嘅會員碼</h3>
+        <p id="scanDesc">掃到會員碼 → 自動帶入會員資料，唔使打 8 位電話。<br/>此動作只係識別，唔會寫入任何資料。</p>
+        <div class="flow" id="scanFlow">
+          <div class="flowrow"><b>① 會員碼</b>　驗章成功 → 認會員（唯讀）</div>
+          <div class="flowrow em"><b>② 優惠券 QR</b>　非會員碼 → 查券 → 彈窗確認 → 核銷</div>
+        </div>
+      </div>
+    </div>
+    <div class="scanfoot">
+      <button class="manualbtn">手動輸入券碼</button>
+      <button class="cancelbtn" onclick="scanBack()">取消</button>
+      <span class="securenote">需要 HTTPS + 相機權限 · 權限被拒可用手動輸入</span>
+    </div>
+  </div>
+
+  <!-- ============ 確認兌換彈窗 ============ -->
+  <div class="modalmask" id="confirmModal" data-k="confirm-modal">
+    <div class="modal">
+      <div class="mt">確定兌換這張券？</div>
+      <div class="mc">掃描到優惠券 QR。核銷後不能撤銷，請同客人確認係呢張券。</div>
+      <div class="couponcard">
+        <span class="badge">掃碼所得 · 優惠券</span>
+        <div class="ct">滿 100 減 20</div>
+        <div class="cm">現金券 · <b>MOP 20.00</b> · 到期 2026/11/15<br/>會員：陳小姐　6622 3344</div>
+        <div class="code">redemption_code：rc_9f3c…（只用於本次核銷，不寫入本機）</div>
+      </div>
+      <div class="warn">現金券核銷後會把面額加入本店「贈送餘額」，<b>不會</b>從呢張帳單扣錢、亦非線上付款。禮品券只標記已兌換，請現場將禮品交予客人。</div>
+      <div class="acts">
+        <button class="btncancel" onclick="showState(4)">取消</button>
+        <button class="btnconfirm" onclick="showState(7)">確定兌換</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ 兌換成功動畫 ============ -->
+  <div class="success" id="successOverlay" data-k="success-overlay">
+    <div class="confetti">
+      <i style="left:8%;background:#f97316;animation-delay:.05s"></i><i style="left:18%;background:#10b981;animation-delay:.35s"></i>
+      <i style="left:29%;background:#f59e0b;animation-delay:.15s"></i><i style="left:41%;background:#38bdf8;animation-delay:.55s"></i>
+      <i style="left:53%;background:#f97316;animation-delay:.25s"></i><i style="left:64%;background:#10b981;animation-delay:.45s"></i>
+      <i style="left:76%;background:#a78bfa;animation-delay:.1s"></i><i style="left:88%;background:#f59e0b;animation-delay:.65s"></i>
+    </div>
+    <div class="succard">
+      <div class="checkring"><svg viewBox="0 0 24 24"><path d="M4 12.5 L9.5 18 L20 6.5"/></svg></div>
+      <h2>兌換成功</h2>
+      <div class="sc">滿 100 減 20 · 現金券 MOP 20.00</div>
+      <div class="sd">陳小姐　6622 3344<br/>已同步至 Ledger，本頁券列表會自動更新</div>
+      <div class="gift">贈送餘額 + MOP 20.00</div>
+      <button class="donebtn" onclick="showState(4)">完成</button>
+    </div>
+  </div>
+
+  <!-- ============ 審稿註 ============ -->
+  <div class="anno on" data-anno="1" style="left:900px;top:150px">
+    <b>NEW A</b> 結帳彈窗「會員」標題右邊加一個掃碼掣（44px 高，觸控友善）。<br/>用途單一：認會員、自動帶入電話。
+  </div>
+  <div class="anno" data-anno="3" style="left:880px;top:150px">
+    <b>掃完即認</b> 驗章成功 → 自動帶入會員 + 套會員價。<br/>呢一步<b>零寫入</b>，所以唔需要確認彈窗。
+  </div>
+  <div class="anno" data-anno="4" style="left:560px;top:140px">
+    <b>NEW B</b> 會員頁搜尋列加<b>同一款</b>掣。<br/>一個掣、一個相機元件，認會員同兌換券都靠佢。
+  </div>
+  <div class="anno" data-anno="5" style="left:930px;top:120px">
+    <b>順序探測，唔係字首硬判</b><br/>① 先驗會員碼（HMAC＋120s）<br/>② 唔係就當券碼查 redeem_reward<br/>③ 券碼＝寫入 ⇒ 一定要彈窗
+  </div>
+  <div class="anno" data-anno="6" style="left:820px;top:120px">
+    <b>不可逆要先問</b> 券碼一律彈確認，顯示券名／面額／所屬會員，先至打 RPC。
+  </div>
+  <div class="anno" data-anno="7" style="left:920px;top:150px">
+    <b>成功動畫</b> 打勾描線＋卡片彈入＋彩帶，約 1.5s；撳「完成」或自動收返。
+  </div>
+
+</div>
+</div>
+
+<div class="legend">
+  <b>技術口徑（對應上一輪查證）</b>　一個掣通用：Ledger Web <code>pos-panel.tsx:205-234</code> 嘅 <code>handleScanResult()</code> 本身就係「先試會員碼、唔係就當券碼」，唔使分兩個掣。<br/>
+  <b>會員碼</b>　<code>member-qr.ts</code> HMAC 簽章 55 字 base64url、120 秒到期；POS server 已有同一顆 <code>AUTH_PIN_PEPPER</code> 可自己驗章 → 純識別、零寫入、唔使彈窗。<br/>
+  <b>優惠券 QR</b>　<code>rc_</code> + 32 hex，直接 <code>redeem_reward(p_code, p_operator_id)</code>（契約 §5.7.5 白名單）→ 寫入且不可逆 ⇒ 必須彈窗。<b>團購券 <code>gb_</code></b> 行另一條 RPC 且未入白名單，本稿<b>未畫入</b>，待你確認係咪要包。<br/>
+  <b>紅線</b>　回傳嘅 customer_phone 只可當次顯示、禁寫本機；核銷要 in-flight 鎖防雙撳、處理 <code>already_redeemed</code>（已用券唔好當新核銷）；相機要 HTTPS + 手動輸入後備。<br/>
+  <b>2026-11-05 實作差異</b>　Ledger 冇「由 <code>redemption_code</code> 只讀券資料」嘅 RPC，所以 ⑥ 確認彈窗<b>改為顯示遮罩券碼</b>（<code>rc_a1b2c3d…</code>）＋警告，券名／面額／所屬會員改由 ⑦ 成功動畫用 <code>redeem_reward</code> 回傳顯示。其餘狀態同本稿一致。
+</div>
+
+<script>
+  var currentState = 1;
+  function scanBack(){ showState(currentState === 5 ? 4 : 1); }
+  function showState(n){
+    currentState = n;
+    var isPay = (n <= 3);
+    document.getElementById('scenePay').classList.toggle('on', n === 1 || n === 3);
+    document.getElementById('sceneMember').classList.toggle('on', n === 4 || n === 6 || n === 7);
+    document.getElementById('scanner').classList.toggle('on', n === 2 || n === 5);
+    document.getElementById('confirmModal').classList.toggle('on', n === 6);
+    document.getElementById('successOverlay').classList.toggle('on', n === 7);
+
+    var found = (n === 3);
+    document.getElementById('payEmpty').style.display = found ? 'none' : 'block';
+    document.getElementById('payFound').style.display = found ? 'block' : 'none';
+    document.getElementById('payMemberCard').classList.toggle('found', found);
+    document.getElementById('payPhone').value = found ? '66223344' : '';
+
+    var isMemberScan = (n === 5);
+    document.getElementById('scanTitle').textContent = isMemberScan ? '掃碼 · 認會員或兌換券' : '掃碼 · 認會員';
+    document.getElementById('scanHeadline').innerHTML = isMemberScan
+      ? '請客人出示<br/>會員碼或優惠券 QR'
+      : '請客人出示<br/>會員通 App 嘅會員碼';
+    document.getElementById('scanDesc').innerHTML = isMemberScan
+      ? '同一個掣自動分辨：會員碼 → 認會員；優惠券 QR → 彈窗確認後核銷。'
+      : '掃到會員碼 → 自動帶入會員資料，唔使打 8 位電話。<br/>此動作只係識別，唔會寫入任何資料。';
+    document.getElementById('scanFlow').style.display = isMemberScan ? 'grid' : 'none';
+
+    var btns = document.querySelectorAll('.steps button');
+    for(var i=0;i<btns.length;i++){
+      btns[i].classList.toggle('on', Number(btns[i].getAttribute('data-state')) === n);
+    }
+    var annos = document.querySelectorAll('.anno');
+    for(var j=0;j<annos.length;j++){
+      var keys = annos[j].getAttribute('data-anno').split(' ');
+      annos[j].classList.toggle('on', keys.indexOf(String(n)) >= 0);
+    }
+  }
+  var stepBtns = document.querySelectorAll('.steps button');
+  for(var k=0;k<stepBtns.length;k++){
+    (function(b){ b.onclick = function(){ showState(Number(b.getAttribute('data-state'))); }; })(stepBtns[k]);
+  }
+  function fit(){
+    var stage = document.getElementById('stage');
+    var canvas = document.getElementById('canvas');
+    var w = stage.clientWidth;
+    var s = Math.min(1, w / 1280);
+    canvas.style.transform = 'scale(' + s + ')';
+    stage.style.height = (880 * s) + 'px';
+  }
+  window.addEventListener('resize', fit);
+  fit();
+</script>
+</body>
+</html>

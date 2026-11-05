@@ -8,6 +8,8 @@
 @source not "../../docs";
 @source not "../../.workbuddy";
 @source not "../../.workbuddy-ai";
+/* 256KB minified jsQR UMD：唔係樣式來源，避免 Tailwind 掃描器抽取入面嘅字串做 class。 */
+@source not "../../public/vendor";
 
 :root {
   --background: #f3f5f9;
@@ -815,4 +817,73 @@ body {
   .pos-unfinished-highlight {
     animation: none;
   }
+}
+
+/* ── 會員掃碼 + 兌換成功動畫（2026-11-05）──────────────────────────────
+   iPad Safari 無 BarcodeDetector，掃碼框嘅掃描線用純 CSS，唔食 JS 幀。
+   核銷成功動畫全部用 class（唔用 Tailwind arbitrary animation），方便
+   prefers-reduced-motion 一次過關掉。 */
+@keyframes pos-qr-scan {
+  0% { top: 24px; }
+  50% { top: calc(100% - 30px); }
+  100% { top: 24px; }
+}
+
+.pos-qr-scanline {
+  animation: pos-qr-scan 2.2s ease-in-out infinite;
+}
+
+@keyframes pos-redeem-card-pop {
+  0% { transform: scale(0.78); opacity: 0; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+@keyframes pos-redeem-ring-pop {
+  0% { transform: scale(0.3); opacity: 0; }
+  70% { transform: scale(1.12); }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+@keyframes pos-redeem-check-draw {
+  to { stroke-dashoffset: 0; }
+}
+
+@keyframes pos-redeem-fade-up {
+  0% { transform: translateY(10px); opacity: 0; }
+  100% { transform: translateY(0); opacity: 1; }
+}
+
+@keyframes pos-redeem-fall {
+  0% { transform: translateY(-24px) rotate(0deg); opacity: 1; }
+  100% { transform: translateY(100vh) rotate(540deg); opacity: 0; }
+}
+
+.pos-redeem-card { animation: pos-redeem-card-pop 0.45s cubic-bezier(0.2, 1.3, 0.4, 1) both; }
+.pos-redeem-ring { animation: pos-redeem-ring-pop 0.5s 0.1s cubic-bezier(0.2, 1.5, 0.4, 1) both; }
+.pos-redeem-check {
+  stroke-dasharray: 70;
+  stroke-dashoffset: 70;
+  animation: pos-redeem-check-draw 0.45s 0.45s ease forwards;
+}
+.pos-redeem-fade { animation: pos-redeem-fade-up 0.4s 0.5s both; }
+.pos-redeem-confetti {
+  position: absolute;
+  top: -24px;
+  width: 9px;
+  height: 16px;
+  border-radius: 2px;
+  opacity: 0;
+  animation: pos-redeem-fall 1.6s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pos-qr-scanline,
+  .pos-redeem-card,
+  .pos-redeem-ring,
+  .pos-redeem-check,
+  .pos-redeem-fade,
+  .pos-redeem-confetti {
+    animation: none;
+  }
+  .pos-redeem-check { stroke-dashoffset: 0; }
 }

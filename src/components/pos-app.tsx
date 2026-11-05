@@ -28,6 +28,8 @@ import {
 import { QuickModeOrdersBar } from "@/components/quick-mode-orders-bar";
 import { QuickOnlineOrdersPanel } from "@/components/quick-online-orders-panel";
 import { ResponsiveModal } from "@/components/responsive-modal";
+import { MemberQrScanner } from "@/components/member-qr-scanner";
+import { resolveScannedCode } from "@/lib/ledger/member-qr-client";
 import { SelfOrderActionButtons } from "@/components/self-order-action-buttons";
 import { SelfOrderNoticeStack } from "@/components/self-order-notice-stack";
 import { SyncHealthModal } from "@/components/sync-health-modal";
@@ -719,6 +721,11 @@ export function PosApp() {
   const [memberPhone, setMemberPhone] = useState("");
   const [ledgerMember, setLedgerMember] = useState<LedgerCheckoutMember | null>(null);
   const [memberSearchHint, setMemberSearchHint] = useState<string>("");
+  // 2026-11-05 結帳「會員」旁掃碼：只認會員碼（純識別、零寫入）。
+  const [memberScanOpen, setMemberScanOpen] = useState(false);
+  const [memberScanNote, setMemberScanNote] = useState<{ tone: "ok" | "err"; text: string } | null>(
+    null,
+  );
   const [memberSearching, setMemberSearching] = useState(false);
   const memberSearchTimerRef = useRef<number | null>(null);
   const memberCheckoutIdempotencyRef = useRef<string | null>(null);
@@ -2876,6 +2883,7 @@ export function PosApp() {
     const normalized = input.replace(/\D/g, "").slice(0, 8);
     setMemberPhone(normalized);
     setMemberSearchHint("");
+    setMemberScanNote(null);
     memberCheckoutIdempotencyRef.current = null;
     setMemberCheckoutRedeemDone(false);
 
@@ -2893,6 +2901,32 @@ export function PosApp() {
     }
 
     scheduleMemberLookup(normalized);
+  }
+
+  /**
+   * 結帳「會員」旁掃碼（2026-11-05）：只認會員碼，認到就帶入 8 位電話，
+   * 行返原本嘅 `scheduleMemberLookup()`（會員價／折扣／餘額全部自動跟住計）。
+   *
+   * 🔴 呢度**刻意唔處理優惠券**：支付頁掃到券碼只提示，唔會靜靜核銷
+   *    （核銷係不可逆寫入，要喺會員頁經確認彈窗做，見 members-page.tsx）。
+   * 🔴 會員電話只留喺記憶體 state，唔寫本機／log（契約 §7.2）。
+   */
+  async function handleMemberScanResult(raw: string) {
+    setMemberScanOpen(false);
+    const resolved = await resolveScannedCode(raw);
+    if (resolved.kind === "member") {
+      handleMemberPhoneChange(resolved.phone);
+      setMemberScanNote({ tone: "ok", text: "已由掃碼認出會員，自動帶入電話" });
+      return;
+    }
+    if (resolved.kind === "coupon") {
+      setMemberScanNote({
+        tone: "err",
+        text: "呢個係優惠券 QR；請到「會員」頁掃碼兌換，結帳頁只認會員碼。",
+      });
+      return;
+    }
+    setMemberScanNote({ tone: "err", text: resolved.message });
   }
 
   useEffect(() => {
@@ -8421,8 +8455,26 @@ export function PosApp() {
 
               <aside className="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white">
                 <div className="border-b border-slate-100 px-4 py-4">
-                  <div className="text-sm font-semibold text-slate-900">{t("會員")}</div>
-                  <div className="mt-1 text-xs text-slate-500">{t("輸入 8 位手機號碼後會自動查詢")}</div>
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="text-sm font-semibold text-slate-900">{t("會員")}</div>
+                      <div className="mt-1 text-xs text-slate-500">{t("輸入 8 位手機號碼後會自動查詢")}</div>
+                    </div>
+                    <button
+                      className="flex h-11 min-w-[92px] shrink-0 items-center justify-center gap-1.5 rounded-2xl bg-orange-500 px-3 text-sm font-semibold text-white hover:bg-orange-600"
+                      onClick={() => {
+                        setMemberScanNote(null);
+                        setMemberScanOpen(true);
+                      }}
+                      type="button"
+                    >
+                      <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+                        <path d="M3 9V5a2 2 0 0 1 2-2h4M15 3h4a2 2 0 0 1 2 2v4M21 15v4a2 2 0 0 1-2 2h-4M9 21H5a2 2 0 0 1-2-2v-4" />
+                        <path d="M3 12h18" />
+                      </svg>
+                      掃碼
+                    </button>
+                  </div>
                 </div>
                 <div className="min-h-0 flex-1 overflow-auto px-4 py-4">
                   <label className="grid gap-1 text-xs font-semibold text-slate-500">
@@ -8437,6 +8489,17 @@ export function PosApp() {
                   </label>
                   {memberSearching ? <div className="mt-2 text-xs text-slate-500">{t("搜尋中…")}</div> : null}
                   {memberSearchHint ? <div className="mt-2 text-xs text-red-600">{memberSearchHint}</div> : null}
+                  {memberScanNote ? (
+                    <div
+                      className={`mt-2 rounded-xl px-3 py-2 text-xs font-semibold ${
+                        memberScanNote.tone === "ok"
+                          ? "bg-emerald-50 text-emerald-700"
+                          : "bg-amber-50 text-amber-800"
+                      }`}
+                    >
+                      {memberScanNote.text}
+                    </div>
+                  ) : null}
                   {ledgerMember ? (
                     <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm">
                       <div className="font-semibold text-slate-900">
@@ -8456,6 +8519,17 @@ export function PosApp() {
               </aside>
             </div>
         </ResponsiveModal>
+      ) : null}
+
+      {payingOrderId && memberScanOpen ? (
+        <MemberQrScanner
+          open
+          title="掃碼 · 認會員"
+          hint="請客人出示會員通 App 嘅會員碼。認到會員後會自動帶入電話，唔會寫入任何資料。"
+          allowCoupon={false}
+          onResult={(value) => void handleMemberScanResult(value)}
+          onClose={() => setMemberScanOpen(false)}
+        />
       ) : null}
 
       {orderActionRequest ? (

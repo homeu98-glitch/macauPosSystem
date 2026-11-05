@@ -1,6 +1,7 @@
 "use client";
 
 import { friendlyLedgerMemberError } from "@/lib/ledger/member-errors";
+import { REWARD_COUPON_CODE_PATTERN } from "@/lib/ledger/member-qr-client";
 import { LedgerMemberGrantRecord, LedgerRewardGrant } from "@/lib/ledger/member-types";
 import { ensureLedgerSession } from "@/lib/ledger/session";
 import { getLedgerSupabaseClient } from "@/lib/ledger/supabase-client";
@@ -104,6 +105,62 @@ export type RedeemGrantsResult = {
     rewardAmountAvos: number;
   }>;
 };
+
+export type RedeemByCodeResult = {
+  /** 已用券：DB 回 `ok:true` 但唔係新核銷，UI 唔好當成功入帳。 */
+  alreadyRedeemed: boolean;
+  grantId: string;
+  title: string;
+  prizeType: string;
+  rewardAmountAvos: number;
+  customerPhone: string | null;
+  balanceAfterAvos: number | null;
+};
+
+/**
+ * 由優惠券 QR 嘅 `redemption_code` 單張核銷（契約 §5.7.5 白名單）。
+ *
+ * 2026-11-05 會員頁「掃碼兌換券」用。同 `redeemRewardGrants()` 嘅分別：
+ *  - 呢條按 **code**（客人出示 QR），嗰條按 **grant_id**（店員喺列表揀）；
+ *  - `redeem_reward` 係 `security definer` + `_reward_assert_staff()`，
+ *    顧客 JWT 打唔通，必須用店員 session（`ensureLedgerSession()`）。
+ *
+ * 🔴 呢個係**寫入且不可逆**嘅動作，呼叫端一定要先彈確認，唔好一掃即核銷。
+ * 🔴 `p_operator_id` 喺 DB 只保留簽章相容（稽核用 `auth.uid()`），但唔可以省略。
+ * 🔴 回傳含 `customer_phone`：只可當次顯示，唔好寫入 localStorage／POS DB／log（§7.2）。
+ */
+export async function redeemRewardByCode(code: string): Promise<RedeemByCodeResult> {
+  const trimmed = String(code ?? "").trim();
+  if (!REWARD_COUPON_CODE_PATTERN.test(trimmed)) {
+    throw new Error("無法辨識此 QR Code，請確認係有效優惠券。");
+  }
+  try {
+    const client = await requireRpcClient();
+    const { data: sessionData } = await client.auth.getSession();
+    const operatorId = readOperatorIdFromToken(sessionData.session?.access_token);
+    if (!operatorId) {
+      throw new Error("Ledger 登入已過期，請重新登入。");
+    }
+    const { data, error } = await client.rpc("redeem_reward", {
+      p_code: trimmed,
+      p_operator_id: operatorId,
+    });
+    if (error) throw new Error(error.message);
+    const row = (data ?? {}) as Record<string, unknown>;
+    return {
+      alreadyRedeemed: row.already_redeemed === true,
+      grantId: String(row.grant_id ?? ""),
+      title: String(row.title ?? "優惠券"),
+      prizeType: String(row.prize_type ?? ""),
+      rewardAmountAvos: Number(row.reward_amount_avos ?? 0),
+      customerPhone: row.customer_phone ? String(row.customer_phone) : null,
+      balanceAfterAvos:
+        typeof row.balance_after === "number" ? Number(row.balance_after) : null,
+    };
+  } catch (err) {
+    throw new Error(friendlyLedgerMemberError(err instanceof Error ? err.message : String(err)));
+  }
+}
 
 export async function redeemRewardGrants(grantIds: string[]): Promise<RedeemGrantsResult> {
   if (grantIds.length === 0) {

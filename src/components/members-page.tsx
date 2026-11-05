@@ -4,13 +4,16 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
 import { AppSidebar } from "@/components/app-sidebar";
+import { CouponRedeemSuccess } from "@/components/coupon-redeem-success";
 import { FixedNumberPad } from "@/components/fixed-number-pad";
+import { MemberQrScanner } from "@/components/member-qr-scanner";
 import { ResponsiveModal } from "@/components/responsive-modal";
 import { useT } from "@/components/lang-provider";
 import { MemberTopupPanel } from "@/components/member-topup-panel";
 import { PendingDot } from "@/components/pending-dot";
 import { ensureCustomer } from "@/lib/ledger/ensure-customer";
 import { friendlyLedgerMemberError } from "@/lib/ledger/member-errors";
+import { maskCouponCode, resolveScannedCode } from "@/lib/ledger/member-qr-client";
 import { isValidMemberSearch, listMerchantCustomers } from "@/lib/ledger/member-list";
 import {
   avosToMop,
@@ -27,7 +30,9 @@ import { applyPosTopup, lookupCustomerWallet } from "@/lib/ledger/members";
 import {
   listCustomerRewardGrants,
   listRedeemableGrantsForCustomer,
+  redeemRewardByCode,
   redeemRewardGrants,
+  type RedeemByCodeResult,
 } from "@/lib/ledger/rewards";
 import { getLedgerMerchantId } from "@/lib/ledger/session";
 import { clearLegacyMembersCache } from "@/lib/storage";
@@ -189,6 +194,12 @@ export function MembersPage() {
     text: string;
     vars?: Record<string, string | number>;
   } | null>(null);
+  // 2026-11-05 通用掃碼：一個掣認會員碼／優惠券 QR。
+  const [scanOpen, setScanOpen] = useState(false);
+  // 掃到券碼 → 先暫存，彈確認；核銷係不可逆寫入，唔可以一掃即做。
+  const [scannedCouponCode, setScannedCouponCode] = useState<string | null>(null);
+  const [scanRedeemBusy, setScanRedeemBusy] = useState(false);
+  const [redeemSuccess, setRedeemSuccess] = useState<RedeemByCodeResult | null>(null);
   const [topupAmount, setTopupAmount] = useState("");
   // 未註冊建檔用：會員名稱（可選，契約 §5.7.7 displayName ≤ 50 字）。
   // 只在 unregistered 分支（ensure-customer）提交；已註冊會員唔經呢條。
@@ -377,6 +388,75 @@ export function MembersPage() {
     const normalized = value.replace(/\D/g, "").slice(0, 8);
     setPhone(normalized);
     scheduleLookup(normalized);
+  }
+
+  /**
+   * 通用掃碼入口（2026-11-05）：一個掣、一個 scanner，認兩類碼。
+   *
+   *  - 會員碼 → `handlePhoneChange()` 帶入電話，行返既有 lookup（唯讀，唔使彈窗）。
+   *  - 券碼   → 只暫存 code 並彈確認；真正 `redeem_reward` 要等店員撳「確定兌換」。
+   *  - 團購券／亂碼 → 明確提示，唔靜靜試 RPC（fail-closed）。
+   */
+  async function handleScanResult(raw: string) {
+    setScanOpen(false);
+    if (offlineMode) {
+      setToast({ tone: "err", text: "掃碼認會員／核銷券須連線，請恢復網絡後再試。" });
+      return;
+    }
+    const resolved = await resolveScannedCode(raw);
+    if (resolved.kind === "member") {
+      handlePhoneChange(resolved.phone);
+      setToast({ tone: "ok", text: "已由掃碼認出會員：{phone}", vars: { phone: resolved.phone } });
+      return;
+    }
+    if (resolved.kind === "coupon") {
+      setConfirmGrant(null);
+      setScannedCouponCode(resolved.code);
+      return;
+    }
+    setToast({ tone: "err", text: resolved.message });
+  }
+
+  /**
+   * 確認後先真正核銷。`redeem_reward` 係寫入且不可逆 ⇒ 一定要經呢度，
+   * 而且要 `scanRedeemBusy` 鎖住，防止連撳造成重複請求。
+   *
+   * 券名／面額**唔可以喺確認彈窗預先顯示**：Ledger 冇「由 redemption_code
+   * 只讀券資料」嘅 RPC，所以彈窗只顯示遮罩碼；成功後用 RPC 回傳顯示詳情。
+   */
+  async function handleScanConfirmRedeem() {
+    const code = scannedCouponCode;
+    if (!code || scanRedeemBusy) return;
+    setScanRedeemBusy(true);
+    try {
+      const result = await redeemRewardByCode(code);
+      setScannedCouponCode(null);
+      if (result.alreadyRedeemed) {
+        // DB 對已用券回 ok:true，唔可以當新核銷（避免「重複入帳」誤導）。
+        setToast({ tone: "info", text: "呢張券之前已核銷，未重複入帳。" });
+        await refreshAfterRedeem();
+        return;
+      }
+      setRedeemSuccess(result);
+      // 用回傳嘅會員電話重載錢包／券列表；電話只留喺記憶體 state（§7.2）。
+      const targetPhone = result.customerPhone ?? member?.customerPhone;
+      if (targetPhone && /^\d{8}$/.test(targetPhone)) {
+        setPhone(targetPhone);
+        try {
+          await reloadMember(targetPhone);
+        } catch {
+          /* 成功動畫已出，刷新失敗唔蓋過成功 */
+        }
+      }
+    } catch (err) {
+      setToast({
+        tone: "err",
+        text: "核銷失敗：{msg}",
+        vars: { msg: friendlyLedgerMemberError(err instanceof Error ? err.message : String(err)) },
+      });
+    } finally {
+      setScanRedeemBusy(false);
+    }
   }
 
   /**
@@ -590,6 +670,18 @@ export function MembersPage() {
                     placeholder={t("輸入 8 位手機號碼")}
                     value={phone}
                   />
+                  <button
+                    className="flex h-11 min-w-[104px] shrink-0 items-center justify-center gap-1.5 rounded-2xl bg-orange-500 px-4 text-sm font-semibold text-white hover:bg-orange-600"
+                    onClick={() => setScanOpen(true)}
+                    type="button"
+                  >
+                    <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+                      <path d="M3 9V5a2 2 0 0 1 2-2h4M15 3h4a2 2 0 0 1 2 2v4M21 15v4a2 2 0 0 1-2 2h-4M9 21H5a2 2 0 0 1-2-2v-4" />
+                      <path d="M3 12h18" />
+                    </svg>
+                    掃碼
+                  </button>
+                  <span className="text-xs text-slate-500">認會員／兌換券，同一個掣</span>
                 </div>
                 <div className="mt-2 flex flex-wrap items-center gap-2">
                   <input
@@ -860,6 +952,67 @@ export function MembersPage() {
               : t("禮品券核銷後只標記已兌換，請現場將礼品交予客人。")}
           </div>
         </ResponsiveModal>
+      ) : null}
+
+      {scannedCouponCode ? (
+        <ResponsiveModal
+          title="確定兌換這張券？"
+          description="掃描到優惠券 QR。核銷後不能撤銷，請同客人確認係呢張券。"
+          onClose={() => {
+            if (!scanRedeemBusy) setScannedCouponCode(null);
+          }}
+          actions={
+            <>
+              <button
+                type="button"
+                disabled={scanRedeemBusy}
+                onClick={() => setScannedCouponCode(null)}
+                className="h-11 rounded-2xl bg-slate-100 px-4 text-sm font-semibold text-slate-700 hover:bg-slate-200 disabled:opacity-50"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                disabled={scanRedeemBusy}
+                onClick={() => void handleScanConfirmRedeem()}
+                className="h-11 rounded-2xl bg-orange-500 px-4 text-sm font-semibold text-white hover:bg-orange-600 disabled:opacity-50"
+              >
+                {scanRedeemBusy ? "處理中…" : "確定兌換"}
+              </button>
+            </>
+          }
+        >
+          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+            <span className="inline-flex rounded-full bg-orange-50 px-3 py-1 text-xs font-semibold text-amber-800">
+              掃碼所得 · 優惠券
+            </span>
+            <div className="mt-3 break-all font-mono text-base font-semibold text-slate-900">
+              {maskCouponCode(scannedCouponCode)}
+            </div>
+            <div className="mt-2 text-xs leading-relaxed text-slate-500">
+              Ledger 冇「由券碼只讀券名」嘅通道，券名／面額／所屬會員會喺核銷成功後顯示。
+            </div>
+          </div>
+          <div className="mt-3 rounded-2xl bg-amber-50 p-3 text-xs leading-relaxed text-amber-800">
+            現金券核銷後會把面額加入本店「贈送餘額」，<b>不會</b>從帳單扣錢、亦非線上付款；
+            禮品券只標記已兌換，請現場將禮品交予客人。核銷後不能撤銷。
+          </div>
+        </ResponsiveModal>
+      ) : null}
+
+      {scanOpen ? (
+        <MemberQrScanner
+          open
+          title="掃碼 · 認會員或兌換券"
+          hint="請客人出示會員碼或優惠券 QR。會員碼即時認人；優惠券會先彈窗俾你確認。"
+          allowCoupon
+          onResult={(value) => void handleScanResult(value)}
+          onClose={() => setScanOpen(false)}
+        />
+      ) : null}
+
+      {redeemSuccess ? (
+        <CouponRedeemSuccess result={redeemSuccess} onDone={() => setRedeemSuccess(null)} />
       ) : null}
 
       {toast ? (
