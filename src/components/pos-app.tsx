@@ -18,6 +18,8 @@ import { OrderDiscountRow, OrderItemDiscountLine } from "@/components/order-disc
 import { PlatformFeeBreakdown } from "@/components/platform-fee-breakdown";
 import { PlatformSettlementBreakdown } from "@/components/platform-settlement-breakdown";
 import { buildOrderDetailNotes } from "@/lib/pos/order-notes";
+// 2026-11-05：前台結帳「查到會員就自動套」共用客人端嘅會員價真源，唔可以喺 component 自己寫公式。
+import { posMemberDiscountAmount } from "@/lib/pos/member-price";
 import {
   PLATFORM_VOID_DEFAULT_REASON,
   canVoidPlatformOrder,
@@ -2741,13 +2743,75 @@ export function PosApp() {
           total: sumOrderBaseTotal(activeOrder),
         }
       : totals;
+  /** 人手揀嘅「全單折扣」金額（落單／送出廚房寫入訂單都係用呢個值，唔好撈埋會員折扣）。 */
   const discountAmount = useMemo(() => {
     const preset = localSettings.discounts.find((d) => d.id === discountValue);
     if (!preset) return 0;
     return discountAmountFromRate(paymentBase.total, preset.rate);
   }, [discountValue, localSettings.discounts, paymentBase.total]);
+
+  // ── 會員折扣（2026-11-05：前台查到會員就自動套）────────────────────────
+  // 計價真源同客人手機端共用 `lib/pos/member-price.ts`（單品會員價 override 全店率、
+  // 規格加價唔打折、逐項各自計），唔可以喺 component 自己寫第二份公式。
+  // ⚠️ 只喺「結帳 modal 開緊 ＋ 查到會員」生效：下面 upsertCurrentOrder 等落單路徑
+  //    仍然用人手 discountAmount，避免收銀查完會員但取消結帳後，未結帳訂單靜靜帶住折扣。
+  const menuItemById = useMemo(
+    () => new Map((bootstrap?.menuItems ?? []).map((item) => [item.id, item])),
+    [bootstrap?.menuItems],
+  );
+  const checkoutItems = currentSettlementOrder?.items ?? workspaceOrder?.items ?? cartItems;
+  const memberDiscountAmount = useMemo(() => {
+    if (!payingOrderId || !ledgerMember) return 0;
+    return posMemberDiscountAmount(
+      checkoutItems.map((item) => {
+        const menu = menuItemById.get(item.menuItemId);
+        const specDelta = (item.selectedSpecs ?? []).reduce(
+          (sum, spec) => sum + (Number.isFinite(spec.priceDelta) ? spec.priceDelta : 0),
+          0,
+        );
+        return {
+          price: item.price,
+          quantity: item.quantity,
+          discountRate: item.discountRate,
+          memberPriceSnapshot: item.memberPrice,
+          menuPrice: menu?.price,
+          menuMemberPrice: menu?.memberPrice,
+          specDelta,
+          isMarketPrice: menu?.isMarketPrice,
+          voided: item.voided,
+        };
+      }),
+      bootstrap?.rules.memberDiscountRate,
+    );
+  }, [
+    payingOrderId,
+    ledgerMember,
+    checkoutItems,
+    menuItemById,
+    bootstrap?.rules.memberDiscountRate,
+  ]);
+
+  // 客人端已套「會員價」落單嘅單：前台就算冇再查會員，都要照單收，唔好收貴咗。
+  // 前台查到會員就改由 items 重新計（菜單改價唔追溯舊單），唔沿用舊金額避免過度折扣。
+  const discountSourceOrder = currentSettlementOrder ?? workspaceOrder ?? activeOrder;
+  const existingMemberDiscount =
+    !ledgerMember && discountSourceOrder?.discountNote === "會員價"
+      ? Math.max(0, discountSourceOrder.discountAmount ?? 0)
+      : 0;
+
+  // 人手折扣 vs 會員折扣：**唔疊加，取較優惠者**（設定頁文案：認到會員就自動計算、
+  // 唔同折扣項目疊加）。兩者都係「減幾多錢」，直接 max ＝ 客人俾最少錢，
+  // 唔會出現「揀咗更平嘅人手折扣反而變貴」。
+  const checkoutDiscountAmount = Math.max(discountAmount, memberDiscountAmount, existingMemberDiscount);
+  const memberDiscountApplied =
+    checkoutDiscountAmount > 0 &&
+    Math.max(memberDiscountAmount, existingMemberDiscount) >= discountAmount;
+  // 會員折扣係程式自動設值，冇人手填原因 ⇒ 自動寫「會員價」，否則會被 confirmPayment
+  // 「有折扣必填原因」硬閘擋住（同客人端 buildKioskOrder 完全一致）。
+  const checkoutDiscountNote = memberDiscountApplied ? "會員價" : discountNote.trim();
+
   const prepaidAmount = (currentSettlementOrder?.prepaidAmount ?? activeOrder?.prepaidAmount ?? 0) || 0;
-  const payableBeforeMember = Math.max(0, paymentBase.total - discountAmount - prepaidAmount);
+  const payableBeforeMember = Math.max(0, paymentBase.total - checkoutDiscountAmount - prepaidAmount);
   const selectedMoneyVoucherAvos = useMemo(
     () => (ledgerMember ? sumMoneyVoucherAvos(ledgerMember.redeemableGrants, selectedGrantIds) : 0),
     [ledgerMember, selectedGrantIds],
@@ -2842,7 +2906,8 @@ export function PosApp() {
     // docs/95 §14：之前硬寫 0，同 paymentBase 對唔上；跟返 paymentBase 實際計出嘅服務費。
     serviceChargeAmount: paymentBase.serviceChargeAmount,
     taxAmount: paymentBase.taxAmount,
-    discountAmount,
+    // 結帳顯示／應收一律跟「有效折扣」（人手折扣與會員折扣取較優惠者）。
+    discountAmount: checkoutDiscountAmount,
     prepaidAmount,
     memberDeduction,
     total: Math.max(0, payableBeforeMember - memberDeduction),
@@ -2882,7 +2947,7 @@ export function PosApp() {
       onlineOrderId: order?.onlineOrderId,
       prepaidAmount: order?.prepaidAmount,
       baseTotal: paymentBase.total,
-      discountAmount,
+      discountAmount: checkoutDiscountAmount,
     });
   const checkoutDiffOrder =
     checkoutDiffOrderId ? orders.find((order) => order.id === checkoutDiffOrderId) ?? null : null;
@@ -4930,7 +4995,9 @@ export function PosApp() {
     // 正常路徑由「全單折扣」下拉嘅彈窗守住（揀完折扣先彈原因）；呢度兜住**程式化設值**嘅情況 ——
     // 例如返結舊單時 `matchDiscountId` 反配到折扣預設，但舊單冇 `discountNote`，
     // 收銀直接撳結帳就會漏咗原因。缺原因時唔結帳，改為彈原因彈窗（原因填好再撳一次即可）。
-    if (discountAmount > 0 && !discountNote.trim()) {
+    // 會員折扣係程式自動設值 ⇒ checkoutDiscountNote 自帶「會員價」，唔會被呢道硬閘擋住；
+    // 人手折扣勝出就要照舊有手填原因。
+    if (checkoutDiscountAmount > 0 && !checkoutDiscountNote.trim()) {
       requestDiscountNote({ kind: "whole", presetId: discountValue }, "");
       setToast({ tone: "info", message: t("此單有折扣，請先選擇折扣原因。") });
       return;
@@ -4940,7 +5007,7 @@ export function PosApp() {
       const now = new Date().toISOString();
       // 系統抹零（docs/88 §5.1）：total = base - discount - rounding。roundingInput 空 = 0。
       const rounding = roundingInput ? Math.max(0, round2(Number(roundingInput) || 0)) : 0;
-      const settledGrandTotal = Math.max(0, paymentBase.total - discountAmount - rounding);
+      const settledGrandTotal = Math.max(0, paymentBase.total - checkoutDiscountAmount - rounding);
       const quickPaidFlow = isQuickMode && targetOrder.tableId === "counter";
       const hasGrantRedeem = selectedGrantIds.length > 0;
       // 返結 temp 枱重結：還原原枱並清掉 temp 標記
@@ -4965,7 +5032,7 @@ export function PosApp() {
             : hasGrantRedeem
               ? `會員券 + ${method}`
               : method,
-        discountAmount,
+        discountAmount: checkoutDiscountAmount,
         // ── 差額處理審計（2026-10-19）：充值 txn id／現金退款／店方保留原因 ──
         diffHandling: diffRecord?.option,
         diffAmount: diffRecord ? checkoutDiffForOrder(targetOrder) : undefined,
@@ -4975,7 +5042,7 @@ export function PosApp() {
         // ── 折扣備註（2026-09-11）：凡 discountAmount > 0 必然有原因（結帳頁彈窗係硬閘）。
         //    免單唔行呢條路（佢有自己嘅 compNote 審計欄），所以呢度只跟 discountAmount。
         //    清折扣時一併清原因，避免留低「冇折扣但有原因」嘅孤兒備註污糟報表。
-        discountNote: discountAmount > 0 ? discountNote.trim() || undefined : undefined,
+        discountNote: checkoutDiscountAmount > 0 ? checkoutDiscountNote : undefined,
         // 系統抹零（docs/88 §5.1）：由結帳頁 input 寫入；total = subtotal - discount - rounding。
         roundingAmount: rounding,
         // 顧客付現金 + 找零（docs/88 §5.2）：receivedAmount 為空時當 = total（冇找零）。
@@ -5032,7 +5099,7 @@ export function PosApp() {
           total: settledGrandTotal,
           receivedAmount: Number(receivedAmount) || paymentSummary.total,
           changeDue,
-          discountAmount,
+          discountAmount: checkoutDiscountAmount,
           paymentMethod: updatedOrder.paymentMethod,
           memberPhone: ledgerMember?.customerPhone ?? null,
           memberDeduction,
@@ -5527,7 +5594,7 @@ export function PosApp() {
       return;
     }
 
-    const settledGrandTotal = Math.max(0, paymentBase.total - discountAmount);
+    const settledGrandTotal = Math.max(0, paymentBase.total - checkoutDiscountAmount);
     const quickPaidFlow = isQuickMode && targetOrder.tableId === "counter";
     // 差額處理記錄（本單處理過先有值）→ 寫入訂單審計欄（Task #6 收據／詳情用）。
     const diffRecord = checkoutDiffHandledRef.current.get(targetOrder.id);
@@ -5535,7 +5602,9 @@ export function PosApp() {
       ...targetOrder,
       status: quickPaidFlow ? "paid" : "settled",
       paymentMethod: "線上已支付",
-      discountAmount,
+      discountAmount: checkoutDiscountAmount,
+      // 會員折扣自動生效時寫「會員價」，避免雲端留低對唔上嘅人手折扣原因。
+      discountNote: checkoutDiscountAmount > 0 ? checkoutDiscountNote : undefined,
       // 線上支付無現金／抹零，三個欄位留 0（收據 block 自動 hidden）。
       roundingAmount: 0,
       cashTendered: 0,
@@ -5567,7 +5636,7 @@ export function PosApp() {
         total: settledGrandTotal,
         receivedAmount: 0,
         changeDue: 0,
-        discountAmount,
+        discountAmount: checkoutDiscountAmount,
         paymentMethod: updatedOrder.paymentMethod,
         memberPhone: null,
         memberDeduction: 0,
@@ -8003,7 +8072,12 @@ export function PosApp() {
 
       {payingOrderId ? (
         <ResponsiveModal
-          onClose={() => setPayingOrderId(null)}
+          onClose={() => {
+            // 🔴 關閉結帳一定要清會員 session：否則撳 ESC／點外面關閉後，下一張單
+            //    會殘留上一位客人嘅會員身份，自動套錯會員折扣（串單）。
+            setPayingOrderId(null);
+            resetMemberCheckoutState();
+          }}
           header={
             <div className="flex items-start justify-between gap-3">
               <div>
@@ -8061,14 +8135,23 @@ export function PosApp() {
                       {formatMoney(paymentSummary.subtotal, bootstrap.currency)}
                     </span>
                   </div>
-                  {/* 折扣分項：單品折扣 + 全單折扣 + 系統抹零（docs/88 §5.1；抹零由結帳頁 input 即時反映） */}
+                  {/* 折扣分項：單品折扣 + 全單折扣 + 系統抹零（docs/88 §5.1；抹零由結帳頁 input 即時反映）。
+                      會員折扣勝出時唔好喺呢度再顯示同一筆減額，改由下面獨立一行顯示。 */}
                   <OrderDiscountRow
                     currency={bootstrap.currency}
-                    items={currentSettlementOrder?.items ?? workspaceOrder?.items ?? cartItems}
+                    items={checkoutItems}
                     variant="compact"
-                    wholeOrderDiscountAmount={paymentSummary.discountAmount}
+                    wholeOrderDiscountAmount={memberDiscountApplied ? 0 : paymentSummary.discountAmount}
                     roundingAmount={rounding}
                   />
+                  {memberDiscountApplied ? (
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="font-semibold text-emerald-700">{t("會員優惠（自動）")}</span>
+                      <span className="font-semibold text-emerald-700">
+                        −{formatMoney(checkoutDiscountAmount, bootstrap.currency)}
+                      </span>
+                    </div>
+                  ) : null}
                   {selectedMoneyVoucherAvos > 0 ? (
                     <div className="flex items-center justify-between text-sm">
                       <span className="text-slate-500">{t("已選現金券（兌換入餘額）")}</span>
@@ -8122,6 +8205,11 @@ export function PosApp() {
                       ))}
                     </select>
                   </label>
+                  {memberDiscountAmount > 0 || existingMemberDiscount > 0 ? (
+                    <div className="rounded-xl bg-emerald-50 px-3 py-2 text-xs leading-relaxed text-emerald-800">
+                      {t("已自動比較會員價與人手折扣，取較優惠者，不疊加。")}
+                    </div>
+                  ) : null}
                   <label className="grid gap-1 text-xs font-semibold text-slate-500">
                     {t("系統抹零")}<input
                       className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-900"
@@ -8643,7 +8731,7 @@ export function PosApp() {
               ? getOnlineCustomer(checkoutDiffOrder.onlineOrderId)?.name
               : undefined
           }
-          discountAmount={discountAmount}
+          discountAmount={checkoutDiscountAmount}
           memberPhone={
             checkoutDiffOrder.onlineOrderId
               ? getOnlineCustomer(checkoutDiffOrder.onlineOrderId)?.phone

@@ -15,7 +15,7 @@ import type { MenuItem } from "@/lib/types";
  * - 客人手機端（顯示會員價、購物車合計）
  * - 落單時寫 `OrderItem.memberPrice` 快照
  * - 伺服器 `scan-debit/quote|commit`（**核價真源**，唔信 client）
- * - POS 前台（下一步）
+ * - POS 前台結帳（2026-11-05 已接，見 `posMemberDiscountAmount()`）
  *
  * 抄四份 = 四份會各自漂移，客人見到一個價、收銀收另一個價。
  *
@@ -153,4 +153,89 @@ export function memberOrderTotals(
     member: roundedMember,
     saving: Math.max(0, roundMoney(roundedOriginal - roundedMember)),
   };
+}
+
+/**
+ * POS 前台結帳專用嘅一行菜品（2026-11-05）。
+ *
+ * 由 `pos-app.tsx` 組好傳入，純函式本身**零 runtime import**，方便 `node --test` 覆蓋。
+ * 之所以唔直接收 `OrderItem`：POS 嘅 `price` 語義同客人端購物車唔一樣（已含規格加價、
+ * 且單品折扣另存 `discountRate`），要用明確欄位講清楚，避免兩個模組各自猜。
+ */
+export type PosMemberDiscountLine = {
+  /** `OrderItem.price`：原價單價 **已含** 規格加價，未套 `discountRate`。 */
+  price: number;
+  quantity: number;
+  /** 單品折扣百分比（0-100）；已摺入 POS `subtotal`，會員折扣只補差額、唔疊加。 */
+  discountRate?: number;
+  /** 客人端落單時寫入嘅會員單價快照（**已含**規格加價）；有就優先，唔追溯菜單改價。 */
+  memberPriceSnapshot?: number;
+  /** 菜單現值原價（**未含**規格加價）；舊單菜品被刪時 fallback 去 `price - specDelta`。 */
+  menuPrice?: number;
+  /** 菜單現值單品會員價（未含規格加價），override 全店率。 */
+  menuMemberPrice?: number;
+  /** 規格加價合計（已包含喺 `price` 入面），規格加價唔打折。 */
+  specDelta?: number;
+  /** 時價菜：客人端都唔顯示會員價 ⇒ 前台一律唔套。 */
+  isMarketPrice?: boolean;
+  /** 已退菜：不計費。 */
+  voided?: boolean;
+};
+
+/**
+ * POS 前台「查到會員就自動套」嘅折扣金額（2026-11-05）。
+ *
+ * ## 口徑（同客人端 `buildKioskOrder({ memberDiscountAmount })` 對齊）
+ * 行現成 `discountAmount` / `discountNote:"會員價"` 通道 ⇒ 收據／報表／交班零改動。
+ *
+ * ## 三條硬規則
+ * 1. **逐項各自計**：有單品會員價用單品價，冇就 `原價 × rate / 100`，最後加總。
+ * 2. **規格加價唔打折**：`memberUnitPrice(base, memberPrice, rate, specDelta)`。
+ * 3. **唔同人手折扣疊加**：比較「已套單品折扣嘅單價」同「會員單價」，
+ *    只補到會員價（`max(0, payableUnit − memberUnit)`）。人手折扣更平就唔再減，
+ *    唔會出現「9 折 ＋ 會員價」雙重優惠。全單折扣嘅互斥由 `pos-app.tsx` 取 max 處理。
+ *
+ * @returns 應寫入 `PosOrder.discountAmount` 嘅會員折扣金額（≥ 0，四捨五入到分）。
+ */
+export function posMemberDiscountAmount(
+  lines: readonly PosMemberDiscountLine[],
+  memberDiscountRate: number | undefined,
+): number {
+  const rate = isValidMemberDiscountRate(memberDiscountRate) ? memberDiscountRate : undefined;
+  let saving = 0;
+
+  for (const line of lines) {
+    if (line.voided) continue;
+    const qty = Number.isFinite(line.quantity) && line.quantity > 0 ? line.quantity : 0;
+    const price = Number.isFinite(line.price) && line.price > 0 ? line.price : 0;
+    if (qty <= 0 || price <= 0 || line.isMarketPrice) continue;
+
+    const delta = Number.isFinite(line.specDelta) ? (line.specDelta as number) : 0;
+    const basePrice = roundMoney(price - delta); // 未含規格加價
+    const itemRate =
+      typeof line.discountRate === "number" &&
+      Number.isFinite(line.discountRate) &&
+      line.discountRate > 0 &&
+      line.discountRate < 100
+        ? line.discountRate
+        : 100;
+    // POS `orderTotals()` 已把單品折扣摺入 subtotal，呢度要用同一個折後單價做比較基準。
+    const payableUnit = roundMoney((price * itemRate) / 100);
+
+    let memberUnit: number;
+    if (isValidMemberPrice(line.memberPriceSnapshot, price)) {
+      // 快照已含規格加價（types.ts OrderItem.memberPrice 契約），唔可以再加一次 delta。
+      memberUnit = line.memberPriceSnapshot as number;
+    } else {
+      const menuPrice =
+        typeof line.menuPrice === "number" && Number.isFinite(line.menuPrice) && line.menuPrice > 0
+          ? line.menuPrice
+          : basePrice;
+      memberUnit = memberUnitPrice(menuPrice, line.menuMemberPrice, rate, delta);
+    }
+    if (!Number.isFinite(memberUnit) || memberUnit >= payableUnit) continue;
+    saving += (payableUnit - memberUnit) * qty;
+  }
+
+  return Math.max(0, roundMoney(saving));
 }

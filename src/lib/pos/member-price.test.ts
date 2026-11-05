@@ -10,6 +10,7 @@ import {
   memberOrderTotals,
   memberUnitPrice,
   memberUnitPriceForMenuItem,
+  posMemberDiscountAmount,
 } from "./member-price.ts";
 
 /**
@@ -132,4 +133,120 @@ test("isValidMemberPrice 嚴格細於原價才算有效", () => {
   assert.equal(isValidMemberPrice(0, 38), false);
   assert.equal(isValidMemberPrice(-1, 38), false);
   assert.equal(isValidMemberPrice(undefined, 38), false);
+});
+
+// ── POS 前台結帳自動套會員價（2026-11-05）────────────────────────────
+// 商家實案：菜品原價 100 + 規格加價 5 = 105，全店 85 折、單品會員價 50。
+
+test("前台：只有全店 85 折 → 規格加價唔打折，減 15", () => {
+  // 100 × 0.85 + 5 = 90；105 − 90 = 15（唔係 105 × 0.15 = 15.75）
+  assert.equal(
+    posMemberDiscountAmount(
+      [{ price: 105, quantity: 1, specDelta: 5, menuPrice: 100 }],
+      85,
+    ),
+    15,
+  );
+});
+
+test("前台：單品會員價 override 全店率 → 減 50（唔係 85 折嘅 15）", () => {
+  assert.equal(
+    posMemberDiscountAmount(
+      [{ price: 105, quantity: 1, specDelta: 5, menuPrice: 100, menuMemberPrice: 50 }],
+      85,
+    ),
+    50,
+  );
+});
+
+test("前台：客人端落單快照優先，唔追溯菜單改價", () => {
+  // 菜單會員價已改做 50，但訂單快照係 60 → 用 60（減 45）
+  assert.equal(
+    posMemberDiscountAmount(
+      [
+        {
+          price: 105,
+          quantity: 1,
+          specDelta: 5,
+          menuPrice: 100,
+          menuMemberPrice: 50,
+          memberPriceSnapshot: 60,
+        },
+      ],
+      85,
+    ),
+    45,
+  );
+});
+
+test("前台：單品折扣比會員價更平 → 唔再補差額（唔疊加）", () => {
+  // 5 折後 52.5，會員價 55 ⇒ 客人照享 52.5
+  assert.equal(
+    posMemberDiscountAmount(
+      [
+        {
+          price: 105,
+          quantity: 1,
+          specDelta: 5,
+          menuPrice: 100,
+          menuMemberPrice: 50,
+          discountRate: 50,
+        },
+      ],
+      85,
+    ),
+    0,
+  );
+});
+
+test("前台：單品折扣貴過會員價 → 只補到會員價，唔會雙重優惠", () => {
+  // 9 折後 94.5，會員價 55 ⇒ 補 39.5，實付 55（唔係 94.5 − 50 = 44.5）
+  assert.equal(
+    posMemberDiscountAmount(
+      [
+        {
+          price: 105,
+          quantity: 1,
+          specDelta: 5,
+          menuPrice: 100,
+          menuMemberPrice: 50,
+          discountRate: 90,
+        },
+      ],
+      85,
+    ),
+    39.5,
+  );
+});
+
+test("前台：時價菜 / 已退菜 / 冇優惠一律 0", () => {
+  assert.equal(
+    posMemberDiscountAmount(
+      [{ price: 105, quantity: 1, specDelta: 5, menuPrice: 100, menuMemberPrice: 50, isMarketPrice: true }],
+      85,
+    ),
+    0,
+  );
+  assert.equal(
+    posMemberDiscountAmount(
+      [{ price: 105, quantity: 1, specDelta: 5, menuPrice: 100, menuMemberPrice: 50, voided: true }],
+      85,
+    ),
+    0,
+  );
+  assert.equal(posMemberDiscountAmount([{ price: 105, quantity: 1 }], undefined), 0);
+  assert.equal(posMemberDiscountAmount([{ price: 105, quantity: 1 }], 100), 0);
+});
+
+test("前台：逐項各自計 ＋ 數量 ×N ＋ 加總", () => {
+  assert.equal(
+    posMemberDiscountAmount(
+      [
+        { price: 100, quantity: 2, menuPrice: 100, menuMemberPrice: 50 }, // 50 × 2 = 100
+        { price: 26, quantity: 1, menuPrice: 26 }, // 26 × 0.95 = 24.7 ⇒ 1.3
+      ],
+      95,
+    ),
+    101.3,
+  );
 });
