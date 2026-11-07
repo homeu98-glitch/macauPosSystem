@@ -59,6 +59,8 @@ import {
   POS_SYNC_FAILED_EVENT,
   withStoreScope,
 } from "@/lib/pos/sync-flush";
+import { consumePendingSeat } from "@/lib/pos/reservation/pending-seat";
+import { linkReservationOrder } from "@/lib/pos/reservation/order-link";
 import { getStoreStatusSnapshot } from "@/lib/pos/use-store-status";
 import { observeServerBuildFromResponse } from "@/lib/build-info-observe";
 import { BuildStaleBanner } from "@/components/build-stale-banner";
@@ -587,6 +589,112 @@ export function PosApp() {
     // loadOrderIntoWorkspace 只用穩定 setter，無需入 deps
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [orders, operatingMode]);
+
+  // ── 訂位入座：`/pos?tableId=…&reservationId=…` ──
+  //
+  // 訂位頁（`/reservations`）已經把預點菜轉成 `OrderItem` 並寫入 pending
+  // （見 `pending-seat.ts`）。呢度只負責「開枱 + 填車」，
+  // **建單仍然交返 `upsertCurrentOrder()`** —— 唔另開一套建單邏輯，
+  // 否則單號、draft 狀態、打印一定會同正常落單分叉。
+  //
+  // 一次性：`consumePendingSeat()` 讀完即刪，避免店員之後自己開同一張枱
+  // 時突然彈返上一次嘅預點菜（幽靈菜）。
+  const reservationSeatRef = useRef(false);
+  /**
+   * 入座深鏈 → 待回寫嘅訂位。`consumePendingSeat()` 會即刻刪 pending，
+   * 但張 POS 單仲未生成，所以呢個 ref 要留到建單成功為止。
+   * 成功回寫後清走，避免之後每次 `orders` 變化都重打。
+   */
+  const reservationLinkRef = useRef<{
+    storeId: string;
+    reservationId: string;
+    tableId: string;
+    since: number;
+  } | null>(null);
+  const reservationLinkInFlightRef = useRef(false);
+  // `floors` 喺 2499 行才定義（TDZ），呢個 effect 只喺 mount / bootstrap 變化時跑，
+  // 屆時 ref 已經有值 —— 用 ref 避開「used before declaration」。
+  const floorsRef = useRef<Array<{ id: string; tables: Array<{ id: string }> }> | null>(null);
+  useEffect(() => {
+    if (reservationSeatRef.current) return;
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const reservationId = params.get("reservationId");
+    const tableId = params.get("tableId");
+    if (!reservationId || !tableId) return;
+    if (!bootstrap) return;
+
+    const storeId = resolveStoreId();
+    if (!storeId) return;
+    const pending = consumePendingSeat(storeId);
+    if (!pending || pending.reservationId !== reservationId || pending.tableId !== tableId) return;
+
+    reservationSeatRef.current = true;
+    reservationLinkRef.current = {
+      storeId,
+      reservationId,
+      tableId: pending.tableId,
+      since: Date.now(),
+    };
+
+    // 快餐 mode 下真枱載唔到 → 切返 dinein（同 orders 深鏈同一口徑）
+    if (operatingMode === "quick") {
+      setOperatingModeState("dinein");
+      saveOperatingMode("dinein");
+    }
+
+    setSeatedPartySizes((current) => ({ ...current, [pending.tableId]: pending.partySize }));
+    loadOrderIntoWorkspace(null, pending.tableId);
+    setCartItems(pending.items);
+    setPosMode("order");
+
+    const targetFloor = floorsRef.current?.find((floor) =>
+      floor.tables.some((table) => table.id === pending.tableId),
+    );
+    if (targetFloor) setActiveFloorId(targetFloor.id);
+
+    if (pending.items.length > 0) {
+      setToast({
+        tone: "success",
+        message: `已帶入訂位 ${pending.reservationCode} 的 ${pending.items.length} 道預點菜，確認後請送廚房。`,
+      });
+    }
+
+    window.history.replaceState(null, "", window.location.pathname);
+    // loadOrderIntoWorkspace 只用穩定 setter，無需入 deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bootstrap, operatingMode]);
+
+  /**
+   * 訂位入座 → 建單成功 → 回寫 `order_id` / `order_no`。
+   *
+   * 唔改 `upsertCurrentOrder()`（9336 行、十二個呼叫點），改為監察
+   * `activeOrderId` + `orders`：只要呢張枱出現一張「入座之後先建立」嘅單就補一次 PATCH。
+   * 好處係建單邏輯零改動，唔會同正常落單分叉。
+   *
+   * 🔴 一定要用 `tableId` + `createdAt` 雙重對位：同一張枱可能留有上一班嘅舊單，
+   *    淨係認枱號會把訂位綁去舊單。
+   */
+  useEffect(() => {
+    const link = reservationLinkRef.current;
+    if (!link || !activeOrderId || reservationLinkInFlightRef.current) return;
+
+    const order = orders.find((row) => row.id === activeOrderId);
+    if (!order || order.tableId !== link.tableId) return;
+    const created = new Date(order.createdAt).getTime();
+    if (Number.isFinite(created) && created < link.since - 60_000) return;
+
+    reservationLinkInFlightRef.current = true;
+    void linkReservationOrder({
+      storeId: link.storeId,
+      reservationId: link.reservationId,
+      orderId: order.id,
+      orderNo: order.localOrderNo,
+    }).then((ok) => {
+      reservationLinkInFlightRef.current = false;
+      if (ok) reservationLinkRef.current = null;
+    });
+  }, [activeOrderId, orders]);
 
   // 外部（面板 / 本頁「返結帳」）改完 orders 後，刷新本地 state，令 activeOrder 重算（settled→reopened 後變可編輯）
   useEffect(() => {
@@ -2447,6 +2555,8 @@ export function PosApp() {
     () => buildDisplayFloors(bootstrap?.tables ?? [], localSettings.floors),
     [bootstrap, localSettings],
   );
+  // 供訂位入座 effect 用（effect 定義喺前面，`floors` 喺呢度才初始化）
+  floorsRef.current = floors;
 
   /**
    * 「排位」彈窗可揀嘅枱（2026-09-12）。

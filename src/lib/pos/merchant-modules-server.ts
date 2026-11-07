@@ -23,6 +23,11 @@ import { getSupabaseAdminClient } from "@/lib/supabase-server";
  *
  * 呢個決定同時令 rollout 變得安全：migration 上線一刻所有商戶都未有行，
  * 全部自動維持現狀；Admin 喺後台逐个店收緊，收到邊間就邊間生效。
+ *
+ * ⚠️ 2026-11-07 例外：`defaultMerchantGrants()` 已剔除
+ *    `EXPLICIT_GRANT_SIDEBAR_MODULES`（目前 = 「訂位」）。即係冇記錄／讀取失敗時，
+ *    呢類「需平台明確開通」嘅模組一律**唔會**出現（fail-closed），
+ *    其餘模組仍然全開，所以唔會令全線停業。
  */
 export type SaveGrantsResult = { ok: true } | { ok: false; error: string };
 
@@ -58,7 +63,7 @@ export async function loadMerchantGrants(storeId: string): Promise<MerchantModul
  * 批次讀多店授權（Admin 商家列表用，避免 N+1）。
  *
  * 回傳嘅 Map **只包含 DB 有行嘅店**；呼叫方見到某店唔喺 Map 入面，
- * 就代表「未有記錄 = 全部開通」，唔好自己補一個空陣列。
+ * 就代表「未有記錄 = 全部開通（需明確授權嘅模組除外）」，唔好自己補一個空陣列。
  */
 export async function loadMerchantGrantsMap(
   storeIds: string[],

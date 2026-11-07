@@ -50,6 +50,7 @@ export const POS_STAFF_ROLE_HINTS: Record<PosStaffRole, string> = {
 export const POS_STAFF_PAGE_IDS = [
   "order",
   "orders",
+  "reservation",
   "delivery",
   "members",
   "prints",
@@ -64,6 +65,7 @@ export type PosStaffPageId = (typeof POS_STAFF_PAGE_IDS)[number];
 export const POS_STAFF_PAGE_LABELS: Record<PosStaffPageId, string> = {
   order: "點餐",
   orders: "訂單",
+  reservation: "訂位",
   delivery: "外送",
   members: "會員",
   prints: "打印",
@@ -152,6 +154,8 @@ export function defaultPosStaffPermissions(role: PosStaffRole): PosStaffPermissi
     pages: {
       order: true,
       orders: true,
+      // 訂位：收銀日常操作（接電話訂位、帶位入座），兩個角色預設都開
+      reservation: true,
       // 外送：收銀日常操作（打電話叫車手係今日已做的事），兩個角色預設都開
       delivery: true,
       members: true,

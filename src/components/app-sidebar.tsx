@@ -22,7 +22,7 @@ import { loadAuthSession } from "@/lib/storage";
 import { useTopupPendingCount } from "@/lib/topup/use-topup-pending-count";
 import { useSyncHealth } from "@/lib/pos/sync-acks";
 import { retryReconcileNow } from "@/lib/pos/sync-reconcile-daemon";
-import { SIDEBAR_MODULES } from "@/lib/pos/module-catalog";
+import { SIDEBAR_MODULES, isSidebarModuleAvailable } from "@/lib/pos/module-catalog";
 import { isDeliveryDispatchEnabled } from "@/lib/pos/delivery/flag";
 import {
   loadOperatorSession,
@@ -48,14 +48,17 @@ import { useStoreOpenToggle } from "@/lib/pos/use-store-open-toggle";
  * ⚠️ `allowedModules` **缺失 = 全部開通**（同 server `loadMerchantGrants()` /
  * 登入頁 `granted` 同一個口徑）。絕對唔可以當成「一個都冇」，
  * 否則升級之後未重新登入嘅舊 session 一 reload，側欄就會變全空。
+ *
+ * ## 2026-11-07：例外 —— 需 Admin 明確開通嘅模組
+ *
+ * 「訂位」唔食上面嘅 fallback：一定要 Admin panel「模組授權」為呢間店勾咗
+ * 並寫入 DB，側欄先至會出現。判斷一律經 `isSidebarModuleAvailable()`
+ * （`module-catalog.ts` 唯一真源），唔好喺度自己寫 `includes`。
  */
 function resolveNavItems(grantedSidebarModules: readonly string[] | undefined) {
-  const granted = !grantedSidebarModules
-    ? [...SIDEBAR_MODULES]
-    : (() => {
-        const allowed = new Set(grantedSidebarModules);
-        return SIDEBAR_MODULES.filter((item) => allowed.has(item.id));
-      })();
+  const granted = SIDEBAR_MODULES.filter((item) =>
+    isSidebarModuleAvailable(item.id, grantedSidebarModules),
+  );
   return granted.filter(isModuleVisibleByFlag);
 }
 

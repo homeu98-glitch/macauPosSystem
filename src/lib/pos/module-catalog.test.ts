@@ -4,12 +4,14 @@ import path from "node:path";
 import { describe, it } from "node:test";
 
 import {
+  EXPLICIT_GRANT_SIDEBAR_MODULES,
   SIDEBAR_MODULE_IDS,
   SIDEBAR_MODULES,
   WORKBENCHES,
   WORKBENCH_IDS,
   defaultMerchantGrants,
   findWorkbench,
+  isSidebarModuleAvailable,
   isSidebarModuleGranted,
   isWorkbenchGranted,
   normalizeMerchantGrants,
@@ -120,12 +122,22 @@ describe("module-catalog · homePath ↔ 真實路由", () => {
 });
 
 describe("module-catalog · defaultMerchantGrants", () => {
-  it("預設 = 全部開通", () => {
+  it("預設 = 全部開通，但需明確授權嘅模組除外", () => {
     const grants = defaultMerchantGrants();
     assert.deepEqual(grants.workbenches, [...WORKBENCH_IDS]);
-    assert.deepEqual(grants.sidebarModules, [...SIDEBAR_MODULE_IDS]);
+    assert.deepEqual(
+      grants.sidebarModules,
+      SIDEBAR_MODULE_IDS.filter((id) => !EXPLICIT_GRANT_SIDEBAR_MODULES.includes(id)),
+    );
     assert.equal(isWorkbenchGranted(grants, "dinein"), true);
     assert.equal(isSidebarModuleGranted(grants, "inventory"), true);
+    for (const id of EXPLICIT_GRANT_SIDEBAR_MODULES) {
+      assert.equal(
+        isSidebarModuleGranted(grants, id),
+        false,
+        `${id} 唔可以入「全部開通」預設，否則 login session 會令側欄閘失效`,
+      );
+    }
   });
 
   it("每次回傳新陣列（防止呼叫方改到共用常數）", () => {
@@ -133,6 +145,36 @@ describe("module-catalog · defaultMerchantGrants", () => {
     a.workbenches.push("expo");
     const b = defaultMerchantGrants();
     assert.equal(b.workbenches.length, WORKBENCH_IDS.length);
+  });
+});
+
+describe("module-catalog · isSidebarModuleAvailable（2026-11-07 訂位開通閘）", () => {
+  it("🔴 未設定／舊 session（undefined）：既有模組全開，訂位一律唔出現", () => {
+    assert.equal(isSidebarModuleAvailable("orders", undefined), true);
+    assert.equal(isSidebarModuleAvailable("inventory", undefined), true);
+    assert.equal(isSidebarModuleAvailable("reservation", undefined), false);
+  });
+
+  it("🔴 明確全部閂（[]）：所有模組都唔出現", () => {
+    assert.equal(isSidebarModuleAvailable("orders", []), false);
+    assert.equal(isSidebarModuleAvailable("reservation", []), false);
+  });
+
+  it("舊授權紀錄（有 array 但冇 reservation）：訂位唔出現", () => {
+    assert.equal(isSidebarModuleAvailable("reservation", ["orders", "reports"]), false);
+    assert.equal(isSidebarModuleAvailable("orders", ["orders", "reports"]), true);
+  });
+
+  it("Admin 勾選咗訂位：先至出現", () => {
+    assert.equal(isSidebarModuleAvailable("reservation", ["orders", "reservation"]), true);
+  });
+
+  it("normalizeMerchantGrants 仍然認 reservation，Admin PATCH 先寫得入", () => {
+    const grants = normalizeMerchantGrants({
+      workbenches: ["dinein"],
+      sidebarModules: ["orders", "reservation"],
+    });
+    assert.equal(grants.sidebarModules.includes("reservation"), true);
   });
 });
 

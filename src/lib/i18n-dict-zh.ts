@@ -364,6 +364,7 @@ export const ZH_HANT_DICT: Record<string, string> = {
   // ─── 側欄導航 · module-catalog SIDEBAR_MODULES ───
   點餐: "點餐",
   訂單: "訂單",
+  訂位: "訂位",
   會員: "會員",
   打印: "打印",
   報表: "報表",
@@ -2129,6 +2130,7 @@ export const SHORT_ZH_DICT: Record<string, string> = {
   // 側欄
   點: "點",
   單: "單",
+  位: "位",
   送: "送",
   會: "會",
   印: "印",
@@ -2162,6 +2164,7 @@ export const SHORT_ZH_DICT: Record<string, string> = {
 export const SIDEBAR_ZH_DICT: Record<string, string> = {
   點餐: "點餐",
   訂單: "訂單",
+  訂位: "訂位",
   外送: "外送",
   會員: "會員",
   打印: "打印",

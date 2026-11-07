@@ -375,6 +375,7 @@ export const EN_DICT: Record<string, string> = {
   // ─── 側欄導航 · module-catalog SIDEBAR_MODULES ───
   點餐: "Order",
   訂單: "Orders",
+  訂位: "Reservation",
   會員: "Members",
   打印: "Printing",
   報表: "Reports",
@@ -2143,6 +2144,7 @@ export const SHORT_EN_DICT: Record<string, string> = {
   // 側欄
   點: "ORD",
   單: "ORD",
+  位: "RSV",
   送: "DLV",
   會: "MBR",
   印: "PRT",
@@ -2180,6 +2182,8 @@ export const SHORT_EN_DICT: Record<string, string> = {
 export const SIDEBAR_EN_DICT: Record<string, string> = {
   點餐: "Order",
   訂單: "Orders",
+  // 訂位：側欄淨闊 56px，用 "Book"（4 字母，同 "Sold" 一樣短）
+  訂位: "Book",
   // 側欄淨闊 56px → 一定要短（同 "Orders" 一樣 ≤6 字母）
   外送: "Rider",
   會員: "Member",

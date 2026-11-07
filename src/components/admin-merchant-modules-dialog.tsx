@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { WorkbenchCardGroup } from "@/components/workbench-picker";
 
 import {
+  EXPLICIT_GRANT_SIDEBAR_MODULES,
   SIDEBAR_MODULES,
   WORKBENCHES,
   WORKBENCH_GROUP_LABEL,
@@ -30,9 +31,10 @@ import { loadAuthSession } from "@/lib/storage";
  *
  * ## ⚠️「未設定」唔等於「全部閂」
  *
- * 從未設定過嘅商戶 = **全部開通**（向後兼容）。所以彈窗要明確講清楚呢件事，
- * 否則管理員見到「全部開」會以為自己之前設過。第一次按「儲存」之後，
- * 就變成「以 DB 為準」，可以由全開改成只開幾個。
+ * 從未設定過嘅商戶 = **全部開通**（向後兼容），**但「訂位」除外**：
+ * 佢喺 `EXPLICIT_GRANT_SIDEBAR_MODULES` 入面，一定要管理員喺度勾選 + 儲存
+ * 先至會出現喺商家側欄（2026-11-07，見 `module-catalog.ts`）。
+ * 所以未設定過嘅店，呢度會見到「訂位」係關住 —— 唔係 bug，係刻意 fail-closed。
  */
 
 type DialogMerchant = { id: string; name: string };
@@ -171,7 +173,7 @@ export function AdminMerchantModulesDialog({
             <p className="mt-1 text-xs text-slate-500">
               {configured
                 ? "已設定過 —— 以下就係呢間店而家開通嘅模組。"
-                : "未設定過 —— 目前跟預設「全部開通」。按「儲存」之後就會以此為準。"}
+                : "未設定過 —— 目前跟預設「全部開通」，但「訂位」需另外勾選開通。按「儲存」之後就會以此為準。"}
             </p>
           </div>
           <button
@@ -255,6 +257,7 @@ export function AdminMerchantModulesDialog({
                 <p className="text-xs text-slate-500">
                   決定入到收銀台之後，左邊側欄顯示邊幾個。閂咗嘅<b>直接唔顯示</b>（唔係灰住）——
                   側欄得 72px 闊，塞一堆撳唔到嘅灰掣只會令店員搵嘢更慢。
+                  <b>「訂位」標註「需平台開通」：未勾選嘅店唔會見到呢個入口。</b>
                 </p>
               </div>
               <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
@@ -272,10 +275,17 @@ export function AdminMerchantModulesDialog({
                       type="button"
                     >
                       <Switch on={on} />
-                      <span
-                        className={`text-sm font-semibold ${on ? "text-slate-900" : "text-slate-500"}`}
-                      >
-                        {m.label}
+                      <span className="min-w-0">
+                        <span
+                          className={`block text-sm font-semibold ${on ? "text-slate-900" : "text-slate-500"}`}
+                        >
+                          {m.label}
+                        </span>
+                        {EXPLICIT_GRANT_SIDEBAR_MODULES.includes(m.id) ? (
+                          <span className="mt-0.5 block text-[10px] font-medium text-slate-400">
+                            需平台開通
+                          </span>
+                        ) : null}
                       </span>
                     </button>
                   );

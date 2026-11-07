@@ -42,6 +42,7 @@ export type WorkbenchId =
 export type SidebarModuleId =
   | "order"
   | "orders"
+  | "reservation"
   | "delivery"
   | "members"
   | "prints"
@@ -173,6 +174,8 @@ export const SIDEBAR_MODULES: readonly SidebarModuleDef[] = [
   // ⚠️ 2026-09-17：「點餐」即收銀台首頁，由 `/` 搬到 `/pos`（`/` 已成統一入口）。
   { id: "order", label: "點餐", short: "點", href: "/pos" },
   { id: "orders", label: "訂單", short: "單", href: "/orders" },
+  // 2026-11-07：訂位（含預點菜 / 預付 / 入座開枱）。資料表 pos_reservations（service_role only）。
+  { id: "reservation", label: "訂位", short: "位", href: "/reservations" },
   // 2026-10-31：外送（車手派單）。任何單都可以派，單號照舊；
   // 資料表 `pos_delivery_jobs`（service_role only，零 Realtime／零 polling）。
   { id: "delivery", label: "外送", short: "送", href: "/delivery" },
@@ -188,6 +191,40 @@ export const WORKBENCH_IDS: readonly WorkbenchId[] = WORKBENCHES.map((w) => w.id
 export const SIDEBAR_MODULE_IDS: readonly SidebarModuleId[] = SIDEBAR_MODULES.map((m) => m.id);
 
 /**
+ * 需要 Admin panel **明確開通**先會出現嘅側欄模組（fail-closed，2026-11-07）。
+ *
+ * 其餘模組沿用 2026-09-13 嘅向後兼容口徑：DB 冇記錄／舊 session = 全部開通。
+ * 但新上線嘅模組唔可以食呢個 fallback —— 否則一部署，全線商戶側欄無端端
+ * 多咗個未驗收、未跑 migration、未開通嘅入口。
+ *
+ * ⚠️ 加新模組入嚟唔使再改 `defaultMerchantGrants()`（已用 filter 自動剔除），
+ *    但 `normalizeMerchantGrants()` 仍然認呢個 id，Admin PATCH 先至寫得入 DB。
+ */
+export const EXPLICIT_GRANT_SIDEBAR_MODULES: readonly SidebarModuleId[] = ["reservation"];
+
+/**
+ * 側欄模組對呢間店係咪可見 —— client（側欄、頁面閘）同 server 共用嘅唯一真源。
+ *
+ * @param granted DB／session 入面嘅 `sidebarModules`；`undefined` = 從未設定過或舊 session
+ *
+ * 🔴 唔好喺 component 自己寫 `granted?.includes("reservation")`：
+ *    幾個入口各寫一次就一定會漏其中一個（見 docs/113）。
+ */
+export function isSidebarModuleAvailable(
+  id: SidebarModuleId,
+  granted: readonly string[] | undefined,
+): boolean {
+  if (EXPLICIT_GRANT_SIDEBAR_MODULES.includes(id)) {
+    // fail-closed：一定要「有明確陣列」而且「陣列入面有呢個 id」。
+    // 千祈唔好寫 `!granted || granted.includes(id)` —— 舊 session／DB 讀取失敗
+    // 會變相全開，道閘等於冇裝。
+    return Array.isArray(granted) && granted.includes(id);
+  }
+  // 既有模組：未設定 = 全部開通；有設定 = 白名單
+  return !granted || granted.includes(id);
+}
+
+/**
  * 商戶已開通嘅模組。
  *
  * ⚠️ `store_id` 係 **Ledger merchant UUID**（同 `pos_orders.store_id` 口徑一致）。
@@ -197,11 +234,20 @@ export type MerchantModuleGrants = {
   sidebarModules: SidebarModuleId[];
 };
 
-/** 全部開通 —— 新商戶嘅預設，亦係「DB 冇記錄」時嘅 fallback。 */
+/**
+ * 全部開通 —— 新商戶嘅預設，亦係「DB 冇記錄／讀取失敗」時嘅 fallback。
+ *
+ * 🔴 2026-11-07：`EXPLICIT_GRANT_SIDEBAR_MODULES` **唔入**呢份預設。
+ *    `loadMerchantGrants()` 會將呢份物件事寫入 login session；如果預設包含訂位，
+ *    未開通嘅店 session 入面都會有 `"reservation"`，側欄 filter 就擋唔到。
+ *    工作台（workbenches）維持全開，唔會令全線停業。
+ */
 export function defaultMerchantGrants(): MerchantModuleGrants {
   return {
     workbenches: [...WORKBENCH_IDS],
-    sidebarModules: [...SIDEBAR_MODULE_IDS],
+    sidebarModules: SIDEBAR_MODULE_IDS.filter(
+      (id) => !EXPLICIT_GRANT_SIDEBAR_MODULES.includes(id),
+    ),
   };
 }
 
