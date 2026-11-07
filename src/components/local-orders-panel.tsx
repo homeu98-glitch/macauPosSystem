@@ -741,6 +741,33 @@ export function LocalOrdersPanel({
         >
           {t("查看")}
         </button>
+        {/* 返結單「編輯」（2026-11-07）：`/orders` 頁一直冇入口 —— 「編輯」掣原本只寫喺
+            `/pos` 快餐 strip（`quick-local-orders-strip.tsx` 嘅 mode="reopened" 分支），
+            而呢張卡嘅 `renderRowActions()` 得 查看／派送／返結帳…；
+            `isReopenable()` 唔認 `reopened`、counter 單「查看」只開唯讀詳情彈窗
+            ⇒ 由訂單頁完全冇路改價／加餐／重結。
+            放喺共用函式 ⇒ 卡片版（L1025）同表格版（L1166）一齊有，唔會走樣。
+            ⚠️ 閘用 `status === "reopened"`，**唔好**用 `reopenCount > 0`：
+               重結完變 `settled` 嘅舊單唔應該再俾人載入工作台改數。 */}
+        {order.status === "reopened" ? (
+          <button
+            className="whitespace-nowrap rounded-xl bg-amber-500 px-3 py-2 text-xs font-semibold text-white hover:bg-amber-600"
+            onClick={() => {
+              // 行現成 deep-link（pos-app.tsx:551）：loadOrderIntoWorkspace() +
+              // setPosMode("order") + 按 order.tableId 自動切 quick/dinein +
+              // 頂部出「返結帳」橫額，可改價／加餐後重結。同 handleReopen() L655 同一條路。
+              // 🔴 一定要帶 tableId（counter 單 = "counter"、堂食返結單 = temp 枱 id）：
+              //    丟空會被 `if (!tableId || !orderId) return` 靜靜擋走，撳咗等如冇反應。
+              const tableId = order.tableId || "counter";
+              router.push(
+                `/pos?tableId=${encodeURIComponent(tableId)}&orderId=${encodeURIComponent(order.id)}`,
+              );
+            }}
+            type="button"
+          >
+            {t("編輯")}
+          </button>
+        ) : null}
         {/* 外送派送（2026-10-31）：店內任何已送出單、平台自送／自取單都可以派。
             資格全部由 `evaluateDispatchEligibility()` 話事 —— 呢度唔自己寫條件，
             否則三個入口（訂單頁／快餐 strip／外送 tab）日後一定會走樣。 */}
